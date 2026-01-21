@@ -6,13 +6,25 @@ import coil.ImageLoaderFactory
 import coil.util.DebugLogger
 import com.cloudchat.utils.NetworkUtils
 
+import coil.decode.VideoFrameDecoder
+import coil.disk.DiskCache
+
 class CloudChatApp : Application(), ImageLoaderFactory {
     override fun newImageLoader(): ImageLoader {
         return ImageLoader.Builder(this)
             .okHttpClient {
                 NetworkUtils.getUnsafeOkHttpClient().build()
             }
-            .logger(DebugLogger()) // 开启调试日志，Coil 加载失败会在 Logcat 报错
+            .components {
+                add(VideoFrameDecoder.Factory())
+            }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(this.cacheDir.resolve("image_cache"))
+                    .maxSizePercent(0.02)
+                    .build()
+            }
+            .logger(DebugLogger())
             .crossfade(true)
             .build()
     }

@@ -15,6 +15,7 @@ interface StorageProvider {
     ): String
     suspend fun uploadText(text: String, fileName: String): String
     suspend fun listMessages(): List<ChatMessage>
-    suspend fun downloadFile(fileName: String, destination: File)
+    suspend fun downloadFile(fileName: String, destination: File, onProgress: ((Int) -> Unit)? = null)
     suspend fun getFileSize(fileName: String): Long // For verification
+    fun getFullUrl(fileName: String): String
 }

@@ -31,6 +31,7 @@ class SettingsRepository(private val context: Context) {
     // The currently active account id
     val currentAccountId: Flow<String?> = context.dataStore.data.map { it[CURRENT_ACCOUNT_ID] }
 
+
     // Flow for the actual current configuration
     val currentConfig: Flow<ServerConfig?> = context.dataStore.data.map { prefs ->
         val id = prefs[CURRENT_ACCOUNT_ID] ?: return@map null
@@ -81,4 +82,5 @@ class SettingsRepository(private val context: Context) {
             }
         }
     }
+
 }

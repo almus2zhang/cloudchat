@@ -13,7 +13,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import java.io.OutputStreamWriter
+import java.io.InputStreamReader
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.cloudchat.model.ServerConfig
@@ -63,6 +68,44 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 }
                 
+                Spacer(modifier = Modifier.height(16.dp))
+                val accountsList by settingsRepository.accounts.collectAsState(initial = emptyList())
+                val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+                    uri?.let {
+                        context.contentResolver.openOutputStream(it)?.use { out ->
+                            val json = com.google.gson.Gson().toJson(accountsList)
+                            out.write(json.toByteArray())
+                        }
+                    }
+                }
+                val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+                    uri?.let {
+                        context.contentResolver.openInputStream(it)?.use { input ->
+                            val json = input.bufferedReader().readText()
+                            val type = object : com.google.gson.reflect.TypeToken<List<ServerConfig>>() {}.type
+                            val imported: List<ServerConfig> = com.google.gson.Gson().fromJson(json, type)
+                            coroutineScope.launch {
+                                imported.forEach { settingsRepository.saveAccount(it) }
+                            }
+                        }
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { exportLauncher.launch("cloudchat_accounts.json") },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Export JSON")
+                    }
+                    Button(
+                        onClick = { importLauncher.launch("application/json") },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Import JSON")
+                    }
+                }
+                
                 Button(
                     onClick = { editingConfig = ServerConfig() },
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
@@ -71,8 +114,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Add New Account")
                 }
-            }
-        } else {
+
+                }
+            } else {
             // Edit/Add Form
             val config = editingConfig!!
             Column(
@@ -146,6 +190,21 @@ fun SettingsScreen(onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Auto-download Limit (MB)", style = MaterialTheme.typography.titleMedium)
+                TextField(
+                    value = (config.autoDownloadLimit / (1024 * 1024)).toString(),
+                    onValueChange = { 
+                        it.toLongOrNull()?.let { mb ->
+                            editingConfig = config.copy(autoDownloadLimit = mb * 1024 * 1024L)
+                        }
+                    },
+                    modifier = Modifier.width(100.dp),
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
+                )
+                Text("Files larger than this will only show thumbnails.", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
 
                 Spacer(modifier = Modifier.height(24.dp))
 

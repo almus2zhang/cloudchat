@@ -12,10 +12,16 @@ import com.cloudchat.storage.StorageProvider
 import com.cloudchat.storage.WebDavStorageProvider
 import com.cloudchat.utils.NetworkUtils
 import com.google.gson.Gson
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import java.io.File
@@ -33,6 +39,9 @@ class ChatRepository(private val context: Context) {
     private val _uploadProgress = MutableStateFlow<Map<String, Int>>(emptyMap())
     val uploadProgress: StateFlow<Map<String, Int>> = _uploadProgress
 
+    private val _downloadProgress = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val downloadProgress: StateFlow<Map<String, Int>> = _downloadProgress
+
     private val transientLocalUris = mutableMapOf<String, String>()
 
     private fun getLocalHistoryFile(accountId: String): File {
@@ -41,7 +50,52 @@ class ChatRepository(private val context: Context) {
         return File(dir, "chat_${accountId}.json")
     }
 
-    fun getTransientUri(messageId: String): String? = transientLocalUris[messageId]
+    private fun getMediaCacheDir(): File {
+        val dir = File(context.filesDir, "media")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getLocalFile(messageId: String, fileName: String): File {
+        return File(getMediaCacheDir(), "${messageId}_$fileName")
+    }
+
+    fun getTransientUri(messageId: String, fileName: String? = null): String? {
+        // 1. Check transient (just uploaded)
+        transientLocalUris[messageId]?.let { return it }
+        
+        // 2. Check local disk cache
+        if (fileName != null) {
+            val file = getLocalFile(messageId, fileName)
+            if (file.exists()) return Uri.fromFile(file).toString()
+        }
+        
+        return null
+    }
+
+    suspend fun downloadFileToCache(messageId: String, fileName: String, remoteUrl: String): File? = withContext(Dispatchers.IO) {
+        val provider = storageProvider ?: return@withContext null
+        val targetFile = getLocalFile(messageId, fileName)
+        if (targetFile.exists()) return@withContext targetFile
+        
+        val tmpFile = File(targetFile.absolutePath + ".tmp")
+        try {
+            _downloadProgress.update { it + (messageId to 0) }
+            provider.downloadFile(fileName, tmpFile) { progress ->
+                _downloadProgress.update { it + (messageId to progress) }
+            }
+            if (tmpFile.exists()) {
+                tmpFile.renameTo(targetFile)
+            }
+            _downloadProgress.update { it + (messageId to -1) } // Complete
+            if (targetFile.exists()) return@withContext targetFile
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Download to cache failed: $fileName", e)
+            _downloadProgress.update { it - messageId }
+            if (tmpFile.exists()) tmpFile.delete()
+        }
+        null
+    }
 
     suspend fun updateConfig(config: ServerConfig) {
         currentConfig = config
@@ -93,9 +147,7 @@ class ChatRepository(private val context: Context) {
 
         if (localUri != null) {
             val uri = Uri.parse(localUri)
-            context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { 
-                fileSize = it.length
-            }
+            fileSize = getFileSizeFromUri(uri)
             if (type == com.cloudchat.model.MessageType.VIDEO) {
                 videoDuration = getVideoDuration(uri)
             }
@@ -106,11 +158,9 @@ class ChatRepository(private val context: Context) {
         val root = config.serverPath.trim().removePrefix("/").removeSuffix("/")
         val cloudPath = if (root.isEmpty()) userDir else "$root/$userDir"
 
-        val remoteUrl = if (encodedFileName != null && config.type == com.cloudchat.model.StorageType.WEBDAV) {
-            var url = config.webDavUrl.trim()
-            if (!url.startsWith("http")) url = "http://$url"
-            "${url.removeSuffix("/")}/$cloudPath/$encodedFileName"
-        } else encodedFileName
+        val remoteUrl = if (fileName != null) {
+            provider.getFullUrl(fileName)
+        } else null
 
         val newMessage = ChatMessage(
             sender = config.username,
@@ -123,12 +173,30 @@ class ChatRepository(private val context: Context) {
             status = if (inputStream != null) MessageStatus.SENDING else MessageStatus.SUCCESS
         )
 
-        localUri?.let { transientLocalUris[newMessage.id] = it }
-        _messages.value = _messages.value + newMessage
+        localUri?.let { uriStr ->
+            transientLocalUris[newMessage.id] = uriStr
+            // Copy to local cache for offline access and sharing
+            if (fileName != null) {
+                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                    try {
+                        val uri = Uri.parse(uriStr)
+                        val targetFile = getLocalFile(newMessage.id, fileName)
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            targetFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("ChatRepository", "Failed to copy to cache: $fileName", e)
+                    }
+                }
+            }
+        }
+        _messages.update { it + newMessage }
         saveLocalHistory(config.id)
 
         if (inputStream != null) {
-            _uploadProgress.value = _uploadProgress.value + (newMessage.id to 0)
+            _uploadProgress.update { it + (newMessage.id to 0) }
         }
 
         withContext(Dispatchers.IO) {
@@ -140,12 +208,28 @@ class ChatRepository(private val context: Context) {
                         else -> "application/octet-stream"
                     }
                     
-                    // Upload
+                    // Upload Thumbnail first if possible
+                    val thumbFile = localUri?.let { generateThumbnail(Uri.parse(it), type) }
+                    var currentThumbnailUrl: String? = null
+                    if (thumbFile != null && thumbFile.exists()) {
+                        val thumbName = "thumb_${fileName}"
+                        try {
+                            provider.uploadFile(thumbFile.inputStream(), thumbName, "image/jpeg", thumbFile.length()) { _ -> }
+                            currentThumbnailUrl = provider.getFullUrl(thumbName)
+                            _messages.update { list ->
+                                list.map { if (it.id == newMessage.id) it.copy(thumbnailUrl = currentThumbnailUrl) else it }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("ChatRepository", "Thumb upload failed", e)
+                        }
+                    }
+
+                    // Upload main file
                     provider.uploadFile(inputStream, fileName, contentType, fileSize) { progress ->
-                        _uploadProgress.value = _uploadProgress.value + (newMessage.id to progress)
+                        _uploadProgress.update { it + (newMessage.id to progress) }
                     }
                     
-                    // Verification: Check if file exists and size matches (roughly)
+                    // Verification
                     val remoteSize = provider.getFileSize(fileName)
                     if (remoteSize > 0) {
                         updateMessageStatus(newMessage.id, MessageStatus.SUCCESS)
@@ -153,7 +237,7 @@ class ChatRepository(private val context: Context) {
                         updateMessageStatus(newMessage.id, MessageStatus.FAILED)
                     }
                     
-                    _uploadProgress.value = _uploadProgress.value + (newMessage.id to -1)
+                    _uploadProgress.update { it + (newMessage.id to -1) }
                 } else {
                     provider.uploadText(content, "msg_${System.currentTimeMillis()}.txt")
                 }
@@ -161,19 +245,75 @@ class ChatRepository(private val context: Context) {
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Cloud sync failed", e)
                 updateMessageStatus(newMessage.id, MessageStatus.FAILED)
-                _uploadProgress.value = _uploadProgress.value - newMessage.id
+                _uploadProgress.update { it - newMessage.id }
             }
         }
     }
 
     private fun updateMessageStatus(messageId: String, status: MessageStatus) {
-        _messages.value = _messages.value.map { 
-            if (it.id == messageId) it.copy(status = status) else it 
+        _messages.update { list ->
+            list.map { if (it.id == messageId) it.copy(status = status) else it }
         }
-        currentConfig?.let { config ->
-            // Trigger local save
-            val file = getLocalHistoryFile(config.id)
-            file.writeText(gson.toJson(_messages.value))
+        syncHistory()
+    }
+
+    suspend fun deleteMessages(ids: List<String>) {
+        _messages.update { list ->
+            list.filterNot { it.id in ids }
+        }
+        syncHistory()
+    }
+
+    private fun generateThumbnail(uri: Uri, type: com.cloudchat.model.MessageType): File? {
+        val thumbFile = File(context.cacheDir, "thumb_${System.currentTimeMillis()}.jpg")
+        return try {
+            val bitmap = if (type == com.cloudchat.model.MessageType.VIDEO) {
+                val retriever = MediaMetadataRetriever()
+                retriever.setDataSource(context, uri)
+                val frame = retriever.getFrameAtTime(1000000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                retriever.release()
+                frame
+            } else if (type == com.cloudchat.model.MessageType.IMAGE) {
+                context.contentResolver.openInputStream(uri)?.use { 
+                    BitmapFactory.decodeStream(it)
+                }
+            } else null
+
+            bitmap?.let { 
+                // Resize to max 400px width/height
+                val scale = 400f / Math.max(it.width, it.height).coerceAtLeast(1)
+                val resized = if (scale < 1f) {
+                    val matrix = Matrix().apply { postScale(scale, scale) }
+                    Bitmap.createBitmap(it, 0, 0, it.width, it.height, matrix, true)
+                } else it
+                
+                thumbFile.outputStream().use { out ->
+                    resized.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                }
+                thumbFile
+            }
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Thumb gen failed", e)
+            null
+        }
+    }
+
+    private fun syncHistory() {
+        val config = currentConfig ?: return
+        val currentList = _messages.value
+        context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE).edit().putString("history_${config.id}", gson.toJson(currentList)).apply()
+        
+        // Also save to the file we were using
+        val file = getLocalHistoryFile(config.id)
+        file.writeText(gson.toJson(currentList))
+        
+        // Sync to cloud in background
+        GlobalScope.launch(Dispatchers.IO) {
+            try {
+                storageProvider?.uploadText(gson.toJson(currentList), "chat_history.json")
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "Cloud sync on delete failed", e)
+            }
         }
     }
 
@@ -184,6 +324,19 @@ class ChatRepository(private val context: Context) {
             val time = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
             retriever.release()
             (time?.toLong() ?: 0L) / 1000
+        } catch (e: Exception) {
+            0L
+        }
+    }
+
+    private fun getFileSizeFromUri(uri: Uri): Long {
+        return try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (sizeIndex != -1 && cursor.moveToFirst()) {
+                    cursor.getLong(sizeIndex)
+                } else 0L
+            } ?: 0L
         } catch (e: Exception) {
             0L
         }

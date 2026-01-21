@@ -87,14 +87,41 @@ class S3StorageProvider(
 
     override suspend fun listMessages(): List<ChatMessage> = emptyList()
 
-    override suspend fun downloadFile(fileName: String, destination: File) {
+    override suspend fun downloadFile(fileName: String, destination: File, onProgress: ((Int) -> Unit)?) {
         withContext(Dispatchers.IO) {
-            val s3Object = s3Client.getObject(config.bucket, "$userPrefix$fileName")
+            val key = "$userPrefix$fileName"
+            val s3Object = s3Client.getObject(config.bucket, key)
+            val totalLength = s3Object.objectMetadata.contentLength
+            
             s3Object.objectContent.use { input ->
                 destination.outputStream().use { output ->
-                    input.copyTo(output)
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    var totalRead = 0L
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        totalRead += bytesRead
+                        if (totalLength > 0) {
+                            val progress = ((totalRead * 100) / totalLength).toInt()
+                            onProgress?.invoke(progress)
+                        }
+                    }
                 }
             }
         }
+    }
+
+    override fun getFullUrl(fileName: String): String {
+        val encodedName = java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")
+        val key = "$userPrefix$encodedName"
+        var endpoint = config.endpoint.trim()
+        if (endpoint.isEmpty()) {
+            // Default AWS S3 format
+            return "https://${config.bucket}.s3.amazonaws.com/$key"
+        }
+        if (!endpoint.startsWith("http://") && !endpoint.startsWith("https://")) {
+            endpoint = "https://$endpoint"
+        }
+        return "${endpoint.removeSuffix("/")}/${config.bucket}/$key"
     }
 }

@@ -74,7 +74,7 @@ class WebDavStorageProvider(
         contentLength: Long,
         onProgress: ((Int) -> Unit)?
     ): String = withContext(Dispatchers.IO) {
-        val url = "$baseUrl$fileName"
+        val url = getFullUrl(fileName)
         val requestBody = if (onProgress != null && contentLength > 0) {
             ProgressRequestBody(contentType.toMediaType(), inputStream, contentLength, onProgress)
         } else {
@@ -94,7 +94,7 @@ class WebDavStorageProvider(
     }
 
     override suspend fun getFileSize(fileName: String): Long = withContext(Dispatchers.IO) {
-        val url = "$baseUrl$fileName"
+        val url = getFullUrl(fileName)
         val request = Request.Builder()
             .url(url)
             .addHeader("Authorization", auth)
@@ -110,7 +110,7 @@ class WebDavStorageProvider(
     }
 
     override suspend fun uploadText(text: String, fileName: String): String = withContext(Dispatchers.IO) {
-        val url = "$baseUrl$fileName"
+        val url = getFullUrl(fileName)
         val request = Request.Builder()
             .url(url)
             .addHeader("Authorization", auth)
@@ -125,9 +125,9 @@ class WebDavStorageProvider(
 
     override suspend fun listMessages(): List<ChatMessage> = emptyList()
 
-    override suspend fun downloadFile(fileName: String, destination: File) {
+    override suspend fun downloadFile(fileName: String, destination: File, onProgress: ((Int) -> Unit)?) {
         withContext(Dispatchers.IO) {
-            val url = "$baseUrl$fileName"
+            val url = getFullUrl(fileName)
             val request = Request.Builder()
                 .url(url)
                 .addHeader("Authorization", auth)
@@ -136,12 +136,30 @@ class WebDavStorageProvider(
 
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) throw Exception("Download failed: ${response.code}")
-                response.body?.byteStream()?.use { input ->
+                val body = response.body ?: throw Exception("Response body is null")
+                val totalLength = body.contentLength()
+                
+                body.byteStream().use { input ->
                     destination.outputStream().use { output ->
-                        input.copyTo(output)
+                        val buffer = ByteArray(8192)
+                        var bytesRead: Int
+                        var totalRead = 0L
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            totalRead += bytesRead
+                            if (totalLength > 0) {
+                                val progress = ((totalRead * 100) / totalLength).toInt()
+                                onProgress?.invoke(progress)
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    override fun getFullUrl(fileName: String): String {
+        val encodedName = java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")
+        return "$baseUrl$encodedName"
     }
 }

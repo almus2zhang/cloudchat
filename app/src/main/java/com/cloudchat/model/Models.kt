@@ -20,7 +20,8 @@ data class ChatMessage(
     val fileSize: Long = 0,
     val videoDuration: Long = 0,
     val isOutgoing: Boolean = true,
-    val status: MessageStatus = MessageStatus.SUCCESS // Default for incoming or history
+    val status: MessageStatus = MessageStatus.SUCCESS, // Default for incoming or history
+    val thumbnailUrl: String? = null
 )
 
 enum class StorageType {
@@ -38,5 +39,6 @@ data class ServerConfig(
     val serverPath: String = "",
     val webDavUrl: String = "",
     val webDavUser: String = "",
-    val webDavPass: String = ""
+    val webDavPass: String = "",
+    val autoDownloadLimit: Long = 5 * 1024 * 1024L
 )
