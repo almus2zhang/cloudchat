@@ -129,10 +129,19 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 TextField(
+                    value = config.saveDir,
+                    onValueChange = { editingConfig = config.copy(saveDir = it) },
+                    label = { Text("Save Directory (User ID)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Unique folder name, e.g. user_ken") }
+                )
+
+                TextField(
                     value = config.username,
                     onValueChange = { editingConfig = config.copy(username = it) },
-                    label = { Text("Username") },
-                    modifier = Modifier.fillMaxWidth()
+                    label = { Text("Display Name") },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Name shown in chat") }
                 )
                 
                 TextField(
@@ -215,9 +224,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                                 isTesting = true
                                 testResult = "Testing..."
                                 val provider = if (config.type == StorageType.S3) {
-                                    S3StorageProvider(config, config.username)
+                                    S3StorageProvider(config, config.saveDir)
                                 } else {
-                                    WebDavStorageProvider(config, config.username)
+                                    WebDavStorageProvider(config, config.saveDir)
                                 }
                                 val result = provider.testConnection()
                                 testResult = if (result.isSuccess) "Success!" else "Failed: ${result.exceptionOrNull()?.message}"
@@ -280,6 +289,7 @@ fun AccountItem(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(account.username, style = MaterialTheme.typography.titleMedium)
+                Text("ID: ${account.saveDir}", style = MaterialTheme.typography.bodySmall)
                 Text("${account.type} - ${account.serverPath}", style = MaterialTheme.typography.bodySmall)
             }
             IconButton(onClick = onEdit) {

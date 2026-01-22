@@ -187,6 +187,13 @@ fun FullScreenVideoPlayer(
     var isPlaying by remember { mutableStateOf(active) }
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
+    
+    // Pull-to-dismiss state
+    val offsetY = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    val alpha = remember(offsetY.value) {
+        (1f - (abs(offsetY.value) / 600f)).coerceIn(0f, 1f)
+    }
 
     val exoPlayer = remember {
         val dataSourceFactory = DefaultDataSource.Factory(context)
@@ -232,10 +239,29 @@ fun FullScreenVideoPlayer(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(Color.Black.copy(alpha = alpha))
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { isControlsVisible = !isControlsVisible }
+                )
+            }
+            .pointerInput(Unit) {
+                detectVerticalDragGestures(
+                    onDragEnd = {
+                        if (abs(offsetY.value) > 300f) {
+                            onDismiss()
+                        } else {
+                            scope.launch { 
+                                offsetY.animateTo(0f) 
+                            }
+                        }
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        scope.launch { 
+                            offsetY.snapTo(offsetY.value + dragAmount) 
+                        }
+                    }
                 )
             },
         contentAlignment = Alignment.Center
@@ -247,14 +273,21 @@ fun FullScreenVideoPlayer(
                     useController = false
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    translationY = offsetY.value
+                }
         )
 
         if (isControlsVisible) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(bottom = 32.dp),
+                    .padding(bottom = 32.dp)
+                    .graphicsLayer {
+                        translationY = offsetY.value
+                    },
                 contentAlignment = Alignment.BottomCenter
             ) {
                 Row(

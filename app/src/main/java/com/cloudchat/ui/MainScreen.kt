@@ -122,13 +122,25 @@ fun MainScreen(
                 }
             } else {
                 val isFast = syncInterval == 1000L
+                
+                // Manual Refresh Button
+                IconButton(onClick = { 
+                    scope.launch { chatRepository.refreshHistoryFromCloud() }
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.Sync,
+                        contentDescription = "立即刷新"
+                    )
+                }
+
+                // Sync Interval Toggle (Bolt icon colored by mode)
                 IconButton(onClick = { 
                     chatRepository.setSyncInterval(if (isFast) 5000L else 1000L) 
                 }) {
                     Icon(
-                        imageVector = if (isFast) Icons.Default.Bolt else Icons.Default.Sync,
+                        imageVector = Icons.Default.Bolt,
                         contentDescription = if (isFast) "快速同步" else "普通同步",
-                        tint = if (isFast) Color(0xFFFFC107) else LocalContentColor.current
+                        tint = if (isFast) Color(0xFFFFC107) else Color.Gray
                     )
                 }
                 
