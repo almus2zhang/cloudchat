@@ -47,7 +47,9 @@ fun ZoomableImage(
     isCurrentPage: Boolean,
     onTap: () -> Unit,
     onSwipeToNext: () -> Unit = {},
-    onSwipeToPrev: () -> Unit = {}
+    onSwipeToPrev: () -> Unit = {},
+    backgroundUri: String? = null,
+    isHighRes: Boolean = true // Only fade out background when High Res image is loaded
 ) {
     val zoomState = rememberZoomState(
         maxScale = 5f,
@@ -65,8 +67,21 @@ fun ZoomableImage(
     }
 
     val alpha = remember(offsetY.value) {
-        (1f - (abs(offsetY.value) / 600f)).coerceIn(0f, 1f)
+        // Slower fade: 1500f instead of 600f
+        (1f - (abs(offsetY.value) / 1500f)).coerceIn(0f, 1f)
     }
+
+    // Track if the image has finished loading
+    // CRITICAL: Reset state when URI changes (e.g. from Thumbnail URL to Local File Path)
+    var isImageLoaded by remember(uri) { mutableStateOf(false) }
+    
+    // Animate background opacity: 
+    // - If it's the High Res image AND it's loaded -> Fade out (0f)
+    // - Otherwise (it's a thumbnail, or high res is still loading) -> Keep visible (0.6f)
+    val backgroundAlpha by animateFloatAsState(
+        targetValue = if (isHighRes && isImageLoaded) 0f else 0.6f,
+        animationSpec = tween(durationMillis = 500)
+    )
 
     Box(
         modifier = Modifier
@@ -81,8 +96,11 @@ fun ZoomableImage(
                         drag(down.id) { change ->
                             val dragAmount = change.positionChange()
                             
+                            // Only allow vertical dismiss when zoom is at 1.0 (not zoomed)
+                            val isAtNormalScale = zoomState.scale <= 1.01f
+                            
                             // If the internal zoomable image didn't consume this (meaning boundary reached or 1x)
-                            if (!change.isConsumed) {
+                            if (!change.isConsumed && isAtNormalScale) {
                                 if (!isVerticalDismissing && abs(dragAmount.y) > abs(dragAmount.x) && abs(dragAmount.y) > 10) {
                                     isVerticalDismissing = true
                                 }
@@ -93,7 +111,7 @@ fun ZoomableImage(
                                         offsetY.snapTo(offsetY.value + dragAmount.y)
                                     }
                                 }
-                            } else if (isVerticalDismissing) {
+                            } else if (isVerticalDismissing && isAtNormalScale) {
                                 // Once we are in dismissing mode, we stay in it until release
                                 change.consume()
                                 scope.launch {
@@ -118,8 +136,8 @@ fun ZoomableImage(
             }
             .graphicsLayer {
                 translationY = offsetY.value
-                // Apply alpha to the whole image layer
-                this.alpha = alpha
+                // Keep image opaque during drag, only fade background
+                this.alpha = 1f 
                 // Add a slight scale effect for a "detaching" feeling
                 val scale = (1f - (abs(offsetY.value) / 4000f)).coerceIn(0.9f, 1f)
                 scaleX = scale
@@ -127,10 +145,25 @@ fun ZoomableImage(
             }
             .clipToBounds()
     ) {
+        // Show background if available and main image isn't loaded yet (or animating out)
+        if (backgroundUri != null && backgroundAlpha > 0f) {
+             AsyncImage(
+                 model = backgroundUri,
+                 contentDescription = null,
+                 contentScale = ContentScale.Crop,
+                 modifier = Modifier
+                     .fillMaxSize()
+                     .graphicsLayer { 
+                         this.alpha = backgroundAlpha // Fade out when main image loads
+                     }
+             )
+        }
+
         AsyncImage(
             model = uri,
             contentDescription = null,
             contentScale = ContentScale.Fit,
+            onSuccess = { isImageLoaded = true }, // Trigger fade out checks
             modifier = Modifier
                 .fillMaxSize()
                 .zoomable(

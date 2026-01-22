@@ -12,13 +12,17 @@ local.properties
 
 # Build artifacts
 **/build/
+app/build/
 
 # Android Studio
 *.ipr
 *.iws
+.idea/
 
 # Gradle
 .gradle/
+gradle-app.setting
+!gradle-wrapper.jar
 
 # Log files
 *.log

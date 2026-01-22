@@ -42,6 +42,12 @@ import com.cloudchat.repository.SettingsRepository
 import kotlinx.coroutines.launch
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.foundation.shape.CircleShape
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.runtime.snapshotFlow
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -60,13 +66,25 @@ fun MainScreen(
     val messages by chatRepository.messages.collectAsState()
     val uploadProgress by chatRepository.uploadProgress.collectAsState()
     val downloadProgress by chatRepository.downloadProgress.collectAsState()
+    val activeDownloadIds by chatRepository.activeDownloadIds.collectAsState()
     val autoDownloadLimit = currentConfig?.autoDownloadLimit ?: (5 * 1024 * 1024L)
     
     var inputText by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var mediaPagerIndex by remember { mutableStateOf<Int?>(null) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    var isAttachmentPanelVisible by remember { mutableStateOf(false) }
+    val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
+
+    // Handle back button to clear selection or close panel
+    BackHandler(enabled = selectedIds.isNotEmpty() || isAttachmentPanelVisible) {
+        if (selectedIds.isNotEmpty()) {
+            selectedIds = emptySet()
+        } else {
+            isAttachmentPanelVisible = false
+        }
+    }
 
     LaunchedEffect(mediaPagerIndex) {
         onFullScreenToggle(mediaPagerIndex != null)
@@ -130,6 +148,7 @@ fun MainScreen(
         messages.filter { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
     }
 
+
     LaunchedEffect(currentConfig) {
         currentConfig?.let {
             chatRepository.updateConfig(it)
@@ -137,28 +156,35 @@ fun MainScreen(
         }
     }
 
-    val filePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents(),
-        onResult = { uris ->
-            uris.forEach { uri ->
-                scope.launch {
-                    try {
-                        val name = getFileName(context, uri)
-                        val stream = context.contentResolver.openInputStream(uri)
-                        val type = determineMessageType(context, uri, name)
-                        chatRepository.sendMessage(
-                            content = name, 
-                            type = type, 
-                            inputStream = stream, 
-                            fileName = name,
-                            localUri = uri.toString()
-                        )
-                    } catch (e: Exception) {
-                        android.util.Log.e("MainScreen", "Failed to open file", e)
-                    }
+    val handleUris = { uris: List<Uri> ->
+        uris.forEach { uri ->
+            scope.launch {
+                try {
+                    val name = getFileName(context, uri)
+                    val stream = context.contentResolver.openInputStream(uri)
+                    val type = determineMessageType(context, uri, name)
+                    chatRepository.sendMessage(
+                        content = name, 
+                        type = type, 
+                        inputStream = stream, 
+                        fileName = name,
+                        localUri = uri.toString()
+                    )
+                } catch (e: Exception) {
+                    Log.e("MainScreen", "Failed to open file", e)
                 }
             }
         }
+    }
+
+    val multimediaPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(),
+        onResult = handleUris
+    )
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents(),
+        onResult = handleUris
     )
 
     LaunchedEffect(sharedData) {
@@ -167,7 +193,7 @@ fun MainScreen(
                 data.text?.let { chatRepository.sendMessage(it) }
                 data.uri?.let { uri ->
                     val stream = context.contentResolver.openInputStream(uri)
-                    val name = uri.lastPathSegment ?: "shared_file"
+                    val name = getFileName(context, uri)
                     chatRepository.sendMessage(name, determineMessageType(context, uri, name), stream, name, uri.toString())
                 }
                 data.uris?.forEach { uri ->
@@ -181,7 +207,7 @@ fun MainScreen(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        Column(modifier = Modifier.fillMaxSize().imePadding()) {
+        Column(modifier = Modifier.fillMaxSize()) {
 
             LazyColumn(
                 state = listState,
@@ -192,12 +218,16 @@ fun MainScreen(
                 // Use message.id as key for stable list updates
                 items(displayedMessages.asReversed(), key = { it.id }) { message ->
                     val progress = uploadProgress[message.id] ?: downloadProgress[message.id]
+                    val isDownloading = activeDownloadIds.contains(message.id)
+                    
                     ChatBubble(
                         message = message, 
-                        progress = progress,
+                        progress = if (isDownloading || progress == -1) progress else null,
                         chatRepository = chatRepository,
                         isSelected = selectedIds.contains(message.id),
                         autoDownloadLimit = autoDownloadLimit,
+                        downloadProgress = downloadProgress,
+                        isDownloading = isDownloading,
                         onMediaClick = { clickedMsg ->
                             if (selectedIds.isNotEmpty()) {
                                 selectedIds = if (selectedIds.contains(clickedMsg.id)) {
@@ -225,43 +255,73 @@ fun MainScreen(
                 }
             }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { filePickerLauncher.launch("*/*") }) {
-                    Icon(Icons.Default.Add, contentDescription = "Attach")
-                }
-                TextField(
-                    value = inputText,
-                    onValueChange = { inputText = it },
-                    modifier = Modifier.weight(1f),
-                    placeholder = { Text("Type a message") },
-                    shape = MaterialTheme.shapes.medium,
-                    colors = TextFieldDefaults.textFieldColors(
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent
-                    )
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(
-                    onClick = {
-                        if (inputText.isNotBlank()) {
-                            scope.launch {
-                                chatRepository.sendMessage(inputText)
-                                inputText = ""
-                            }
-                        }
-                    },
-                    colors = IconButtonDefaults.iconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    )
+            Column(modifier = Modifier.navigationBarsPadding()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.Send, contentDescription = "Send")
+                    IconButton(onClick = { 
+                        isAttachmentPanelVisible = !isAttachmentPanelVisible
+                        if (isAttachmentPanelVisible) {
+                            keyboardController?.hide()
+                        }
+                    }) {
+                        Icon(
+                            if (isAttachmentPanelVisible) Icons.Default.Close else Icons.Default.Add, 
+                            contentDescription = "Attach"
+                        )
+                    }
+                    TextField(
+                        value = inputText,
+                        onValueChange = { inputText = it },
+                        modifier = Modifier.weight(1f).onFocusChanged { 
+                            if (it.isFocused) {
+                                isAttachmentPanelVisible = false
+                            }
+                        },
+                        placeholder = { Text("Type a message") },
+                        shape = MaterialTheme.shapes.medium,
+                        colors = TextFieldDefaults.textFieldColors(
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent
+                        )
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(
+                        onClick = {
+                            if (inputText.isNotBlank()) {
+                                scope.launch {
+                                    chatRepository.sendMessage(inputText)
+                                    inputText = ""
+                                }
+                            }
+                        },
+                        colors = IconButtonDefaults.iconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        )
+                    ) {
+                        Icon(Icons.Default.Send, contentDescription = "Send")
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = isAttachmentPanelVisible,
+                    enter = expandVertically(),
+                    exit = shrinkVertically()
+                ) {
+                    AttachmentPanel(
+                        onImageClick = {
+                            multimediaPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                            isAttachmentPanelVisible = false
+                        },
+                        onFileClick = {
+                            filePickerLauncher.launch("*/*")
+                            isAttachmentPanelVisible = false
+                        }
+                    )
                 }
             }
         }
@@ -341,6 +401,7 @@ fun MediaPagerOverlay(
     var showGrid by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val downloadProgress by chatRepository.downloadProgress.collectAsState()
     
     // Immersive Mode
     DisposableEffect(Unit) {
@@ -357,8 +418,9 @@ fun MediaPagerOverlay(
     }
 
     BackHandler { onDismiss() }
-
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    
+    // Use Transparent background so that individual pages (ZoomableImage) can control opacity/fade-out
+    Box(modifier = Modifier.fillMaxSize().background(Color.Transparent)) {
         HorizontalPager(
             state = pagerState,
             modifier = Modifier.fillMaxSize(),
@@ -366,43 +428,97 @@ fun MediaPagerOverlay(
             beyondBoundsPageCount = 1
         ) { page ->
             val message = mediaMessages[page]
-            val uriState = remember(message) { mutableStateOf<String?>(chatRepository.getTransientUri(message.id, message.content)) }
             
-            LaunchedEffect(message) {
-                if (uriState.value == null && message.remoteUrl != null) {
-                    val file = chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
-                    if (file != null) {
-                        uriState.value = Uri.fromFile(file).toString()
-                    }
+            // Track download attempts for this message to prevent loops
+            val downloadAttempted = remember(message.id) { mutableStateOf(false) }
+            
+            // Check file existence reactively
+            val progressValue = downloadProgress[message.id]
+            val localFile = remember(message.id) {
+                chatRepository.getLocalFile(message.id, message.content)
+            }
+            
+            val uriState = remember(message.id, progressValue) {
+                val uri = chatRepository.getTransientUri(message.id, message.content)
+                    ?: if (localFile.exists()) "file://${localFile.absolutePath}" else null
+                Log.d("MediaViewer", "Page $page ${message.id}: URI=$uri progress=$progressValue fileExists=${localFile.exists()}")
+                uri
+            }
+            
+            // Only auto-download if this is the CURRENT page being viewed, not pre-loaded pages
+            val isCurrentPage = pagerState.currentPage == page
+            LaunchedEffect(message.id, isCurrentPage) {
+                if (isCurrentPage && uriState == null && !downloadAttempted.value && message.remoteUrl != null) {
+                    downloadAttempted.value = true
+                    Log.d("MediaViewer", "Auto-download started for ${message.id} (current page)")
+                    chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
                 }
             }
             
-            val uri = uriState.value ?: message.remoteUrl
-            if (uri != null) {
-                when (message.type) {
-                    MessageType.IMAGE -> ZoomableImage(
-                        uri = uri, 
-                        isCurrentPage = pagerState.currentPage == page, // Pass current page status
-                        onTap = onDismiss,
-                        onSwipeToNext = { 
-                            scope.launch { 
-                                if (pagerState.currentPage < mediaMessages.size - 1)
-                                    pagerState.animateScrollToPage(pagerState.currentPage + 1)
-                            }
-                        },
-                        onSwipeToPrev = {
-                            scope.launch {
-                                if (pagerState.currentPage > 0)
-                                    pagerState.animateScrollToPage(pagerState.currentPage - 1)
+            // Determine display URI: use local file if exists, otherwise thumbnail, otherwise remote
+            val displayUri = uriState ?: message.thumbnailUrl ?: message.remoteUrl
+            val downloadingProgress = downloadProgress[message.id]
+            val isDownloading = downloadingProgress != null && downloadingProgress >= 0 && downloadingProgress < 100
+            val showThumbnail = uriState == null && message.thumbnailUrl != null
+            
+            if (displayUri != null) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    when (message.type) {
+                        MessageType.IMAGE -> ZoomableImage(
+                            uri = displayUri, 
+                            isCurrentPage = pagerState.currentPage == page,
+                            onTap = onDismiss,
+                            onSwipeToNext = { 
+                                scope.launch { 
+                                    if (pagerState.currentPage < mediaMessages.size - 1)
+                                        pagerState.animateScrollToPage(pagerState.currentPage + 1)
+                                }
+                            },
+                            onSwipeToPrev = {
+                                scope.launch {
+                                    if (pagerState.currentPage > 0)
+                                        pagerState.animateScrollToPage(pagerState.currentPage - 1)
+                                }
+                            },
+                            backgroundUri = message.thumbnailUrl,
+                            isHighRes = uriState != null // Only true when we display the Local File
+                        )
+                        MessageType.VIDEO -> FullScreenVideoPlayer(
+                            uri = displayUri, 
+                            active = pagerState.currentPage == page, 
+                            onDismiss = onDismiss
+                        )
+                        else -> {}
+                    }
+                    
+                    // Show download progress overlay when downloading
+                    if (isDownloading || showThumbnail) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color.Black.copy(alpha = if (showThumbnail) 0.3f else 0f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isDownloading) {
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        progress = (downloadingProgress ?: 0) / 100f,
+                                        modifier = Modifier.size(64.dp),
+                                        color = Color.White,
+                                        strokeWidth = 4.dp
+                                    )
+                                    Text(
+                                        text = "下载中 ${downloadingProgress}%",
+                                        color = Color.White,
+                                        fontSize = 14.sp
+                                    )
+                                }
                             }
                         }
-                    )
-                    MessageType.VIDEO -> FullScreenVideoPlayer(
-                        uri = uri, 
-                        active = pagerState.currentPage == page, 
-                        onDismiss = onDismiss
-                    )
-                    else -> {}
+                    }
                 }
             }
         }
@@ -638,6 +754,8 @@ fun ChatBubble(
     chatRepository: ChatRepository,
     isSelected: Boolean,
     autoDownloadLimit: Long,
+    downloadProgress: Map<String, Int>,
+    isDownloading: Boolean,
     onMediaClick: (ChatMessage) -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -690,15 +808,28 @@ fun ChatBubble(
                     }
                 }
                 MessageType.IMAGE -> {
-                    val localUriStr = chatRepository.getTransientUri(message.id, message.content)
-                    val isCached = localUriStr != null && (localUriStr.startsWith("file") || localUriStr.startsWith("content"))
-                    val displayUri = localUriStr ?: message.thumbnailUrl ?: message.remoteUrl
+                    val localFile = remember(message.id) {
+                        chatRepository.getLocalFile(message.id, message.content)
+                    }
                     
-                    // Auto-download if under limit
-                    LaunchedEffect(message) {
-                        if (!isCached && message.remoteUrl != null && message.fileSize <= autoDownloadLimit) {
-                            chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
-                        }
+                    // Use produceState - only depends on message.id, monitors specific progress via snapshotFlow
+                    val fileExistsState = produceState(
+                        initialValue = chatRepository.getTransientUri(message.id, message.content) != null || localFile.exists(),
+                        message.id  // Only depend on message.id, not the entire downloadProgress map
+                    ) {
+                        snapshotFlow { downloadProgress[message.id] }  // Monitor only this message's progress
+                            .collect {
+                                val exists = chatRepository.getTransientUri(message.id, message.content) != null || localFile.exists()
+                                Log.d("ChatBubble", "IMAGE ${message.id}: fileExists=$exists progress=$it")
+                                value = exists
+                            }
+                    }
+                    val fileExists = fileExistsState.value
+                    
+                    val displayUri = remember(fileExists) {
+                        chatRepository.getTransientUri(message.id, message.content)
+                            ?: if (localFile.exists()) "file://${localFile.absolutePath}"
+                            else message.thumbnailUrl ?: message.remoteUrl
                     }
 
                     Box(
@@ -715,21 +846,34 @@ fun ChatBubble(
                                 .heightIn(max = 400.dp),
                             contentScale = ContentScale.FillWidth
                         )
-                        
                         // Download button overlay for large files
                         if (progress != null && progress in 0..100) {
                             Box(
                                 modifier = Modifier
-                                    .size(44.dp)
-                                    .background(Color.Black.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape),
+                                    .size(56.dp)
+                                    .background(Color.Black.copy(alpha = 0.6f), androidx.compose.foundation.shape.CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 CircularProgressIndicator(
                                     progress = progress / 100f,
-                                    modifier = Modifier.size(32.dp),
+                                    modifier = Modifier.size(48.dp),
                                     color = Color.White,
                                     strokeWidth = 3.dp
                                 )
+                                // Cancel button in center
+                                IconButton(
+                                    onClick = { 
+                                        chatRepository.cancelDownload(message.id)
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close, 
+                                        contentDescription = "Cancel", 
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         } else if (!isCached && message.remoteUrl != null && message.fileSize > autoDownloadLimit) {
                             IconButton(
@@ -748,14 +892,28 @@ fun ChatBubble(
                     }
                 }
                 MessageType.VIDEO -> {
-                    val localUriStr = chatRepository.getTransientUri(message.id, message.content)
-                    val isCached = localUriStr != null && (localUriStr.startsWith("file") || localUriStr.startsWith("content"))
-                    val displayUri = localUriStr ?: message.thumbnailUrl ?: message.remoteUrl
+                    val localFile = remember(message.id) {
+                        chatRepository.getLocalFile(message.id, message.content)
+                    }
                     
-                    LaunchedEffect(message) {
-                        if (!isCached && message.remoteUrl != null && message.fileSize <= autoDownloadLimit) {
-                            chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
-                        }
+                    // Use produceState - only depends on message.id, monitors specific progress via snapshotFlow
+                    val fileExistsState = produceState(
+                        initialValue = chatRepository.getTransientUri(message.id, message.content) != null || localFile.exists(),
+                        message.id  // Only depend on message.id, not the entire downloadProgress map
+                    ) {
+                        snapshotFlow { downloadProgress[message.id] }  // Monitor only this message's progress
+                            .collect {
+                                val exists = chatRepository.getTransientUri(message.id, message.content) != null || localFile.exists()
+                                Log.d("ChatBubble", "VIDEO ${message.id}: fileExists=$exists progress=$it")
+                                value = exists
+                            }
+                    }
+                    val fileExists = fileExistsState.value
+                    
+                    val displayUri = remember(fileExists) {
+                        chatRepository.getTransientUri(message.id, message.content)
+                            ?: if (localFile.exists()) "file://${localFile.absolutePath}"
+                            else message.thumbnailUrl ?: message.remoteUrl
                     }
 
                     Box(
@@ -776,16 +934,30 @@ fun ChatBubble(
                         if (progress != null && progress in 0..100) {
                             Box(
                                 modifier = Modifier
-                                    .size(44.dp)
-                                    .background(Color.Black.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape),
+                                    .size(56.dp)
+                                    .background(Color.Black.copy(alpha = 0.6f), androidx.compose.foundation.shape.CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
                                 CircularProgressIndicator(
                                     progress = progress / 100f,
-                                    modifier = Modifier.size(32.dp),
+                                    modifier = Modifier.size(48.dp),
                                     color = Color.White,
                                     strokeWidth = 3.dp
                                 )
+                                // Pause button in center
+                                IconButton(
+                                    onClick = { 
+                                        chatRepository.cancelDownload(message.id)
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Close, 
+                                        contentDescription = "Cancel", 
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         } else if (!isCached && message.remoteUrl != null && message.fileSize > autoDownloadLimit) {
                             IconButton(
@@ -891,7 +1063,7 @@ fun ChatBubble(
                     Spacer(modifier = Modifier.width(4.dp))
                 }
                 Text(
-                    text = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(message.timestamp),
+                    text = formatTimestamp(message.timestamp),
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                     color = Color.Gray
                 )
@@ -928,6 +1100,34 @@ private fun formatDuration(seconds: Long): String {
     val mins = seconds / 60
     val secs = seconds % 60
     return String.format("%02d:%02d", mins, secs)
+}
+
+private fun formatTimestamp(timestamp: Long): String {
+    val messageDate = java.util.Calendar.getInstance().apply {
+        timeInMillis = timestamp
+    }
+    val today = java.util.Calendar.getInstance()
+    val yesterday = java.util.Calendar.getInstance().apply {
+        add(java.util.Calendar.DAY_OF_YEAR, -1)
+    }
+    
+    val timeFormat = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+    val time = timeFormat.format(timestamp)
+    
+    return when {
+        messageDate.get(java.util.Calendar.YEAR) == today.get(java.util.Calendar.YEAR) &&
+        messageDate.get(java.util.Calendar.DAY_OF_YEAR) == today.get(java.util.Calendar.DAY_OF_YEAR) -> {
+            time  // Today: just show time
+        }
+        messageDate.get(java.util.Calendar.YEAR) == yesterday.get(java.util.Calendar.YEAR) &&
+        messageDate.get(java.util.Calendar.DAY_OF_YEAR) == yesterday.get(java.util.Calendar.DAY_OF_YEAR) -> {
+            "昨天 $time"  // Yesterday
+        }
+        else -> {
+            val dateFormat = java.text.SimpleDateFormat("MM/dd HH:mm", java.util.Locale.getDefault())
+            dateFormat.format(timestamp)  // Other days: show date + time
+        }
+    }
 }
 
 private fun determineMessageType(context: android.content.Context, uri: Uri, fileName: String): MessageType {
@@ -991,4 +1191,67 @@ private fun getFileName(context: android.content.Context, uri: Uri): String {
     
     Log.d("MainScreen", "Resolved original filename: $displayName for URI: $uri")
     return displayName!!
+}
+
+@Composable
+fun AttachmentPanel(
+    onImageClick: () -> Unit,
+    onFileClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 2.dp,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(vertical = 32.dp, horizontal = 16.dp)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            AttachmentOption(
+                icon = Icons.Default.Image,
+                label = "Images",
+                color = Color(0xFF4CAF50),
+                onClick = onImageClick
+            )
+            AttachmentOption(
+                icon = Icons.Default.InsertDriveFile,
+                label = "Files",
+                color = Color(0xFF2196F3),
+                onClick = onFileClick
+            )
+        }
+    }
+}
+
+@Composable
+fun AttachmentOption(
+    icon: ImageVector,
+    label: String,
+    color: Color,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clickable(onClick = onClick)
+    ) {
+        Surface(
+            shape = CircleShape,
+            color = color.copy(alpha = 0.1f),
+            modifier = Modifier.size(64.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = color,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(text = label, style = MaterialTheme.typography.labelLarge)
+    }
 }

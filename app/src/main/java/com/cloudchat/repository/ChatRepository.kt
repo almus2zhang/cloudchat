@@ -21,6 +21,7 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
@@ -40,9 +41,18 @@ class ChatRepository(private val context: Context) {
     val uploadProgress: StateFlow<Map<String, Int>> = _uploadProgress
 
     private val _downloadProgress = MutableStateFlow<Map<String, Int>>(emptyMap())
-    val downloadProgress: StateFlow<Map<String, Int>> = _downloadProgress
+    val downloadProgress = _downloadProgress.asStateFlow()
+
+    private val _activeDownloadIds = MutableStateFlow<Set<String>>(emptySet())
+    val activeDownloadIds = _activeDownloadIds.asStateFlow()
 
     private val transientLocalUris = mutableMapOf<String, String>()
+    
+    // Track active downloads to prevent duplicates
+    private val activeDownloads = mutableSetOf<String>()
+    
+    // Track cancelled downloads
+    private val cancelledDownloads = mutableSetOf<String>()
 
     private fun getLocalHistoryFile(accountId: String): File {
         val dir = File(context.filesDir, "history")
@@ -56,45 +66,151 @@ class ChatRepository(private val context: Context) {
         return dir
     }
 
-    fun getLocalFile(messageId: String, fileName: String): File {
-        return File(getMediaCacheDir(), "${messageId}_$fileName")
+    fun getLocalFile(messageId: String, fileName: String? = null): File {
+        // Sanitize fileName to avoid issues with special characters in filesystem
+        val safeName = fileName?.replace(Regex("[^a-zA-Z0-9._-]"), "_") ?: "file"
+        return File(getMediaCacheDir(), "${messageId}_$safeName")
     }
 
     fun getTransientUri(messageId: String, fileName: String? = null): String? {
-        // 1. Check transient (just uploaded)
-        transientLocalUris[messageId]?.let { return it }
+        // 1. Check transient (just uploaded/sent in current session)
+        transientLocalUris[messageId]?.let {
+            Log.d("ChatRepository", "getTransientUri: Found transient URI for $messageId: $it")
+            return it
+        }
         
         // 2. Check local disk cache
+        val cacheDir = getMediaCacheDir()
+        
+        // If fileName is known, check that specific path first
         if (fileName != null) {
             val file = getLocalFile(messageId, fileName)
-            if (file.exists()) return Uri.fromFile(file).toString()
+            if (file.exists()) return "file://${file.absolutePath}"
+        }
+        
+        // Fallback: search for any file starting with messageId_ in cache dir
+        try {
+            val files = cacheDir.listFiles { _, name -> name.startsWith("${messageId}_") }
+            if (!files.isNullOrEmpty()) {
+                return "file://${files[0].absolutePath}"
+            }
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Error searching cache for $messageId", e)
         }
         
         return null
     }
 
-    suspend fun downloadFileToCache(messageId: String, fileName: String, remoteUrl: String): File? = withContext(Dispatchers.IO) {
+    fun isCached(messageId: String, fileName: String? = null): Boolean {
+        return getTransientUri(messageId, fileName) != null
+    }
+
+    suspend fun downloadFileToCache(messageId: String, fileName: String, remoteUrl: String): File? {
+        // Launch in GlobalScope to prevent cancellation when caller's scope is cancelled
+        // This ensures downloads complete even if user navigates away
+        val job = GlobalScope.launch(Dispatchers.IO) {
+            downloadFileInternal(messageId, fileName, remoteUrl)
+        }
+        return null // Return immediately, actual result via progress updates
+    }
+    
+    private suspend fun downloadFileInternal(messageId: String, fileName: String, remoteUrl: String): File? = withContext(Dispatchers.IO) {
         val provider = storageProvider ?: return@withContext null
         val targetFile = getLocalFile(messageId, fileName)
-        if (targetFile.exists()) return@withContext targetFile
+        
+        Log.d("ChatRepository", "Download requested for $messageId ($fileName). Target exists: ${targetFile.exists()}")
+        
+        // If file already exists, mark as complete and return
+        if (targetFile.exists()) {
+            Log.d("ChatRepository", "File already cached: ${targetFile.absolutePath}")
+            _downloadProgress.update { it + (messageId to -1) }
+            return@withContext targetFile
+        }
+        
+        // Check if this file is already being downloaded
+        synchronized(activeDownloads) {
+            if (activeDownloads.contains(messageId)) {
+                Log.d("ChatRepository", "Download already in progress for $messageId")
+                return@withContext null
+            }
+            activeDownloads.add(messageId)
+            _activeDownloadIds.value = activeDownloads.toSet()
+            cancelledDownloads.remove(messageId) // Clear cancelled flag
+        }
         
         val tmpFile = File(targetFile.absolutePath + ".tmp")
+        Log.d("ChatRepository", "Starting download to ${tmpFile.absolutePath}")
+        
+        // Check if a previous download was interrupted
+        if (tmpFile.exists()) {
+            tmpFile.delete()
+        }
+        
         try {
             _downloadProgress.update { it + (messageId to 0) }
             provider.downloadFile(fileName, tmpFile) { progress ->
+                // Check if download was cancelled
+                synchronized(cancelledDownloads) {
+                    if (cancelledDownloads.contains(messageId)) {
+                        throw InterruptedException("Download cancelled by user")
+                    }
+                }
                 _downloadProgress.update { it + (messageId to progress) }
             }
-            if (tmpFile.exists()) {
-                tmpFile.renameTo(targetFile)
+            
+            // Check one more time before renaming
+            synchronized(cancelledDownloads) {
+                if (cancelledDownloads.contains(messageId)) {
+                    throw InterruptedException("Download cancelled by user")
+                }
             }
+            
+            if (tmpFile.exists()) {
+                if (tmpFile.renameTo(targetFile)) {
+                    Log.d("ChatRepository", "Download successful and renamed to: ${targetFile.absolutePath}")
+                } else {
+                    Log.e("ChatRepository", "Rename failed, using fallback copy for $fileName")
+                    tmpFile.copyTo(targetFile, true)
+                    tmpFile.delete()
+                }
+            }
+            
+            Log.d("ChatRepository", "Download task finished for $messageId. File exists: ${targetFile.exists()}")
             _downloadProgress.update { it + (messageId to -1) } // Complete
+            
+            synchronized(activeDownloads) {
+                activeDownloads.remove(messageId)
+                _activeDownloadIds.value = activeDownloads.toSet()
+            }
+            
             if (targetFile.exists()) return@withContext targetFile
+        } catch (e: InterruptedException) {
+            Log.d("ChatRepository", "Download cancelled: $fileName")
+            _downloadProgress.update { it - messageId }
+            if (tmpFile.exists()) tmpFile.delete()
+            
+            synchronized(activeDownloads) {
+                activeDownloads.remove(messageId)
+                _activeDownloadIds.value = activeDownloads.toSet()
+            }
         } catch (e: Exception) {
             Log.e("ChatRepository", "Download to cache failed: $fileName", e)
             _downloadProgress.update { it - messageId }
             if (tmpFile.exists()) tmpFile.delete()
+            
+            synchronized(activeDownloads) {
+                activeDownloads.remove(messageId)
+                _activeDownloadIds.value = activeDownloads.toSet()
+            }
         }
         null
+    }
+    
+    fun cancelDownload(messageId: String) {
+        synchronized(cancelledDownloads) {
+            cancelledDownloads.add(messageId)
+        }
+        Log.d("ChatRepository", "Download cancellation requested for $messageId")
     }
 
     suspend fun updateConfig(config: ServerConfig) {
@@ -280,15 +396,15 @@ class ChatRepository(private val context: Context) {
             } else null
 
             bitmap?.let { 
-                // Resize to max 400px width/height
-                val scale = 400f / Math.max(it.width, it.height).coerceAtLeast(1)
+                // Resize to max 800px width/height (doubled for better quality)
+                val scale = 800f / Math.max(it.width, it.height).coerceAtLeast(1)
                 val resized = if (scale < 1f) {
                     val matrix = Matrix().apply { postScale(scale, scale) }
                     Bitmap.createBitmap(it, 0, 0, it.width, it.height, matrix, true)
                 } else it
                 
                 thumbFile.outputStream().use { out ->
-                    resized.compress(Bitmap.CompressFormat.JPEG, 70, out)
+                    resized.compress(Bitmap.CompressFormat.JPEG, 85, out)  // Increased quality from 70 to 85
                 }
                 thumbFile
             }
