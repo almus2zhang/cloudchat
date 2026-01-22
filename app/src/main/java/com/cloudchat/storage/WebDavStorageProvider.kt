@@ -31,7 +31,7 @@ class WebDavStorageProvider(
             var url = config.webDavUrl.trim()
             if (!url.startsWith("http")) url = "http://$url"
             val root = config.serverPath.trim().removePrefix("/").removeSuffix("/")
-            val userDir = config.username
+            val userDir = currentUser
             val path = if (root.isEmpty()) userDir else "$root/$userDir"
             return "${url.removeSuffix("/")}/$path/"
         }
@@ -107,6 +107,49 @@ class WebDavStorageProvider(
             }
         }
         return@withContext -1L
+    }
+
+    override suspend fun getLastModified(fileName: String): Long = withContext(Dispatchers.IO) {
+        val url = getFullUrl(fileName)
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", auth)
+            .head()
+            .build()
+        
+        try {
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val lastModified = response.header("Last-Modified")
+                    if (lastModified != null) {
+                        val sdf = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.US)
+                        return@withContext sdf.parse(lastModified)?.time ?: -1L
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("WebDavStorage", "Failed to get last modified", e)
+        }
+        return@withContext -1L
+    }
+
+    override suspend fun deleteFile(fileName: String): Unit = withContext(Dispatchers.IO) {
+        val url = getFullUrl(fileName)
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", auth)
+            .delete()
+            .build()
+        
+        try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful && response.code != 404) {
+                    Log.e("WebDavStorage", "Delete failed: ${response.code}")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("WebDavStorage", "Failed to delete file", e)
+        }
     }
 
     override suspend fun uploadText(text: String, fileName: String): String = withContext(Dispatchers.IO) {

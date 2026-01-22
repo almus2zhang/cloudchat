@@ -33,7 +33,7 @@ class S3StorageProvider(
     private val userPrefix: String
         get() {
             val root = config.serverPath.trim().removePrefix("/").removeSuffix("/")
-            val userDir = config.username
+            val userDir = currentUser
             return if (root.isEmpty()) "$userDir/" else "$root/$userDir/"
         }
 
@@ -71,6 +71,23 @@ class S3StorageProvider(
             return@withContext metadata.contentLength
         } catch (e: Exception) {
             return@withContext -1L
+        }
+    }
+
+    override suspend fun getLastModified(fileName: String): Long = withContext(Dispatchers.IO) {
+        try {
+            val metadata = s3Client.getObjectMetadata(config.bucket, "$userPrefix$fileName")
+            return@withContext metadata.lastModified.time
+        } catch (e: Exception) {
+            return@withContext -1L
+        }
+    }
+
+    override suspend fun deleteFile(fileName: String): Unit = withContext(Dispatchers.IO) {
+        try {
+            s3Client.deleteObject(config.bucket, "$userPrefix$fileName")
+        } catch (e: Exception) {
+            // Log or ignore
         }
     }
 

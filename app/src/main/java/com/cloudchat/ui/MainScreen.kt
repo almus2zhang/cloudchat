@@ -67,6 +67,7 @@ fun MainScreen(
     val uploadProgress by chatRepository.uploadProgress.collectAsState()
     val downloadProgress by chatRepository.downloadProgress.collectAsState()
     val activeDownloadIds by chatRepository.activeDownloadIds.collectAsState()
+    val syncInterval by chatRepository.syncInterval.collectAsState()
     val autoDownloadLimit = currentConfig?.autoDownloadLimit ?: (5 * 1024 * 1024L)
     
     var inputText by remember { mutableStateOf("") }
@@ -93,8 +94,8 @@ fun MainScreen(
     var isSearchActive by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
 
-    // Inject search icon into TopAppBar
-    LaunchedEffect(isSearchActive, searchQuery) {
+    // Inject search and sync icons into TopAppBar
+    LaunchedEffect(isSearchActive, searchQuery, syncInterval) {
         setTopBarActions {
             if (isSearchActive) {
                 // Auto-focus when search is activated
@@ -120,6 +121,17 @@ fun MainScreen(
                     Icon(Icons.Default.Close, contentDescription = "Close Search")
                 }
             } else {
+                val isFast = syncInterval == 1000L
+                IconButton(onClick = { 
+                    chatRepository.setSyncInterval(if (isFast) 5000L else 1000L) 
+                }) {
+                    Icon(
+                        imageVector = if (isFast) Icons.Default.Bolt else Icons.Default.Sync,
+                        contentDescription = if (isFast) "快速同步" else "普通同步",
+                        tint = if (isFast) Color(0xFFFFC107) else LocalContentColor.current
+                    )
+                }
+                
                 IconButton(onClick = { isSearchActive = true }) {
                     Icon(Icons.Default.Search, contentDescription = "Search")
                 }
@@ -222,7 +234,7 @@ fun MainScreen(
                     
                     ChatBubble(
                         message = message, 
-                        progress = if (isDownloading || progress == -1) progress else null,
+                        progress = progress,
                         chatRepository = chatRepository,
                         isSelected = selectedIds.contains(message.id),
                         autoDownloadLimit = autoDownloadLimit,
@@ -759,6 +771,7 @@ fun ChatBubble(
     onMediaClick: (ChatMessage) -> Unit,
     onLongClick: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
     val isOutgoing = message.isOutgoing
     val bubbleColor = if (isOutgoing) Color(0xFF95EC69) else Color.White
     val contentColor = Color.Black
@@ -766,6 +779,9 @@ fun ChatBubble(
     val localUriStr = chatRepository.getTransientUri(message.id, message.content)
     val isCached = localUriStr != null && (localUriStr.startsWith("file") || localUriStr.startsWith("content"))
 
+    val displayName = message.senderName ?: message.sender
+    val nameColor = getUserColor(displayName)
+    
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -780,12 +796,47 @@ fun ChatBubble(
         verticalAlignment = Alignment.Top
     ) {
         if (!isOutgoing) {
-            Avatar(message.sender.take(1).uppercase())
+            Avatar(displayName.take(1).uppercase())
             Spacer(modifier = Modifier.width(8.dp))
-        } else if (message.status == MessageStatus.FAILED) {
-            Box(Modifier.align(Alignment.CenterVertically)) {
-                Icon(Icons.Default.Warning, contentDescription = "Failed", tint = Color.Red, modifier = Modifier.size(20.dp).padding(end = 4.dp))
+            
+            // Name on the left side, aligned top
+            Text(
+                text = displayName,
+                style = MaterialTheme.typography.labelSmall,
+                color = nameColor,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(top = 2.dp, end = 4.dp) // Tiny top padding for visual alignment with bubble top
+                    .widthIn(max = 64.dp) // Constrain width to prevent squeezing message too much
+            )
+        } else {
+            // Outgoing
+            if (message.status == MessageStatus.FAILED) {
+                Box(
+                    Modifier
+                        .align(Alignment.CenterVertically)
+                        .clickable { 
+                            scope.launch { 
+                                chatRepository.retryMessage(message.id) 
+                            } 
+                        }
+                ) {
+                    Icon(Icons.Default.Warning, contentDescription = "Retry", tint = Color.Red, modifier = Modifier.size(20.dp).padding(end = 4.dp))
+                }
             }
+            
+            // Name on the LEFT of the bubble
+             Text(
+                text = displayName,
+                style = MaterialTheme.typography.labelSmall,
+                color = nameColor,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .padding(top = 2.dp, end = 4.dp)
+                    .widthIn(max = 64.dp) 
+            )
         }
 
         Column(
@@ -799,6 +850,7 @@ fun ChatBubble(
                         shape = MaterialTheme.shapes.medium,
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp)
                     ) {
+                        // Reverted to simple text content
                         Text(
                             text = message.content,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
@@ -812,15 +864,13 @@ fun ChatBubble(
                         chatRepository.getLocalFile(message.id, message.content)
                     }
                     
-                    // Use produceState - only depends on message.id, monitors specific progress via snapshotFlow
                     val fileExistsState = produceState(
                         initialValue = chatRepository.getTransientUri(message.id, message.content) != null || localFile.exists(),
-                        message.id  // Only depend on message.id, not the entire downloadProgress map
+                        message.id
                     ) {
-                        snapshotFlow { downloadProgress[message.id] }  // Monitor only this message's progress
+                        snapshotFlow { downloadProgress[message.id] }
                             .collect {
                                 val exists = chatRepository.getTransientUri(message.id, message.content) != null || localFile.exists()
-                                Log.d("ChatBubble", "IMAGE ${message.id}: fileExists=$exists progress=$it")
                                 value = exists
                             }
                     }
@@ -846,6 +896,8 @@ fun ChatBubble(
                                 .heightIn(max = 400.dp),
                             contentScale = ContentScale.FillWidth
                         )
+                        
+
                         // Download button overlay for large files
                         if (progress != null && progress in 0..100) {
                             Box(
@@ -860,19 +912,11 @@ fun ChatBubble(
                                     color = Color.White,
                                     strokeWidth = 3.dp
                                 )
-                                // Cancel button in center
                                 IconButton(
-                                    onClick = { 
-                                        chatRepository.cancelDownload(message.id)
-                                    },
+                                    onClick = { chatRepository.cancelDownload(message.id) },
                                     modifier = Modifier.size(32.dp)
                                 ) {
-                                    Icon(
-                                        Icons.Default.Close, 
-                                        contentDescription = "Cancel", 
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                    Icon(Icons.Default.Close, "Cancel", tint = Color.White, modifier = Modifier.size(20.dp))
                                 }
                             }
                         } else if (!isCached && message.remoteUrl != null && message.fileSize > autoDownloadLimit) {
@@ -896,15 +940,13 @@ fun ChatBubble(
                         chatRepository.getLocalFile(message.id, message.content)
                     }
                     
-                    // Use produceState - only depends on message.id, monitors specific progress via snapshotFlow
                     val fileExistsState = produceState(
                         initialValue = chatRepository.getTransientUri(message.id, message.content) != null || localFile.exists(),
-                        message.id  // Only depend on message.id, not the entire downloadProgress map
+                        message.id
                     ) {
-                        snapshotFlow { downloadProgress[message.id] }  // Monitor only this message's progress
+                        snapshotFlow { downloadProgress[message.id] }
                             .collect {
                                 val exists = chatRepository.getTransientUri(message.id, message.content) != null || localFile.exists()
-                                Log.d("ChatBubble", "VIDEO ${message.id}: fileExists=$exists progress=$it")
                                 value = exists
                             }
                     }
@@ -931,6 +973,7 @@ fun ChatBubble(
                             alpha = 0.8f
                         )
                         
+
                         if (progress != null && progress in 0..100) {
                             Box(
                                 modifier = Modifier
@@ -944,19 +987,11 @@ fun ChatBubble(
                                     color = Color.White,
                                     strokeWidth = 3.dp
                                 )
-                                // Pause button in center
                                 IconButton(
-                                    onClick = { 
-                                        chatRepository.cancelDownload(message.id)
-                                    },
+                                    onClick = { chatRepository.cancelDownload(message.id) },
                                     modifier = Modifier.size(32.dp)
                                 ) {
-                                    Icon(
-                                        Icons.Default.Close, 
-                                        contentDescription = "Cancel", 
-                                        tint = Color.White,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                    Icon(Icons.Default.Close, "Cancel", tint = Color.White, modifier = Modifier.size(20.dp))
                                 }
                             }
                         } else if (!isCached && message.remoteUrl != null && message.fileSize > autoDownloadLimit) {
@@ -974,6 +1009,7 @@ fun ChatBubble(
                             Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(40.dp))
                         }
                         
+                        // Video duration
                         if (message.videoDuration > 0) {
                             Text(
                                 text = formatDuration(message.videoDuration),
@@ -986,6 +1022,7 @@ fun ChatBubble(
                                 fontSize = 10.sp
                             )
                         }
+                        
                         if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
                     }
                 }
@@ -1003,6 +1040,7 @@ fun ChatBubble(
                             modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // Reverted to simple layout
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = message.content,
@@ -1070,6 +1108,32 @@ fun ChatBubble(
             }
         }
     }
+}
+
+fun getUserColor(name: String): Color {
+    val colors = listOf(
+        Color(0xFFF44336), // Red 500
+        Color(0xFFE91E63), // Pink 500
+        Color(0xFF9C27B0), // Purple 500
+        Color(0xFF673AB7), // Deep Purple 500
+        Color(0xFF3F51B5), // Indigo 500
+        Color(0xFF2196F3), // Blue 500
+        Color(0xFF03A9F4), // Light Blue 500
+        Color(0xFF00BCD4), // Cyan 500
+        Color(0xFF009688), // Teal 500
+        Color(0xFF4CAF50), // Green 500
+        Color(0xFF8BC34A), // Light Green 500
+        Color(0xFFCDDC39), // Lime 500
+        Color(0xFFFFEB3B), // Yellow 500
+        Color(0xFFFFC107), // Amber 500
+        Color(0xFFFF9800), // Orange 500
+        Color(0xFFFF5722), // Deep Orange 500
+        Color(0xFF795548), // Brown 500
+        Color(0xFF607D8B)  // Blue Grey 500
+    )
+    val hash = name.hashCode()
+    val index = kotlin.math.abs(hash) % colors.size
+    return colors[index]
 }
 
 @Composable

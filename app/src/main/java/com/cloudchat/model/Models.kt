@@ -13,6 +13,7 @@ enum class MessageStatus {
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val sender: String,
+    val senderName: String? = null, // Display name
     val content: String,
     val timestamp: Long = System.currentTimeMillis(),
     val type: MessageType = MessageType.TEXT,
@@ -35,7 +36,8 @@ data class ServerConfig(
     val bucket: String = "",
     val accessKey: String = "",
     val secretKey: String = "",
-    val username: String = "",
+    val saveDir: String = "", // Replaced old username (path)
+    val username: String = "", // New Display Name
     val serverPath: String = "",
     val webDavUrl: String = "",
     val webDavUser: String = "",

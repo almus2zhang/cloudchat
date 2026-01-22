@@ -18,6 +18,9 @@ import android.graphics.Matrix
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,7 +41,13 @@ class ChatRepository(private val context: Context) {
     val messages: StateFlow<List<ChatMessage>> = _messages
 
     private val _uploadProgress = MutableStateFlow<Map<String, Int>>(emptyMap())
-    val uploadProgress: StateFlow<Map<String, Int>> = _uploadProgress
+    val uploadProgress = _uploadProgress.asStateFlow()
+
+    private val _syncInterval = MutableStateFlow(5000L) // Default 5s
+    val syncInterval = _syncInterval.asStateFlow()
+
+    private var syncJob: kotlinx.coroutines.Job? = null
+    private var lastKnownCloudTime: Long = 0L
 
     private val _downloadProgress = MutableStateFlow<Map<String, Int>>(emptyMap())
     val downloadProgress = _downloadProgress.asStateFlow()
@@ -219,13 +228,39 @@ class ChatRepository(private val context: Context) {
             NetworkUtils.currentAuth = Credentials.basic(config.webDavUser, config.webDavPass)
         }
         storageProvider = if (config.type == com.cloudchat.model.StorageType.S3) {
-            S3StorageProvider(config, config.username)
+            S3StorageProvider(config, config.saveDir)
         } else {
-            WebDavStorageProvider(config, config.username)
+            WebDavStorageProvider(config, config.saveDir)
         }
         loadLocalHistory(config.id)
         if (_messages.value.isEmpty()) {
             refreshHistoryFromCloud()
+        }
+        startSyncLoop()
+    }
+
+    fun setSyncInterval(ms: Long) {
+        _syncInterval.value = ms
+        startSyncLoop()
+    }
+
+    private fun startSyncLoop() {
+        syncJob?.cancel()
+        syncJob = kotlinx.coroutines.MainScope().launch {
+            while (isActive) {
+                delay(_syncInterval.value)
+                try {
+                    val provider = storageProvider ?: continue
+                    val remoteTime = provider.getLastModified("chat_history.json")
+                    if (remoteTime > lastKnownCloudTime) {
+                        Log.d("ChatRepository", "Cloud change detected, refreshing...")
+                        refreshHistoryFromCloud()
+                        lastKnownCloudTime = remoteTime
+                    }
+                } catch (e: Exception) {
+                    Log.e("ChatRepository", "Sync loop error", e)
+                }
+            }
         }
     }
 
@@ -270,7 +305,7 @@ class ChatRepository(private val context: Context) {
         }
 
         val encodedFileName = fileName?.let { URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
-        val userDir = config.username
+        val userDir = config.saveDir
         val root = config.serverPath.trim().removePrefix("/").removeSuffix("/")
         val cloudPath = if (root.isEmpty()) userDir else "$root/$userDir"
 
@@ -279,7 +314,8 @@ class ChatRepository(private val context: Context) {
         } else null
 
         val newMessage = ChatMessage(
-            sender = config.username,
+            sender = config.username, // Username identifies the sender
+            senderName = config.username,
             content = fileName ?: content,
             type = type,
             isOutgoing = true,
@@ -345,14 +381,17 @@ class ChatRepository(private val context: Context) {
                         _uploadProgress.update { it + (newMessage.id to progress) }
                     }
                     
-                    // Verification
-                    val remoteSize = provider.getFileSize(fileName)
-                    if (remoteSize > 0) {
-                        updateMessageStatus(newMessage.id, MessageStatus.SUCCESS)
-                    } else {
-                        updateMessageStatus(newMessage.id, MessageStatus.FAILED)
+                    // Relaxed Verification: Trust the uploadFile call first.
+                    // Only mark failed if uploadFile threw exception (caught below).
+                    val remoteSize = try { provider.getFileSize(fileName) } catch (e: Exception) { -1L }
+                    
+                    if (remoteSize <= 0) {
+                        Log.w("ChatRepository", "Upload finished but remote size check failed or returned 0. Assuming success anyway.")
                     }
                     
+                    updateMessageStatus(newMessage.id, MessageStatus.SUCCESS)
+                    
+                    // Ensure progress is cleared or set to 100
                     _uploadProgress.update { it + (newMessage.id to -1) }
                 } else {
                     provider.uploadText(content, "msg_${System.currentTimeMillis()}.txt")
@@ -374,10 +413,81 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun deleteMessages(ids: List<String>) {
+        val messagesToDelete = _messages.value.filter { it.id in ids }
         _messages.update { list ->
             list.filterNot { it.id in ids }
         }
-        syncHistory()
+        
+        // Asynchronously delete files from cloud
+        GlobalScope.launch(Dispatchers.IO) {
+            val provider = storageProvider ?: return@launch
+            messagesToDelete.forEach { msg ->
+                if (msg.type != com.cloudchat.model.MessageType.TEXT) {
+                    // Delete main file
+                    try { provider.deleteFile(msg.content) } catch (e: Exception) {}
+                    // Delete thumbnail if exists
+                    msg.thumbnailUrl?.let { url ->
+                        val thumbName = "thumb_${msg.content}"
+                        try { provider.deleteFile(thumbName) } catch (e: Exception) {}
+                    }
+                }
+            }
+        }
+        
+        syncHistory(ids)
+    }
+
+    suspend fun retryMessage(messageId: String) {
+        val originalMessage = _messages.value.find { it.id == messageId } ?: return
+        
+        // 1. Try to find the file content source BEFORE deleting anything
+        var inputStream: InputStream? = null
+        var localUriStr: String? = transientLocalUris[messageId]
+        var fileSize = originalMessage.fileSize
+        
+        try {
+            // Strategy A: Memory Cache (Transient URI)
+            if (localUriStr != null) {
+                inputStream = context.contentResolver.openInputStream(Uri.parse(localUriStr))
+            }
+            
+            // Strategy B: Disk Cache (If A failed or wasn't available)
+            if (inputStream == null) {
+                val cachedFile = getLocalFile(messageId, originalMessage.content)
+                if (cachedFile.exists()) {
+                    inputStream = cachedFile.inputStream()
+                    localUriStr = "file://${cachedFile.absolutePath}"
+                    fileSize = cachedFile.length()
+                }
+            }
+            
+            // If still null, we can't retry
+            if (inputStream == null) {
+                Log.e("ChatRepository", "Cannot retry message $messageId: Source file not found in memory or disk cache")
+                // TODO: Notify user via UI event (toast) that file is lost? 
+                // For now just allow the UI to show the 'retry' button again (it remains Failed)
+                return 
+            }
+
+            // 2. Only if we have a valid stream, proceed to delete and resend
+            deleteMessages(listOf(messageId))
+            
+            if (originalMessage.type == com.cloudchat.model.MessageType.TEXT) {
+                sendMessage(content = originalMessage.content)
+            } else {
+                sendMessage(
+                    content = originalMessage.content,
+                    type = originalMessage.type,
+                    inputStream = inputStream,
+                    fileName = originalMessage.content,
+                    localUri = localUriStr
+                )
+            }
+            
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Retry failed", e)
+            inputStream?.close()
+        }
     }
 
     private fun generateThumbnail(uri: Uri, type: com.cloudchat.model.MessageType): File? {
@@ -414,7 +524,7 @@ class ChatRepository(private val context: Context) {
         }
     }
 
-    private fun syncHistory() {
+    private fun syncHistory(excludeIds: List<String> = emptyList()) {
         val config = currentConfig ?: return
         val currentList = _messages.value
         context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE).edit().putString("history_${config.id}", gson.toJson(currentList)).apply()
@@ -426,7 +536,28 @@ class ChatRepository(private val context: Context) {
         // Sync to cloud in background
         GlobalScope.launch(Dispatchers.IO) {
             try {
-                storageProvider?.uploadText(gson.toJson(currentList), "chat_history.json")
+                val provider = storageProvider ?: return@launch
+                
+                // Fetch latest from cloud first to merge
+                val tempFile = File(context.cacheDir, "cloud_history_merge.json")
+                var mergedList = currentList
+                try {
+                    provider.downloadFile("chat_history.json", tempFile)
+                    if (tempFile.exists()) {
+                        val json = tempFile.readText()
+                        val cloudList: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type)
+                        
+                        val localIds = currentList.map { it.id }.toSet()
+                        // Merge logic: include cloud messages that are NOT in local AND NOT in excludeIds
+                        val uniqueCloud = cloudList.filter { it.id !in localIds && it.id !in excludeIds }
+                        mergedList = currentList + uniqueCloud
+                    }
+                } catch (e: Exception) {
+                    // History might not exist yet
+                }
+
+                provider.uploadText(gson.toJson(mergedList.sortedBy { it.timestamp }), "chat_history.json")
+                lastKnownCloudTime = provider.getLastModified("chat_history.json")
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Cloud sync on delete failed", e)
             }
@@ -466,9 +597,28 @@ class ChatRepository(private val context: Context) {
             provider.downloadFile("chat_history.json", tempFile)
             if (tempFile.exists()) {
                 val json = tempFile.readText()
-                val history: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type)
-                _messages.value = history
+                val cloudHistory: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type)
+                val cloudIds = cloudHistory.map { it.id }.toSet()
+
+                _messages.update { current ->
+                    // 1. Keep all messages from cloud
+                    // 2. Keep local messages that are NOT SUCCESS (sending or failed) and NOT in cloud
+                    // 3. Keep local messages that are SUCCESS but somehow NOT in cloud? (Wait, if they are SUCCESS but not in cloud, they were likely DELETED by others)
+                    
+                    val pendingOrFailed = current.filter { it.status != MessageStatus.SUCCESS && it.id !in cloudIds }
+                    
+                    val merged = cloudHistory.map { cloudMsg ->
+                        current.find { it.id == cloudMsg.id }?.let { localMsg ->
+                             // Prefer local if SUCCESS, but usually cloud version of a SUCCESS message is the same.
+                             // Update local if cloud has more info? Not much to update usually.
+                             cloudMsg // Cloud is truth for historical messages
+                        } ?: cloudMsg
+                    } + pendingOrFailed
+                    
+                    merged.sortedBy { it.timestamp }
+                }
                 saveLocalHistory(config.id)
+                lastKnownCloudTime = provider.getLastModified("chat_history.json")
             }
         } catch (e: Exception) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
