@@ -138,7 +138,8 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun downloadFileToCache(messageId: String, fileName: String, remoteUrl: String): File? {
-        return downloadFileInternal(messageId, fileName, remoteUrl)
+        val fullUrl = resolveUrl(remoteUrl) ?: remoteUrl
+        return downloadFileInternal(messageId, fileName, fullUrl)
     }
     
     private suspend fun downloadFileInternal(messageId: String, fileName: String, remoteUrl: String): File? = withContext(Dispatchers.IO) {
@@ -377,9 +378,7 @@ class ChatRepository(private val context: Context) {
         val root = config.serverPath.trim().removePrefix("/").removeSuffix("/")
         val cloudPath = if (root.isEmpty()) userDir else "$root/$userDir"
 
-        val remoteUrl = if (fileName != null) {
-            provider.getFullUrl(fileName)
-        } else null
+        val remoteUrl = fileName
 
         val newMessage = ChatMessage(
             sender = config.username, // Username identifies the sender
@@ -435,9 +434,8 @@ class ChatRepository(private val context: Context) {
                         val thumbName = "thumb_${fileName}"
                         try {
                             provider.uploadFile(thumbFile.inputStream(), thumbName, "image/jpeg", thumbFile.length()) { _ -> }
-                            currentThumbnailUrl = provider.getFullUrl(thumbName)
                             _messages.update { list ->
-                                list.map { if (it.id == newMessage.id) it.copy(thumbnailUrl = currentThumbnailUrl) else it }
+                                list.map { if (it.id == newMessage.id) it.copy(thumbnailUrl = thumbName) else it }
                             }
                         } catch (e: Exception) {
                             Log.e("ChatRepository", "Thumb upload failed", e)
@@ -670,7 +668,7 @@ class ChatRepository(private val context: Context) {
             else -> com.cloudchat.model.MessageType.FILE
         }
 
-        val remoteUrl = provider.getFullUrl(fileName)
+        val remoteUrl = fileName
         
         // Attempt to get file size from server
         val fileSize = try { provider.getFileSize(fileName) } catch (e: Exception) { 0L }
@@ -876,5 +874,11 @@ class ChatRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
         }
+    }
+
+    fun resolveUrl(urlOrPath: String?): String? {
+        if (urlOrPath == null) return null
+        if (urlOrPath.startsWith("http") || urlOrPath.startsWith("content://") || urlOrPath.startsWith("file://")) return urlOrPath
+        return storageProvider?.getFullUrl(urlOrPath)
     }
 }

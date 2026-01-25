@@ -433,7 +433,7 @@ fun MainScreen(
                                     null
                                 }
                             } else {
-                                msg?.remoteUrl?.let { Uri.parse(it) }
+                                msg?.remoteUrl?.let { chatRepository.resolveUrl(it)?.let { url -> Uri.parse(url) } }
                             }
                         }
                         if (uris.isNotEmpty()) {
@@ -523,12 +523,12 @@ fun MediaPagerOverlay(
                 if (isCurrentPage && uriState == null && !downloadAttempted.value && message.remoteUrl != null) {
                     downloadAttempted.value = true
                     Log.d("MediaViewer", "Auto-download started for ${message.id} (current page)")
-                    chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
+                    chatRepository.downloadFileToCache(message.id, message.content, chatRepository.resolveUrl(message.remoteUrl)!!)
                 }
             }
             
             // Determine display URI: use local file if exists, otherwise thumbnail, otherwise remote
-            val displayUri = uriState ?: message.thumbnailUrl ?: message.remoteUrl
+            val displayUri = uriState ?: chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
             val downloadingProgress = downloadProgress[message.id]
             val isDownloading = downloadingProgress != null && downloadingProgress >= 0 && downloadingProgress < 100
             val showThumbnail = uriState == null && message.thumbnailUrl != null
@@ -552,7 +552,7 @@ fun MediaPagerOverlay(
                                         pagerState.animateScrollToPage(pagerState.currentPage - 1)
                                 }
                             },
-                            backgroundUri = message.thumbnailUrl,
+                            backgroundUri = chatRepository.resolveUrl(message.thumbnailUrl),
                             isHighRes = uriState != null // Only true when we display the Local File
                         )
                         MessageType.VIDEO -> FullScreenVideoPlayer(
@@ -671,7 +671,7 @@ fun MediaPagerOverlay(
                     ) {
                         items(mediaMessages.size) { index ->
                             val msg = mediaMessages[index]
-                            val uri = chatRepository.getTransientUri(msg.id, msg.content) ?: msg.remoteUrl
+                            val uri = chatRepository.getTransientUri(msg.id, msg.content) ?: chatRepository.resolveUrl(msg.remoteUrl)
                             Box(
                                 modifier = Modifier
                                     .aspectRatio(1f)
@@ -1015,7 +1015,7 @@ fun ChatBubble(
                     val displayUri = remember(fileExists) {
                         chatRepository.getTransientUri(message.id, message.content)
                             ?: if (localFile.exists()) "file://${localFile.absolutePath}"
-                            else message.thumbnailUrl ?: message.remoteUrl
+                            else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
                     }
 
                     Box(
@@ -1059,7 +1059,7 @@ fun ChatBubble(
                             IconButton(
                                 onClick = { 
                                     kotlinx.coroutines.MainScope().launch {
-                                        chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
+                                        chatRepository.downloadFileToCache(message.id, message.content, chatRepository.resolveUrl(message.remoteUrl) ?: "")
                                     }
                                 },
                                 modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
@@ -1091,7 +1091,7 @@ fun ChatBubble(
                     val displayUri = remember(fileExists) {
                         chatRepository.getTransientUri(message.id, message.content)
                             ?: if (localFile.exists()) "file://${localFile.absolutePath}"
-                            else message.thumbnailUrl ?: message.remoteUrl
+                            else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
                     }
 
                     Box(
@@ -1134,7 +1134,7 @@ fun ChatBubble(
                             IconButton(
                                 onClick = { 
                                     kotlinx.coroutines.MainScope().launch {
-                                        chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
+                                        chatRepository.downloadFileToCache(message.id, message.content, chatRepository.resolveUrl(message.remoteUrl) ?: "")
                                     }
                                 },
                                 modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
@@ -1204,7 +1204,7 @@ fun ChatBubble(
                             } else if (!isCached && message.remoteUrl != null) {
                                 IconButton(onClick = {
                                     kotlinx.coroutines.MainScope().launch {
-                                        chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
+                                        chatRepository.downloadFileToCache(message.id, message.content, chatRepository.resolveUrl(message.remoteUrl) ?: "")
                                     }
                                 }) {
                                     Icon(Icons.Default.Download, contentDescription = "Download")
