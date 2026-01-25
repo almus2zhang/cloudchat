@@ -43,6 +43,24 @@ fun SettingsScreen(onBack: () -> Unit) {
     var isTesting by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
 
+    var showPasswordDialog by remember { mutableStateOf(false) }
+    var passwordTargetAccount by remember { mutableStateOf<ServerConfig?>(null) }
+    var passwordTargetAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var passwordInput by remember { mutableStateOf("") }
+    var passwordError by remember { mutableStateOf(false) }
+
+    val checkPasswordAndProceed = { account: ServerConfig, action: () -> Unit ->
+        if (account.configPassword.isNullOrEmpty()) {
+            action()
+        } else {
+            passwordTargetAccount = account
+            passwordTargetAction = action
+            passwordInput = ""
+            passwordError = false
+            showPasswordDialog = true
+        }
+    }
+
     // Auto-open editor for Full mode if no account exists
     LaunchedEffect(appMode, accounts) {
         if (appMode == com.cloudchat.model.AppMode.FULL && accounts.isEmpty() && editingConfig == null) {
@@ -75,22 +93,26 @@ fun SettingsScreen(onBack: () -> Unit) {
                             isSelected = account.id == currentConfig?.id,
                             appMode = appMode,
                             onSelect = {
-                                coroutineScope.launch { 
-                                    settingsRepository.switchAccount(account.id)
-                                    onBack() // Auto close after switch
+                                checkPasswordAndProceed(account) {
+                                    coroutineScope.launch { 
+                                        settingsRepository.switchAccount(account.id)
+                                        onBack() 
+                                    }
                                 }
                             },
                             onEdit = { 
-                                editingConfig = if (appMode == com.cloudchat.model.AppMode.FULL) {
-                                    account.copy(
-                                        webDavUrl = SettingsRepository.FIXED_FULL_CONFIG.webDavUrl,
-                                        serverPath = SettingsRepository.FIXED_FULL_CONFIG.serverPath,
-                                        webDavUser = SettingsRepository.FIXED_FULL_CONFIG.webDavUser,
-                                        webDavPass = SettingsRepository.FIXED_FULL_CONFIG.webDavPass,
-                                        type = SettingsRepository.FIXED_FULL_CONFIG.type
-                                    )
-                                } else {
-                                    account
+                                checkPasswordAndProceed(account) {
+                                    editingConfig = if (appMode == com.cloudchat.model.AppMode.FULL) {
+                                        account.copy(
+                                            webDavUrl = SettingsRepository.FIXED_FULL_CONFIG.webDavUrl,
+                                            serverPath = SettingsRepository.FIXED_FULL_CONFIG.serverPath,
+                                            webDavUser = SettingsRepository.FIXED_FULL_CONFIG.webDavUser,
+                                            webDavPass = SettingsRepository.FIXED_FULL_CONFIG.webDavPass,
+                                            type = SettingsRepository.FIXED_FULL_CONFIG.type
+                                        )
+                                    } else {
+                                        account
+                                    }
                                 }
                             },
                             onDelete = { 
@@ -176,6 +198,18 @@ fun SettingsScreen(onBack: () -> Unit) {
                     label = { Text("用户昵称 (Name)") },
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("在此输入您的名字") }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+                TextField(
+                    value = config.configPassword ?: "",
+                    onValueChange = { 
+                        editingConfig = config.copy(configPassword = it.ifEmpty { null })
+                    },
+                    label = { Text("配置保护密码 (Config Password - Optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("设置后，编辑或切换此配置需输入密码") },
+                    visualTransformation = PasswordVisualTransformation()
                 )
 
                 if (appMode == com.cloudchat.model.AppMode.SELF_BUILT) {
@@ -307,6 +341,50 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
         }
+    }
+
+    if (showPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = { showPasswordDialog = false },
+            title = { Text("验证密码 (Verify Password)") },
+            text = {
+                Column {
+                    Text("请输入该配置的访问密码：")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextField(
+                        value = passwordInput,
+                        onValueChange = { 
+                            passwordInput = it
+                            passwordError = false
+                        },
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = passwordError,
+                        label = { Text("Password") }
+                    )
+                    if (passwordError) {
+                        Text("密码错误 (Incorrect password)", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (passwordInput == passwordTargetAccount?.configPassword) {
+                        showPasswordDialog = false
+                        passwordTargetAction?.invoke()
+                    } else {
+                        passwordError = true
+                    }
+                }) {
+                    Text("Confirm")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPasswordDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

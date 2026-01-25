@@ -46,5 +46,6 @@ data class ServerConfig(
     val webDavUrl: String = "",
     val webDavUser: String = "",
     val webDavPass: String = "",
-    val autoDownloadLimit: Long = 5 * 1024 * 1024L
+    val autoDownloadLimit: Long = 5 * 1024 * 1024L,
+    val configPassword: String? = null
 )
