@@ -1,0 +1,28 @@
+package com.cloudchat.utils
+
+object ConfigHelper {
+    // These are XOR-encrypted versions of the configuration values
+    // Key: "YourSecretKeyHere"
+    private val K = byteArrayOf(0) // Replace with your XOR key bytes
+    
+    // Encrypted URL
+    private val V1 = byteArrayOf(0) // Replace with your encrypted URL bytes
+    
+    // Encrypted User
+    private val V2 = byteArrayOf(0) // Replace with your encrypted user bytes
+    
+    // Encrypted Pass
+    private val V3 = byteArrayOf(0) // Replace with your encrypted pass bytes
+
+    fun getUrl(): String = decode(V1)
+    fun getUser(): String = decode(V2)
+    fun getPass(): String = decode(V3)
+
+    private fun decode(b: ByteArray): String {
+        val r = ByteArray(b.size)
+        for (i in b.indices) {
+            r[i] = (b[i].toInt() xor K[i % K.size].toInt()).toByte()
+        }
+        return String(r)
+    }
+}

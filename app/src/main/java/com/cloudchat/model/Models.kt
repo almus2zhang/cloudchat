@@ -10,6 +10,10 @@ enum class MessageStatus {
     SENDING, SUCCESS, FAILED
 }
 
+enum class AppMode {
+    NOT_SET, SELF_BUILT, FULL
+}
+
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val sender: String,

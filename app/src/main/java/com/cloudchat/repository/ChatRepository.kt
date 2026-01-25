@@ -31,11 +31,20 @@ import okhttp3.Credentials
 import java.io.File
 import java.io.InputStream
 import java.net.URLEncoder
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+import java.nio.ByteBuffer
 
 class ChatRepository(private val context: Context) {
+    companion object {
+        const val TOTP_SECRET = "CLOUDSYNC2FA2222"
+        const val TOTP_STEP = 30000L // 30 seconds
+    }
     private val gson = Gson()
     private var storageProvider: StorageProvider? = null
+    private var authStorageProvider: StorageProvider? = null
     private var currentConfig: ServerConfig? = null
+    private val scope = kotlinx.coroutines.MainScope()
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages
@@ -54,6 +63,20 @@ class ChatRepository(private val context: Context) {
 
     private val _activeDownloadIds = MutableStateFlow<Set<String>>(emptySet())
     val activeDownloadIds = _activeDownloadIds.asStateFlow()
+
+    private val _isSecurityAuthenticated = MutableStateFlow(false)
+    val isSecurityAuthenticated = _isSecurityAuthenticated.asStateFlow()
+
+    private val _securityError = MutableStateFlow<String?>(null)
+    val securityError = _securityError.asStateFlow()
+
+    private val deviceId: String by lazy {
+        android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "unknown_device"
+    }
+
+    val authId: String by lazy {
+        if (deviceId.length >= 6) deviceId.takeLast(6) else deviceId
+    }
 
     private val transientLocalUris = mutableMapOf<String, String>()
     
@@ -115,12 +138,7 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun downloadFileToCache(messageId: String, fileName: String, remoteUrl: String): File? {
-        // Launch in GlobalScope to prevent cancellation when caller's scope is cancelled
-        // This ensures downloads complete even if user navigates away
-        val job = GlobalScope.launch(Dispatchers.IO) {
-            downloadFileInternal(messageId, fileName, remoteUrl)
-        }
-        return null // Return immediately, actual result via progress updates
+        return downloadFileInternal(messageId, fileName, remoteUrl)
     }
     
     private suspend fun downloadFileInternal(messageId: String, fileName: String, remoteUrl: String): File? = withContext(Dispatchers.IO) {
@@ -222,21 +240,71 @@ class ChatRepository(private val context: Context) {
         Log.d("ChatRepository", "Download cancellation requested for $messageId")
     }
 
-    suspend fun updateConfig(config: ServerConfig) {
+    suspend fun updateConfig(config: ServerConfig, appMode: com.cloudchat.model.AppMode) {
         currentConfig = config
         if (config.type == com.cloudchat.model.StorageType.WEBDAV) {
             NetworkUtils.currentAuth = Credentials.basic(config.webDavUser, config.webDavPass)
         }
-        storageProvider = if (config.type == com.cloudchat.model.StorageType.S3) {
+        
+        val useSafeClient = appMode == com.cloudchat.model.AppMode.FULL
+
+        Log.d("ChatRepository", "Initializing providers. Safe Mode: $useSafeClient (AppMode: $appMode)")
+        authStorageProvider = if (config.type == com.cloudchat.model.StorageType.S3) {
             S3StorageProvider(config, config.saveDir)
         } else {
-            WebDavStorageProvider(config, config.saveDir)
+            WebDavStorageProvider(config, config.saveDir, useSafeClient)
         }
+
+        // Data provider points to a subdirectory in FULL mode for user isolation
+        val dataDir = if (appMode == com.cloudchat.model.AppMode.FULL) {
+            "${config.saveDir.trimEnd('/')}/$authId"
+        } else {
+            config.saveDir
+        }
+        
+        Log.d("ChatRepository", "Data directory: $dataDir (Mode: $appMode)")
+
+        storageProvider = if (config.type == com.cloudchat.model.StorageType.S3) {
+            S3StorageProvider(config, dataDir)
+        } else {
+            WebDavStorageProvider(config, dataDir, useSafeClient)
+        }
+
+        // Ensure the data directory exists (creates subfolder on WebDAV if missing)
+        scope.launch {
+            storageProvider?.testConnection()
+        }
+
         loadLocalHistory(config.id)
         if (_messages.value.isEmpty()) {
             refreshHistoryFromCloud()
         }
+        uploadLoginLog(config)
         startSyncLoop()
+    }
+
+    private suspend fun uploadLoginLog(config: ServerConfig) = withContext(Dispatchers.IO) {
+        val provider = storageProvider ?: return@withContext
+        val logFileName = "login_logs.txt"
+        val timestamp = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+        val logEntry = "[$timestamp] User: ${config.username}, DeviceID: $deviceId\n"
+        
+        try {
+            // Try to download existing log, append, and re-upload
+            val tempFile = File(context.cacheDir, "login_logs_temp.txt")
+            var currentLogs = ""
+            try {
+                provider.downloadFile(logFileName, tempFile)
+                if (tempFile.exists()) {
+                    currentLogs = tempFile.readText()
+                }
+            } catch (e: Exception) {
+                // Log doesn't exist yet
+            }
+            provider.uploadText(currentLogs + logEntry, logFileName)
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Failed to upload login log", e)
+        }
     }
 
     fun setSyncInterval(ms: Long) {
@@ -587,6 +655,191 @@ class ChatRepository(private val context: Context) {
         } catch (e: Exception) {
             0L
         }
+    }
+
+    suspend fun linkServerFile(fileName: String) {
+        val provider = storageProvider ?: return
+        val config = currentConfig ?: return
+        
+        // Determine type based on extension
+        val extension = fileName.substringAfterLast('.', "").lowercase()
+        val type = when (extension) {
+            "jpg", "jpeg", "png", "webp", "gif" -> com.cloudchat.model.MessageType.IMAGE
+            "mp4", "mkv", "mov", "avi" -> com.cloudchat.model.MessageType.VIDEO
+            "mp3", "wav", "m4a", "flac" -> com.cloudchat.model.MessageType.AUDIO
+            else -> com.cloudchat.model.MessageType.FILE
+        }
+
+        val remoteUrl = provider.getFullUrl(fileName)
+        
+        // Attempt to get file size from server
+        val fileSize = try { provider.getFileSize(fileName) } catch (e: Exception) { 0L }
+
+        val newMessage = ChatMessage(
+            sender = config.username,
+            senderName = config.username,
+            content = fileName,
+            type = type,
+            isOutgoing = true,
+            remoteUrl = remoteUrl,
+            fileSize = fileSize,
+            status = MessageStatus.SUCCESS
+        )
+
+        _messages.update { it + newMessage }
+        saveLocalHistory(config.id)
+        
+        withContext(Dispatchers.IO) {
+            try {
+                provider.uploadText(gson.toJson(_messages.value), "chat_history.json")
+                lastKnownCloudTime = provider.getLastModified("chat_history.json")
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "Link file sync failed", e)
+            }
+        }
+    }
+
+    suspend fun checkSecurityAuth() = withContext(Dispatchers.IO) {
+        val provider = authStorageProvider ?: return@withContext
+        val config = currentConfig ?: return@withContext
+        
+        val name1 = "auth_${authId}.verified"
+        val name2 = "${authId}.verified"
+        
+        try {
+            val content1 = provider.downloadText(name1)
+            val content2 = provider.downloadText(name2)
+            
+            val isVerified = (content1?.trim()?.lowercase() == "yes") || 
+                            (content2?.trim()?.lowercase() == "yes")
+            
+            if (isVerified) {
+                Log.i("ChatRepository", "Security authentication SUCCESS (content verified)")
+                _isSecurityAuthenticated.value = true
+                _securityError.value = null
+            } else {
+                _isSecurityAuthenticated.value = false
+                // _securityError.value = "未找到认证文件或文件内容错误 (需在根目录创建 [ID].verified 文件并写入 yes)"
+            }
+        } catch (e: Exception) {
+            val errorMsg = e.message ?: "未知错误"
+            Log.e("ChatRepository", "Security check failed: $errorMsg", e)
+            _isSecurityAuthenticated.value = false
+            /*
+            _securityError.value = when {
+                errorMsg.contains("401") -> "服务器鉴权失败 (401): 请检查 WebDAV 用户名和密码"
+                errorMsg.contains("SSL") || errorMsg.contains("cert") -> "SSL 证书检查失败 ($errorMsg): 请确保服务器证书链完整，或尝试开启 [SSL 兼容模式]"
+                else -> "连接服务器失败: $errorMsg"
+            }
+            */
+        }
+    }
+
+    suspend fun verify2FAServer(code: String): Boolean = withContext(Dispatchers.IO) {
+        val provider = authStorageProvider ?: return@withContext false
+        val config = currentConfig ?: return@withContext false
+
+        // _securityError.value = "正在验证 2FA 动态码..."
+        val isValid = verifyInternalTOTP(code)
+        
+        if (isValid) {
+            val authFileName = "${authId}.verified"
+            try {
+                // Upload "yes" as required
+                provider.uploadText("yes", authFileName)
+                _isSecurityAuthenticated.value = true
+                _securityError.value = null
+                return@withContext true
+            } catch (e: Exception) {
+                val errorMsg = e.message ?: "未知上传错误"
+                Log.e("ChatRepository", "Failed to upload auth file: $errorMsg", e)
+                // _securityError.value = "上传认证文件失败: $errorMsg"
+            }
+        } else {
+            // _securityError.value = "2FA 动态码不正确，请核对密钥或确保手机时间准确"
+        }
+        false
+    }
+
+
+    private fun verifyInternalTOTP(code: String): Boolean {
+        // Solidified 2FA logic: 
+        // We use a fixed secret and calculate a window code
+        val secret = TOTP_SECRET
+        val timeStep = TOTP_STEP
+        val currentTime = System.currentTimeMillis()
+        
+        // Check current and previous window to account for clock skew
+        val (isValidCurrent, expectedCurrent) = checkCode(code, secret, currentTime / timeStep)
+        val (isValidPrevious, expectedPrevious) = checkCode(code, secret, (currentTime - timeStep) / timeStep)
+
+        Log.d("ChatRepository", "2FA Check: input=$code, current_window_expected=$expectedCurrent, prev_window_expected=$expectedPrevious")
+
+        return isValidCurrent || isValidPrevious
+    }
+
+    private fun checkCode(code: String, secret: String, window: Long): Pair<Boolean, String> {
+        val expected = generateTOTP(secret, window)
+        return Pair(code == expected, expected)
+    }
+
+    fun getCurrentTOTPCode(): String {
+        return generateTOTP(TOTP_SECRET, System.currentTimeMillis() / TOTP_STEP)
+    }
+
+    private fun generateTOTP(secret: String, window: Long): String {
+        try {
+            // Simple Base32 decoding for the specific secret format
+            val key = decodeBase32(secret)
+            val mac = Mac.getInstance("HmacSHA1")
+            mac.init(SecretKeySpec(key, "HmacSHA1"))
+            
+            val data = ByteBuffer.allocate(8).putLong(window).array()
+            val hash = mac.doFinal(data)
+            
+            val offset = hash[hash.size - 1].toInt() and 0xf
+            val binary = ((hash[offset].toInt() and 0x7f) shl 24) or
+                         ((hash[offset + 1].toInt() and 0xff) shl 16) or
+                         ((hash[offset + 2].toInt() and 0xff) shl 8) or
+                         (hash[offset + 3].toInt() and 0xff)
+            
+            val otp = binary % 1000000
+            return String.format("%06d", otp)
+        } catch (e: Exception) {
+            return "000000"
+        }
+    }
+
+    private fun decodeBase32(s: String): ByteArray {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+        var i = 0
+        var index = 0
+        var digit = 0
+        var currByte = 0
+        val base32 = s.uppercase()
+        val bytes = ByteArray(base32.length * 5 / 8)
+        
+        for (char in base32) {
+            val lookup = alphabet.indexOf(char)
+            if (lookup == -1) continue
+            digit = lookup
+            if (index <= 3) {
+                index = (index + 5) % 8
+                if (index == 0) {
+                    currByte = currByte or digit
+                    bytes[i++] = currByte.toByte()
+                    currByte = 0
+                } else {
+                    currByte = currByte or (digit shl (8 - index))
+                }
+            } else {
+                index = (index + 5) % 8
+                currByte = currByte or (digit shr index)
+                bytes[i++] = currByte.toByte()
+                currByte = (digit shl (8 - index)) and 0xFF
+            }
+        }
+        return bytes
     }
 
     suspend fun refreshHistoryFromCloud() = withContext(Dispatchers.IO) {

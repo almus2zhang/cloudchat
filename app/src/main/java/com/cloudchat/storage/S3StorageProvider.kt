@@ -102,6 +102,16 @@ class S3StorageProvider(
         return@withContext key
     }
 
+    override suspend fun downloadText(fileName: String): String? = withContext(Dispatchers.IO) {
+        val key = "$userPrefix$fileName"
+        try {
+            val s3Object = s3Client.getObject(config.bucket, key)
+            s3Object.objectContent.use { it.bufferedReader().readText() }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     override suspend fun listMessages(): List<ChatMessage> = emptyList()
 
     override suspend fun downloadFile(fileName: String, destination: File, onProgress: ((Int) -> Unit)?) {

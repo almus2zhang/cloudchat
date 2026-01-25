@@ -14,6 +14,22 @@ object NetworkUtils {
     @Volatile
     var currentAuth: String? = null
 
+    /**
+     * Safe client that honors system certificates and Network Security Config.
+     * Prevents packet capture by only trusting system-provided CAs.
+     */
+    fun getSafeOkHttpClient(): OkHttpClient.Builder {
+        val authInterceptor = createAuthInterceptor()
+        return OkHttpClient.Builder()
+            .addInterceptor(authInterceptor)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+    }
+
+    /**
+     * Unsafe client that bypasses SSL verification.
+     * Use only for self-built versions with non-standard certs.
+     */
     fun getUnsafeOkHttpClient(): OkHttpClient.Builder {
         try {
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
@@ -25,24 +41,7 @@ object NetworkUtils {
             val sslContext = SSLContext.getInstance("TLS")
             sslContext.init(null, trustAllCerts, SecureRandom())
 
-            val authInterceptor = Interceptor { chain ->
-                val request = chain.request()
-                val url = request.url.toString()
-                
-                val authenticatedRequest = if (currentAuth != null) {
-                    Log.d("NetworkUtils", "Adding Auth to request: $url")
-                    request.newBuilder()
-                        .header("Authorization", currentAuth!!)
-                        .build()
-                } else {
-                    Log.d("NetworkUtils", "No Auth available for request: $url")
-                    request
-                }
-                
-                val response = chain.proceed(authenticatedRequest)
-                Log.d("NetworkUtils", "Response for $url -> Code: ${response.code}")
-                response
-            }
+            val authInterceptor = createAuthInterceptor()
 
             return OkHttpClient.Builder()
                 .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
@@ -52,7 +51,30 @@ object NetworkUtils {
                 .readTimeout(30, TimeUnit.SECONDS)
         } catch (e: Exception) {
             Log.e("NetworkUtils", "Failed to create unsafe client", e)
-            return OkHttpClient.Builder()
+            return getSafeOkHttpClient()
+        }
+    }
+
+    private fun createAuthInterceptor() = Interceptor { chain ->
+        val request = chain.request()
+        val url = request.url.toString()
+        Log.d("NetworkUtils", "Request: ${request.method} $url")
+        
+        val authenticatedRequest = if (currentAuth != null && request.header("Authorization") == null) {
+            request.newBuilder()
+                .header("Authorization", currentAuth!!)
+                .build()
+        } else {
+            request
+        }
+        
+        try {
+            val response = chain.proceed(authenticatedRequest)
+            Log.d("NetworkUtils", "Response: ${response.code} for $url")
+            response
+        } catch (e: Exception) {
+            Log.e("NetworkUtils", "Request failed for $url", e)
+            throw e
         }
     }
 }

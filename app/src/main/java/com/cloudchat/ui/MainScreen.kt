@@ -2,6 +2,12 @@ package com.cloudchat.ui
 
 import android.net.Uri
 import android.util.Log
+import android.content.ContentValues
+import android.provider.MediaStore
+import android.os.Build
+import android.webkit.MimeTypeMap
+import androidx.core.content.FileProvider
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,6 +24,8 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -40,6 +48,10 @@ import com.cloudchat.model.MessageType
 import com.cloudchat.repository.ChatRepository
 import com.cloudchat.repository.SettingsRepository
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.isActive
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -75,6 +87,10 @@ fun MainScreen(
     var mediaPagerIndex by remember { mutableStateOf<Int?>(null) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
     var isAttachmentPanelVisible by remember { mutableStateOf(false) }
+    val appMode by settingsRepository.appMode.collectAsState(initial = com.cloudchat.model.AppMode.NOT_SET)
+    val isSecurityAuthenticated by chatRepository.isSecurityAuthenticated.collectAsState()
+    var showSecurityOverlay by remember { mutableStateOf(false) }
+
     val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
 
@@ -173,11 +189,19 @@ fun MainScreen(
     }
 
 
-    LaunchedEffect(currentConfig) {
+    LaunchedEffect(currentConfig, appMode) {
         currentConfig?.let {
-            chatRepository.updateConfig(it)
+            chatRepository.updateConfig(it, appMode)
             chatRepository.refreshHistoryFromCloud()
+            
+            if (appMode == com.cloudchat.model.AppMode.FULL) {
+                chatRepository.checkSecurityAuth()
+            }
         }
+    }
+
+    LaunchedEffect(isSecurityAuthenticated, appMode) {
+        showSecurityOverlay = (appMode == com.cloudchat.model.AppMode.FULL && !isSecurityAuthenticated)
     }
 
     val handleUris = { uris: List<Uri> ->
@@ -222,7 +246,7 @@ fun MainScreen(
                 }
                 data.uris?.forEach { uri ->
                     val stream = context.contentResolver.openInputStream(uri)
-                    val name = uri.lastPathSegment ?: "shared_file"
+                    val name = getFileName(context, uri)
                     chatRepository.sendMessage(name, determineMessageType(context, uri, name), stream, name, uri.toString())
                 }
                 onSharedDataHandled()
@@ -283,7 +307,8 @@ fun MainScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(8.dp),
+                        .padding(8.dp)
+                        .imePadding(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = { 
@@ -303,6 +328,7 @@ fun MainScreen(
                         modifier = Modifier.weight(1f).onFocusChanged { 
                             if (it.isFocused) {
                                 isAttachmentPanelVisible = false
+                                keyboardController?.show()
                             }
                         },
                         placeholder = { Text("Type a message") },
@@ -317,7 +343,14 @@ fun MainScreen(
                         onClick = {
                             if (inputText.isNotBlank()) {
                                 scope.launch {
-                                    chatRepository.sendMessage(inputText)
+                                    if (inputText.startsWith("/link ", ignoreCase = true)) {
+                                        val fileName = inputText.substring(6).trim()
+                                        if (fileName.isNotEmpty()) {
+                                            chatRepository.linkServerFile(fileName)
+                                        }
+                                    } else {
+                                        chatRepository.sendMessage(inputText)
+                                    }
                                     inputText = ""
                                 }
                             }
@@ -389,8 +422,19 @@ fun MainScreen(
                     IconButton(onClick = { 
                         val uris = selectedIds.mapNotNull { id ->
                             val msg = messages.find { it.id == id }
-                            val uri = chatRepository.getTransientUri(id) ?: msg?.remoteUrl
-                            uri?.let { Uri.parse(it) }
+                            val fileName = msg?.content ?: ""
+                            val localFile = chatRepository.getLocalFile(id, fileName)
+                            
+                            if (localFile.exists()) {
+                                try {
+                                    val authority = "${context.packageName}.fileprovider"
+                                    androidx.core.content.FileProvider.getUriForFile(context, authority, localFile)
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            } else {
+                                msg?.remoteUrl?.let { Uri.parse(it) }
+                            }
                         }
                         if (uris.isNotEmpty()) {
                             shareMediaMultiple(context, uris)
@@ -408,6 +452,10 @@ fun MainScreen(
                     }
                 }
             }
+        }
+
+        if (showSecurityOverlay) {
+            SecurityOverlay(chatRepository = chatRepository)
         }
     }
 }
@@ -575,8 +623,7 @@ fun MediaPagerOverlay(
                 IconButton(
                     onClick = { 
                         val msg = mediaMessages[pagerState.currentPage]
-                        val uri = chatRepository.getTransientUri(msg.id) ?: msg.remoteUrl
-                        if (uri != null) shareMedia(context, uri)
+                        shareMedia(context, chatRepository, msg.id, msg.content, msg.remoteUrl)
                     },
                     colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
                 ) {
@@ -585,8 +632,9 @@ fun MediaPagerOverlay(
                 IconButton(
                     onClick = { 
                         val msg = mediaMessages[pagerState.currentPage]
-                        val uri = chatRepository.getTransientUri(msg.id) ?: msg.remoteUrl
-                        if (uri != null) saveMediaToGallery(context, uri, msg.content)
+                        kotlinx.coroutines.MainScope().launch {
+                            saveMediaToGallery(context, chatRepository, msg)
+                        }
                     },
                     colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.4f))
                 ) {
@@ -659,13 +707,35 @@ fun MediaPagerOverlay(
     }
 }
 
-private fun shareMedia(context: android.content.Context, uri: String) {
-    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-        type = if (uri.contains(".mp4") || uri.contains("video")) "video/*" else "image/*"
-        putExtra(android.content.Intent.EXTRA_STREAM, android.net.Uri.parse(uri))
-        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+private fun shareMedia(context: android.content.Context, chatRepository: ChatRepository, messageId: String, fileName: String, remoteUrl: String?) {
+    val localFile = chatRepository.getLocalFile(messageId, fileName)
+    
+    if (localFile.exists()) {
+        try {
+            val authority = "${context.packageName}.fileprovider"
+            val contentUri = androidx.core.content.FileProvider.getUriForFile(context, authority, localFile)
+            
+            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                val extension = localFile.extension.lowercase()
+                type = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "*/*"
+                putExtra(android.content.Intent.EXTRA_STREAM, contentUri)
+                addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(android.content.Intent.createChooser(intent, "Share Media"))
+        } catch (e: Exception) {
+            Log.e("MainScreen", "Failed to share local file", e)
+            android.widget.Toast.makeText(context, "Share failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    } else if (remoteUrl != null) {
+        // Fallback or Trigger Download
+        android.widget.Toast.makeText(context, "Downloading for share...", android.widget.Toast.LENGTH_SHORT).show()
+        kotlinx.coroutines.MainScope().launch {
+            val file = chatRepository.downloadFileToCache(messageId, fileName, remoteUrl)
+            if (file != null && file.exists()) {
+                shareMedia(context, chatRepository, messageId, fileName, null) // Recursive call once downloaded
+            }
+        }
     }
-    context.startActivity(android.content.Intent.createChooser(intent, "Share Media"))
 }
 
 private fun shareMediaMultiple(context: android.content.Context, uris: List<Uri>) {
@@ -761,13 +831,67 @@ private fun openFileWithDefaultApp(context: android.content.Context, chatReposit
     }
 }
 
-private fun saveMediaToGallery(context: android.content.Context, uriString: String, fileName: String) {
-    // Basic implementation using standard download manager or direct copy
-    // For now, let's use a simple toast to indicate we would download it
-    android.widget.Toast.makeText(context, "Saving to Gallery...", android.widget.Toast.LENGTH_SHORT).show()
+private suspend fun saveMediaToGallery(context: android.content.Context, chatRepository: ChatRepository, message: ChatMessage) = withContext(Dispatchers.IO) {
+    val fileName = message.content
+    val localFile = chatRepository.getLocalFile(message.id, fileName)
     
-    // Proper implementation would involve downloading the file if it's a URL
-    // and using MediaStore to insert it into the gallery.
+    val fileToSave = if (localFile.exists()) {
+        localFile
+    } else if (message.remoteUrl != null) {
+        withContext(Dispatchers.Main) {
+            android.widget.Toast.makeText(context, "Downloading to save...", android.widget.Toast.LENGTH_SHORT).show()
+        }
+        chatRepository.downloadFileToCache(message.id, fileName, message.remoteUrl!!) ?: return@withContext
+    } else {
+        return@withContext
+    }
+
+    if (!fileToSave.exists()) return@withContext
+
+    try {
+        val extension = fileToSave.extension.lowercase()
+        val mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "image/jpeg"
+        val isVideo = mimeType.startsWith("video/")
+        
+        val contentValues = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, if (isVideo) "Movies/CloudChat" else "Pictures/CloudChat")
+                put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        }
+
+        val collection = if (isVideo) {
+            android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        } else {
+            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        }
+
+        val uri = context.contentResolver.insert(collection, contentValues)
+        if (uri != null) {
+            context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                fileToSave.inputStream().use { inputStream ->
+                    inputStream.copyTo(outputStream)
+                }
+            }
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                contentValues.clear()
+                contentValues.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+                context.contentResolver.update(uri, contentValues, null, null)
+            }
+            
+            withContext(Dispatchers.Main) {
+                android.widget.Toast.makeText(context, "Saved to Gallery", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    } catch (e: Exception) {
+        Log.e("MainScreen", "Failed to save to gallery", e)
+        withContext(Dispatchers.Main) {
+            android.widget.Toast.makeText(context, "Save failed: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -1224,15 +1348,14 @@ private fun determineMessageType(context: android.content.Context, uri: Uri, fil
 
 private fun getFileName(context: android.content.Context, uri: Uri): String {
     var displayName: String? = null
-    val mimeType = context.contentResolver.getType(uri)
+    val contentResolver = context.contentResolver
+    val mimeType = contentResolver.getType(uri)
     
     // 1. Try to get DISPLAY_NAME from ContentResolver
     if (uri.scheme == "content") {
         try {
-            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst()) {
-                    val index = cursor.getColumnIndex(android.util.DisplayMetrics::class.java.simpleName) 
-                    // Wait, DisplayMetrics is wrong, should be OpenableColumns
                     val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
                     if (nameIndex != -1) {
                         displayName = cursor.getString(nameIndex)
@@ -1245,28 +1368,35 @@ private fun getFileName(context: android.content.Context, uri: Uri): String {
     }
     
     // 2. Fallback to last path segment
-    if (displayName == null) {
+    if (displayName.isNullOrBlank()) {
         displayName = uri.lastPathSegment
     }
     
     // 3. Ultimate fallback
-    if (displayName == null || displayName == "primary" || displayName!!.startsWith("document:")) {
+    if (displayName.isNullOrBlank() || displayName == "primary" || displayName.startsWith("document:")) {
         displayName = "file_${System.currentTimeMillis()}"
     }
 
     // 4. Critical Fix: Ensure extension exists by checking MIME type
-    if (!displayName!!.contains(".") && mimeType != null) {
+    // Handle cases where the name might have a dot but it's not an extension (e.g. "com.android.providers.media.documents/123")
+    val hasExtension = displayName!!.contains(".") && displayName.substringAfterLast(".").length in 2..4
+    
+    if (!hasExtension && mimeType != null) {
         val extension = android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
-        if (extension != null) {
-            displayName = "$displayName.$extension"
+        if (!extension.isNullOrEmpty()) {
+            displayName = if (displayName.endsWith(".$extension", ignoreCase = true)) {
+                displayName
+            } else {
+                "$displayName.$extension"
+            }
         }
-    } else if (!displayName!!.contains(".") && uri.toString().lowercase().endsWith(".pdf")) {
-        // Extra check for obvious PDFs in URL/URI
-        displayName = "$displayName.pdf"
     }
     
-    Log.d("MainScreen", "Resolved original filename: $displayName for URI: $uri")
-    return displayName!!
+    // Extra safety: remove illegal characters for filesystems
+    displayName = displayName.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+    
+    Log.d("MainScreen", "Resolved original filename: $displayName for URI: $uri, MIME: $mimeType")
+    return displayName
 }
 
 @Composable
@@ -1329,5 +1459,153 @@ fun AttachmentOption(
         }
         Spacer(modifier = Modifier.height(8.dp))
         Text(text = label, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+@Composable
+fun SecurityOverlay(chatRepository: ChatRepository) {
+    val authId = chatRepository.authId
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var code by remember { mutableStateOf("") }
+    val focusRequester = remember { FocusRequester() }
+    val securityError by chatRepository.securityError.collectAsState()
+    var isVerifying by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            chatRepository.checkSecurityAuth()
+            delay(5000)
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.98f))
+            .pointerInput(Unit) { }, // Block pointer events
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp).widthIn(max = 400.dp).verticalScroll(rememberScrollState()).imePadding()
+        ) {
+            Icon(
+                Icons.Default.Lock,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                "设备认证 (Device Auth)",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            /* 
+            Text(
+                "当前账号未通过认证。请点击 ID 复制后通过手动认证，或输入 2FA 动态码通过认证。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.Gray,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+            */
+            
+            if (securityError != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                // Text(
+                //     text = securityError!!,
+                //     color = MaterialTheme.colorScheme.error,
+                //     style = MaterialTheme.typography.bodySmall,
+                //     textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                // )
+            }
+            
+            Spacer(modifier = Modifier.height(32.dp))
+            
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("Auth ID", authId)
+                        clipboard.setPrimaryClip(clip)
+                        android.widget.Toast.makeText(context, "ID 已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+            ) {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        "认证 ID (点击复制):",
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = authId,
+                        style = MaterialTheme.typography.displayMedium,
+                        fontWeight = FontWeight.Black,
+                        letterSpacing = 4.sp
+                    )
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(32.dp))
+            
+            OutlinedTextField(
+                value = code,
+                onValueChange = { 
+                    if (it.length <= 6) {
+                        code = it
+                        if (it.length == 6) {
+                            scope.launch {
+                                isVerifying = true
+                                chatRepository.verify2FAServer(it)
+                                isVerifying = false
+                            }
+                        }
+                    }
+                },
+                label = { Text("6位 2FA 验证码") },
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                enabled = !isVerifying,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                ),
+                singleLine = true,
+                placeholder = { Text("000000") },
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    fontSize = 20.sp,
+                    letterSpacing = 4.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            )
+            
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Button(
+                onClick = {
+                    scope.launch {
+                        isVerifying = true
+                        val success = chatRepository.verify2FAServer(code)
+                        isVerifying = false
+                    }
+                },
+                enabled = code.length == 6 && !isVerifying,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = MaterialTheme.shapes.medium
+            ) {
+                if (isVerifying) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), color = Color.White)
+                } else {
+                    Text("进行 2FA 验证", style = MaterialTheme.typography.titleMedium)
+                }
+            }
+        }
     }
 }

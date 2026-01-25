@@ -37,16 +37,35 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     val accounts by settingsRepository.accounts.collectAsState(initial = emptyList())
     val currentConfig by settingsRepository.currentConfig.collectAsState(initial = null)
+    val appMode by settingsRepository.appMode.collectAsState(initial = com.cloudchat.model.AppMode.SELF_BUILT)
 
     var editingConfig by remember { mutableStateOf<ServerConfig?>(null) }
     var isTesting by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
 
+    // Auto-open editor for Full mode if no account exists
+    LaunchedEffect(appMode, accounts) {
+        if (appMode == com.cloudchat.model.AppMode.FULL && accounts.isEmpty() && editingConfig == null) {
+            editingConfig = SettingsRepository.FIXED_FULL_CONFIG.copy(id = java.util.UUID.randomUUID().toString())
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         if (editingConfig == null) {
             // Account List View
             Column(modifier = Modifier.padding(16.dp)) {
-                Text("Accounts", style = MaterialTheme.typography.titleLarge)
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Accounts", style = MaterialTheme.typography.titleLarge)
+                    TextButton(onClick = { 
+                        coroutineScope.launch { 
+                            settingsRepository.setAppMode(com.cloudchat.model.AppMode.NOT_SET)
+                            // Navigation is handled by MainActivity's LaunchedEffect, 
+                            // but we can be explicit here to ensure immediate transition
+                        }
+                    }) {
+                        Text("切换版本 (Switch Mode)")
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 LazyColumn(modifier = Modifier.weight(1f)) {
@@ -54,13 +73,26 @@ fun SettingsScreen(onBack: () -> Unit) {
                         AccountItem(
                             account = account,
                             isSelected = account.id == currentConfig?.id,
+                            appMode = appMode,
                             onSelect = {
                                 coroutineScope.launch { 
                                     settingsRepository.switchAccount(account.id)
                                     onBack() // Auto close after switch
                                 }
                             },
-                            onEdit = { editingConfig = account },
+                            onEdit = { 
+                                editingConfig = if (appMode == com.cloudchat.model.AppMode.FULL) {
+                                    account.copy(
+                                        webDavUrl = SettingsRepository.FIXED_FULL_CONFIG.webDavUrl,
+                                        serverPath = SettingsRepository.FIXED_FULL_CONFIG.serverPath,
+                                        webDavUser = SettingsRepository.FIXED_FULL_CONFIG.webDavUser,
+                                        webDavPass = SettingsRepository.FIXED_FULL_CONFIG.webDavPass,
+                                        type = SettingsRepository.FIXED_FULL_CONFIG.type
+                                    )
+                                } else {
+                                    account
+                                }
+                            },
                             onDelete = { 
                                 coroutineScope.launch { settingsRepository.deleteAccount(account.id) }
                             }
@@ -91,23 +123,31 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
                 }
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { exportLauncher.launch("cloudchat_accounts.json") },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Export JSON")
-                    }
-                    Button(
-                        onClick = { importLauncher.launch("application/json") },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Import JSON")
+                if (appMode == com.cloudchat.model.AppMode.SELF_BUILT) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { exportLauncher.launch("cloudchat_accounts.json") },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Export JSON")
+                        }
+                        Button(
+                            onClick = { importLauncher.launch("application/json") },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Import JSON")
+                        }
                     }
                 }
                 
                 Button(
-                    onClick = { editingConfig = ServerConfig() },
+                    onClick = { 
+                        editingConfig = if (appMode == com.cloudchat.model.AppMode.FULL) {
+                            SettingsRepository.FIXED_FULL_CONFIG.copy(id = java.util.UUID.randomUUID().toString())
+                        } else {
+                            ServerConfig() 
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null)
@@ -129,75 +169,80 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 TextField(
-                    value = config.saveDir,
-                    onValueChange = { editingConfig = config.copy(saveDir = it) },
-                    label = { Text("Save Directory (User ID)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Unique folder name, e.g. user_ken") }
-                )
-
-                TextField(
                     value = config.username,
-                    onValueChange = { editingConfig = config.copy(username = it) },
-                    label = { Text("Display Name") },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Name shown in chat") }
-                )
-                
-                TextField(
-                    value = config.serverPath,
-                    onValueChange = { editingConfig = config.copy(serverPath = it) },
-                    label = { Text("Server Root Path") },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("e.g. /mydata/backups") }
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = config.type == StorageType.WEBDAV, onClick = { editingConfig = config.copy(type = StorageType.WEBDAV) })
-                    Text("WebDAV")
-                    Spacer(modifier = Modifier.width(16.dp))
-                    RadioButton(selected = config.type == StorageType.S3, onClick = { editingConfig = config.copy(type = StorageType.S3) })
-                    Text("S3")
-                }
-
-                TextField(
-                    value = if (config.type == StorageType.WEBDAV) config.webDavUrl else config.endpoint,
                     onValueChange = { 
-                        editingConfig = if (config.type == StorageType.WEBDAV) config.copy(webDavUrl = it) else config.copy(endpoint = it)
+                        editingConfig = config.copy(username = it)
                     },
-                    label = { Text(if (config.type == StorageType.S3) "S3 Endpoint" else "WebDAV URL") },
-                    modifier = Modifier.fillMaxWidth()
+                    label = { Text("用户昵称 (Name)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("在此输入您的名字") }
                 )
 
-                if (config.type == StorageType.WEBDAV) {
+                if (appMode == com.cloudchat.model.AppMode.SELF_BUILT) {
+                    Spacer(modifier = Modifier.height(8.dp))
                     TextField(
-                        value = config.webDavUser,
-                        onValueChange = { editingConfig = config.copy(webDavUser = it) },
-                        label = { Text("Username") },
+                        value = config.saveDir,
+                        onValueChange = { editingConfig = config.copy(saveDir = it) },
+                        label = { Text("存储目录/用户ID (Save Directory)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("唯一标识，如 user_ken") }
+                    )
+                    
+                    TextField(
+                        value = config.serverPath,
+                        onValueChange = { editingConfig = config.copy(serverPath = it) },
+                        label = { Text("服务器根路径 (Server Root Path)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("例如 /cloudchat") }
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = config.type == StorageType.WEBDAV, onClick = { editingConfig = config.copy(type = StorageType.WEBDAV) })
+                        Text("WebDAV")
+                        Spacer(modifier = Modifier.width(16.dp))
+                        RadioButton(selected = config.type == StorageType.S3, onClick = { editingConfig = config.copy(type = StorageType.S3) })
+                        Text("S3")
+                    }
+
+                    TextField(
+                        value = if (config.type == StorageType.WEBDAV) config.webDavUrl else config.endpoint,
+                        onValueChange = { 
+                            editingConfig = if (config.type == StorageType.WEBDAV) config.copy(webDavUrl = it) else config.copy(endpoint = it)
+                        },
+                        label = { Text(if (config.type == StorageType.S3) "S3 Endpoint" else "WebDAV URL") },
                         modifier = Modifier.fillMaxWidth()
                     )
-                    TextField(
-                        value = config.webDavPass,
-                        onValueChange = { editingConfig = config.copy(webDavPass = it) },
-                        label = { Text("Password") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                } else {
-                    TextField(
-                        value = config.accessKey,
-                        onValueChange = { editingConfig = config.copy(accessKey = it) },
-                        label = { Text("Access Key") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    TextField(
-                        value = config.secretKey,
-                        onValueChange = { editingConfig = config.copy(secretKey = it) },
-                        label = { Text("Secret Key") },
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+
+                    if (config.type == StorageType.WEBDAV) {
+                        TextField(
+                            value = config.webDavUser,
+                            onValueChange = { editingConfig = config.copy(webDavUser = it) },
+                            label = { Text("Username") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        TextField(
+                            value = config.webDavPass,
+                            onValueChange = { editingConfig = config.copy(webDavPass = it) },
+                            label = { Text("Password") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        TextField(
+                            value = config.accessKey,
+                            onValueChange = { editingConfig = config.copy(accessKey = it) },
+                            label = { Text("Access Key") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        TextField(
+                            value = config.secretKey,
+                            onValueChange = { editingConfig = config.copy(secretKey = it) },
+                            label = { Text("Secret Key") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -226,7 +271,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                                 val provider = if (config.type == StorageType.S3) {
                                     S3StorageProvider(config, config.saveDir)
                                 } else {
-                                    WebDavStorageProvider(config, config.saveDir)
+                                    WebDavStorageProvider(config, config.saveDir, appMode == com.cloudchat.model.AppMode.FULL)
                                 }
                                 val result = provider.testConnection()
                                 testResult = if (result.isSuccess) "Success!" else "Failed: ${result.exceptionOrNull()?.message}"
@@ -269,6 +314,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 fun AccountItem(
     account: ServerConfig,
     isSelected: Boolean,
+    appMode: com.cloudchat.model.AppMode,
     onSelect: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit
@@ -289,8 +335,10 @@ fun AccountItem(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(account.username, style = MaterialTheme.typography.titleMedium)
-                Text("ID: ${account.saveDir}", style = MaterialTheme.typography.bodySmall)
-                Text("${account.type} - ${account.serverPath}", style = MaterialTheme.typography.bodySmall)
+                if (appMode == com.cloudchat.model.AppMode.SELF_BUILT) {
+                    Text("ID: ${account.saveDir}", style = MaterialTheme.typography.bodySmall)
+                    Text("${account.type} - ${account.serverPath}", style = MaterialTheme.typography.bodySmall)
+                }
             }
             IconButton(onClick = onEdit) {
                 Text("Edit")

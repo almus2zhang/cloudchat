@@ -23,7 +23,8 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            signingConfig signingConfigs.debug
+            minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
@@ -92,12 +93,24 @@ dependencies {
 
 tasks.register('copyApk', Copy) {
     dependsOn 'assembleDebug'
-    from("${buildDir}/outputs/apk/debug/app-debug.apk")
+    from("${layout.buildDirectory.get()}/outputs/apk/debug/app-debug.apk")
     into("Z:/web/mychat")
     rename { String fileName ->
         "cloudchat-debug.apk"
     }
     doLast {
         println "APK copied to Z:/web/mychat/cloudchat-debug.apk"
+    }
+}
+
+tasks.register('copyReleaseApk', Copy) {
+    dependsOn 'assembleRelease'
+    from("${layout.buildDirectory.get()}/outputs/apk/release/app-release.apk")
+    into("Z:/web/mychat")
+    rename { String fileName ->
+        "cloudchat.apk"
+    }
+    doLast {
+        println "APK copied to Z:/web/mychat/cloudchat.apk"
     }
 }

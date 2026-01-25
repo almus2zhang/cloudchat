@@ -1,35 +1,44 @@
+# Android Build & Artifacts
+**/build/
+/build/
+*.apk
+*.aar
+*.ap_
+*.dex
+*.class
+
+# IDE - Android Studio / IntelliJ / VS Code
+.idea/
+.vscode/
 *.iml
-.gradle
-/local.properties
-/.idea/
-.DS_Store
-/build
-/captures
+*.ipr
+*.iws
+/captures/
 .externalNativeBuild
 .cxx
 local.properties
-*.hprof
-
-# Build artifacts
-**/build/
-app/build/
-
-# Android Studio
-*.ipr
-*.iws
-.idea/
+.DS_Store
 
 # Gradle
 .gradle/
+buildSrc/build/
 gradle-app.setting
 !gradle-wrapper.jar
 
-# Log files
+# Log files & Temporary build notes
 *.log
+build_*.txt
+compile_error.txt
+temp_build.gradle
+
+# Secrets & Configuration (CRITICAL)
+app/src/main/java/com/cloudchat/utils/ConfigHelper.kt
+generate_secrets.py
+fix_icons.py
 
 # Keystore files
 *.jks
 *.keystore
 
-# Screenshots
-captures/
+# Kotlin
+.kotlin/

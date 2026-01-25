@@ -17,14 +17,19 @@ import java.io.InputStream
 
 class WebDavStorageProvider(
     private val config: ServerConfig,
-    private val currentUser: String
+    private val currentUser: String,
+    private val useSafeClient: Boolean = false
 ) : StorageProvider {
 
     private val client: OkHttpClient by lazy {
-        NetworkUtils.getUnsafeOkHttpClient().build()
+        Log.d("WebDavStorage", "Initializing client for $baseUrl (Safe: $useSafeClient)")
+        if (useSafeClient) {
+            NetworkUtils.getSafeOkHttpClient().build()
+        } else {
+            NetworkUtils.getUnsafeOkHttpClient().build()
+        }
     }
-
-    private val auth = Credentials.basic(config.webDavUser, config.webDavPass)
+    private val auth = okhttp3.Credentials.basic(config.webDavUser, config.webDavPass)
 
     private val baseUrl: String
         get() {
@@ -44,13 +49,14 @@ class WebDavStorageProvider(
                 .method("PROPFIND", "<?xml version=\"1.0\" encoding=\"utf-8\" ?><D:propfind xmlns:D=\"DAV:\"><D:prop/></D:propfind>".toRequestBody("text/xml".toMediaType()))
                 .build()
             client.newCall(request).execute().use { response ->
-                if (response.code == 404) {
-                    mkCol(baseUrl)
-                    Result.success(Unit)
-                } else if (response.isSuccessful) {
-                    Result.success(Unit)
-                } else {
-                    Result.failure(Exception("HTTP ${response.code}"))
+                when {
+                    response.code == 401 -> Result.failure(Exception("401: 账号或密码错误 (Invalid Credentials)"))
+                    response.code == 404 -> {
+                        mkCol(baseUrl)
+                        Result.success(Unit)
+                    }
+                    response.isSuccessful -> Result.success(Unit)
+                    else -> Result.failure(Exception("HTTP ${response.code}"))
                 }
             }
         } catch (e: Exception) {
@@ -103,7 +109,7 @@ class WebDavStorageProvider(
         
         client.newCall(request).execute().use { response ->
             if (response.isSuccessful) {
-                return@withContext response.header("Content-Length")?.toLong() ?: -1L
+                return@withContext response.header("Content-Length")?.toLong() ?: 0L
             }
         }
         return@withContext -1L
@@ -166,6 +172,25 @@ class WebDavStorageProvider(
         return@withContext url
     }
 
+    override suspend fun downloadText(fileName: String): String? = withContext(Dispatchers.IO) {
+        val url = getFullUrl(fileName)
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", auth)
+            .get()
+            .build()
+        
+        client.newCall(request).execute().use { response ->
+            if (response.isSuccessful) {
+                response.body?.string()
+            } else if (response.code == 404) {
+                null
+            } else {
+                throw Exception("HTTP ${response.code}: ${response.message}")
+            }
+        }
+    }
+
     override suspend fun listMessages(): List<ChatMessage> = emptyList()
 
     override suspend fun downloadFile(fileName: String, destination: File, onProgress: ((Int) -> Unit)?) {
@@ -173,7 +198,6 @@ class WebDavStorageProvider(
             val url = getFullUrl(fileName)
             val request = Request.Builder()
                 .url(url)
-                .addHeader("Authorization", auth)
                 .get()
                 .build()
 
