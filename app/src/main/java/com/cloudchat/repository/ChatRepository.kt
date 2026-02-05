@@ -245,6 +245,8 @@ class ChatRepository(private val context: Context) {
         currentConfig = config
         if (config.type == com.cloudchat.model.StorageType.WEBDAV) {
             NetworkUtils.currentAuth = Credentials.basic(config.webDavUser, config.webDavPass)
+        } else {
+            NetworkUtils.currentAuth = null
         }
         
         val useSafeClient = appMode == com.cloudchat.model.AppMode.FULL
@@ -874,6 +876,15 @@ class ChatRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
         }
+    }
+
+    fun getAuthHeaders(): Map<String, String> {
+        val config = currentConfig ?: return emptyMap()
+        if (config.type == com.cloudchat.model.StorageType.WEBDAV && config.webDavUser.isNotEmpty()) {
+             val credentials = okhttp3.Credentials.basic(config.webDavUser, config.webDavPass)
+             return mapOf("Authorization" to credentials)
+        }
+        return emptyMap()
     }
 
     fun resolveUrl(urlOrPath: String?): String? {

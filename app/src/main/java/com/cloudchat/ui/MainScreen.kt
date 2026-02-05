@@ -41,6 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.cloudchat.SharedData
 import com.cloudchat.model.ChatMessage
 import com.cloudchat.model.MessageStatus
@@ -55,7 +56,10 @@ import kotlinx.coroutines.isActive
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -419,6 +423,21 @@ fun MainScreen(
                         modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
                         style = MaterialTheme.typography.titleMedium
                     )
+                    val clipboardManager = LocalClipboardManager.current
+                    if (selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.TEXT }) {
+                        IconButton(onClick = {
+                            val textToCopy = selectedIds.mapNotNull { id ->
+                                messages.find { it.id == id }
+                            }.sortedBy { it.timestamp }
+                             .joinToString("\n") { it.content }
+                            
+                            clipboardManager.setText(AnnotatedString(textToCopy))
+                            android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                            selectedIds = emptySet()
+                        }) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                        }
+                    }
                     IconButton(onClick = { 
                         val uris = selectedIds.mapNotNull { id ->
                             val msg = messages.find { it.id == id }
@@ -986,13 +1005,14 @@ fun ChatBubble(
                         shape = MaterialTheme.shapes.medium,
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp)
                     ) {
-                        // Reverted to simple text content
-                        Text(
-                            text = message.content,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            color = contentColor,
-                            fontSize = 16.sp
-                        )
+                        SelectionContainer {
+                            Text(
+                                text = message.content,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                color = contentColor,
+                                fontSize = 16.sp
+                            )
+                        }
                     }
                 }
                 MessageType.IMAGE -> {

@@ -27,6 +27,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
@@ -196,7 +197,12 @@ fun FullScreenVideoPlayer(
     }
 
     val exoPlayer = remember {
-        val dataSourceFactory = DefaultDataSource.Factory(context)
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+        com.cloudchat.utils.NetworkUtils.currentAuth?.let { auth ->
+            httpDataSourceFactory.setDefaultRequestProperties(mapOf("Authorization" to auth))
+        }
+        
+        val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
         val mediaSourceFactory = DefaultMediaSourceFactory(context)
             .setDataSourceFactory(dataSourceFactory)
 
