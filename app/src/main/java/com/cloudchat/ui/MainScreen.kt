@@ -41,7 +41,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
-import coil.request.ImageRequest
+// import coil.request.ImageRequest (Not needed since using global interceptor)
 import com.cloudchat.SharedData
 import com.cloudchat.model.ChatMessage
 import com.cloudchat.model.MessageStatus
