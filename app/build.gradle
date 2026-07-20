@@ -12,8 +12,8 @@ android {
         applicationId "com.cloudchat"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 13
+        versionName "2.2"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -94,12 +94,12 @@ dependencies {
 tasks.register('copyApk', Copy) {
     dependsOn 'assembleDebug'
     from("${layout.buildDirectory.get()}/outputs/apk/debug/app-debug.apk")
-    into("Z:/web/mychat")
+    into("H:/web/mychat")
     rename { String fileName ->
         "cloudchat-debug.apk"
     }
     doLast {
-        println "APK copied to Z:/web/mychat/cloudchat-debug.apk"
+        println "APK copied to H:/web/mychat/cloudchat-debug.apk"
     }
 }
 

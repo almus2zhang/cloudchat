@@ -3,7 +3,7 @@ package com.cloudchat.model
 import java.util.UUID
 
 enum class MessageType {
-    TEXT, IMAGE, VIDEO, AUDIO, FILE
+    TEXT, IMAGE, VIDEO, AUDIO, FILE, FOLDER
 }
 
 enum class MessageStatus {
@@ -26,8 +26,21 @@ data class ChatMessage(
     val videoDuration: Long = 0,
     val isOutgoing: Boolean = true,
     val status: MessageStatus = MessageStatus.SUCCESS, // Default for incoming or history
-    val thumbnailUrl: String? = null
-)
+    val thumbnailUrl: String? = null,
+    val categories: List<String>? = emptyList(), // Added category support
+    val locationAddress: String? = null,
+    val isChunked: Boolean = false,
+    val chunkSize: Long = 0L,
+    val totalChunks: Int = 0,
+    val groupId: String? = null,
+    val isHidden: Boolean = false,
+    val caption: String? = null,
+    val isEdited: Boolean = false,
+    val folderId: String? = null // For packing messages into a FOLDER
+) {
+    val safeCategories: List<String>
+        get() = categories ?: emptyList()
+}
 
 enum class StorageType {
     S3, WEBDAV
@@ -46,6 +59,17 @@ data class ServerConfig(
     val webDavUrl: String = "",
     val webDavUser: String = "",
     val webDavPass: String = "",
+    val webDavFallbackUrl: String = "", // Added WebDAV fallback URL
     val autoDownloadLimit: Long = 5 * 1024 * 1024L,
-    val configPassword: String? = null
+    val configPassword: String? = null,
+    val fullModePath: String? = null,
+    val webDavChunkSize: Long = 0L // 0 means no chunking, >0 means chunk size in bytes
 )
+
+data class ChatCategory(
+    val id: String = UUID.randomUUID().toString(),
+    val name: String,
+    val isEncrypted: Boolean = false,
+    val passwordHash: String? = null
+)
+

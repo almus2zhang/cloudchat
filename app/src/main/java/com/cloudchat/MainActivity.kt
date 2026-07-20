@@ -10,8 +10,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ButtonDefaults
@@ -103,11 +105,21 @@ class MainActivity : ComponentActivity() {
                     topBar = {
                         if (isTopBarVisible && appMode != com.cloudchat.model.AppMode.NOT_SET) {
                             TopAppBar(
-                                title = { Text("CloudChat") },
+                                title = { Text("CloudChat", style = MaterialTheme.typography.titleLarge) },
+                                colors = TopAppBarDefaults.topAppBarColors(
+                                    containerColor = MaterialTheme.colorScheme.surface,
+                                    titleContentColor = MaterialTheme.colorScheme.onSurface,
+                                    actionIconContentColor = MaterialTheme.colorScheme.onSurface
+                                ),
                                 actions = {
                                     topBarActions(this)
-                                    IconButton(onClick = { navController.navigate("settings") }) {
-                                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                                    IconButton(
+                                        onClick = { navController.navigate("settings") }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Settings, 
+                                            contentDescription = "Settings"
+                                        )
                                     }
                                 }
                             )

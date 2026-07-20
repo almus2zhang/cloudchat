@@ -58,6 +58,17 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.platform.LocalTextToolbar
+import androidx.compose.ui.platform.TextToolbar
+import androidx.compose.ui.platform.TextToolbarStatus
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.graphics.SolidColor
+
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
@@ -65,6 +76,8 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.snapshotFlow
 import java.io.File
+
+val LocalTextSelectionClearKey = compositionLocalOf { 0 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -87,24 +100,230 @@ fun MainScreen(
     val autoDownloadLimit = currentConfig?.autoDownloadLimit ?: (5 * 1024 * 1024L)
     
     var inputText by remember { mutableStateOf("") }
+    var isVoiceMode by remember { mutableStateOf(false) }
+    var currentFolderId by remember { mutableStateOf<String?>(null) }
     var searchQuery by remember { mutableStateOf("") }
     var mediaPagerIndex by remember { mutableStateOf<Int?>(null) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
     var isAttachmentPanelVisible by remember { mutableStateOf(false) }
+    var attachLocationEnabled by remember { mutableStateOf(false) }
+    var isPrivacyMode by remember { mutableStateOf(false) }
     val appMode by settingsRepository.appMode.collectAsState(initial = com.cloudchat.model.AppMode.NOT_SET)
     val isSecurityAuthenticated by chatRepository.isSecurityAuthenticated.collectAsState()
     var showSecurityOverlay by remember { mutableStateOf(false) }
 
+    // --- Dialog and Action States ---
+    var showDeleteMessagesConfirmDialog by remember { mutableStateOf(false) }
+    var showPackFolderDialog by remember { mutableStateOf(false) }
+    var folderAnnotation by remember { mutableStateOf("") }
+    var showEditTextDialog by remember { mutableStateOf(false) }
+    var showEditCaptionDialog by remember { mutableStateOf(false) }
+    var editingTargetMessage by remember { mutableStateOf<com.cloudchat.model.ChatMessage?>(null) }
+
+    // --- Selection and Haptic States ---
+    var textSelectionClearKey by remember { mutableStateOf(0) }
+    var isTextSelected by remember { mutableStateOf(false) }
+
     val keyboardController = LocalSoftwareKeyboardController.current
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val scope = rememberCoroutineScope()
 
-    // Handle back button to clear selection or close panel
-    BackHandler(enabled = selectedIds.isNotEmpty() || isAttachmentPanelVisible) {
+    var playingMessageId by remember { mutableStateOf<String?>(null) }
+    val exoPlayer = remember {
+        androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
+            addListener(object : androidx.media3.common.Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    if (playbackState == androidx.media3.common.Player.STATE_ENDED) {
+                        playingMessageId = null
+                    }
+                }
+            })
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            exoPlayer.release()
+        }
+    }
+
+    val playAudioMessage: (com.cloudchat.model.ChatMessage) -> Unit = { message ->
+        if (playingMessageId == message.id) {
+            exoPlayer.stop()
+            playingMessageId = null
+        } else {
+            val localFile = chatRepository.getLocalFile(message.id, message.content)
+            if (localFile.exists()) {
+                exoPlayer.stop()
+                val mediaItem = androidx.media3.common.MediaItem.fromUri(Uri.fromFile(localFile))
+                exoPlayer.setMediaItem(mediaItem)
+                exoPlayer.prepare()
+                exoPlayer.play()
+                playingMessageId = message.id
+            } else {
+                scope.launch {
+                    chatRepository.downloadFileToCache(
+                        message.id,
+                        message.content,
+                        chatRepository.resolveUrl(message.remoteUrl) ?: ""
+                    )?.let { file ->
+                        exoPlayer.stop()
+                        val mediaItem = androidx.media3.common.MediaItem.fromUri(Uri.fromFile(file))
+                        exoPlayer.setMediaItem(mediaItem)
+                        exoPlayer.prepare()
+                        exoPlayer.play()
+                        playingMessageId = message.id
+                    }
+                }
+            }
+        }
+    }
+
+    // Handle back button to clear selection or close panel or exit folder
+    BackHandler(enabled = selectedIds.isNotEmpty() || isAttachmentPanelVisible || isTextSelected || currentFolderId != null) {
         if (selectedIds.isNotEmpty()) {
             selectedIds = emptySet()
-        } else {
+        } else if (isTextSelected) {
+            textSelectionClearKey++
+            isTextSelected = false
+        } else if (isAttachmentPanelVisible) {
             isAttachmentPanelVisible = false
+        } else if (currentFolderId != null) {
+            currentFolderId = null
         }
+    }
+
+
+    // --- Voice Recording & Playing States ---
+    var mediaRecorder by remember { mutableStateOf<android.media.MediaRecorder?>(null) }
+    var recordFile by remember { mutableStateOf<File?>(null) }
+    var recordStartTime by remember { mutableLongStateOf(0L) }
+    var isRecordingVoiceState by remember { mutableStateOf(false) }
+    var currentAmplitude by remember { mutableStateOf(0f) }
+    var amplitudeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    // --- Permission Launchers ---
+    var hasAudioPermission by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasAudioPermission = granted
+    }
+
+    var hasLocationPermission by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        hasLocationPermission = permissions[android.Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                permissions[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true
+        if (hasLocationPermission) {
+            sendNativeLocation(context, chatRepository, scope, folderId = currentFolderId)
+        }
+    }
+
+    fun startVoiceRecording() {
+        val dir = File(context.cacheDir, "recordings")
+        if (!dir.exists()) dir.mkdirs()
+        val file = File(dir, "voice_${System.currentTimeMillis()}.mp4")
+        recordFile = file
+        recordStartTime = System.currentTimeMillis()
+        
+        val recorder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            android.media.MediaRecorder(context)
+        } else {
+            android.media.MediaRecorder()
+        }
+        
+        recorder.apply {
+            setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
+            setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4)
+            setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC)
+            setOutputFile(file.absolutePath)
+            prepare()
+            start()
+        }
+        mediaRecorder = recorder
+
+        isRecordingVoiceState = true
+        currentAmplitude = 0f
+        amplitudeJob = scope.launch(Dispatchers.Main) {
+            while (mediaRecorder != null) {
+                try {
+                    val maxAmp = mediaRecorder?.maxAmplitude ?: 0
+                    currentAmplitude = (maxAmp.toFloat() / 32767f).coerceIn(0f, 1f)
+                } catch (e: Exception) {
+                    // ignore
+                }
+                delay(100)
+            }
+        }
+    }
+
+    fun stopAndSendVoice() {
+        val recorder = mediaRecorder ?: return
+        mediaRecorder = null
+        isRecordingVoiceState = false
+        amplitudeJob?.cancel()
+        amplitudeJob = null
+        try {
+            recorder.stop()
+        } catch (e: Exception) {
+            Log.e("MainScreen", "Stop recorder failed", e)
+        } finally {
+            recorder.release()
+        }
+        
+        val file = recordFile ?: return
+        recordFile = null
+        val durationMs = System.currentTimeMillis() - recordStartTime
+        
+        if (durationMs < 1000) {
+            android.widget.Toast.makeText(context, "录音时间太短", android.widget.Toast.LENGTH_SHORT).show()
+            file.delete()
+            return
+        }
+        
+        scope.launch {
+            val inputStream = file.inputStream()
+            chatRepository.sendMessage(
+                content = file.name,
+                type = MessageType.AUDIO,
+                inputStream = inputStream,
+                fileName = file.name,
+                localUri = Uri.fromFile(file).toString(),
+                folderId = currentFolderId
+            )
+        }
+    }
+
+    fun cancelVoiceRecording() {
+        val recorder = mediaRecorder ?: return
+        mediaRecorder = null
+        isRecordingVoiceState = false
+        amplitudeJob?.cancel()
+        amplitudeJob = null
+        try {
+            recorder.stop()
+        } catch (e: Exception) {
+            // ignore
+        } finally {
+            recorder.release()
+        }
+        recordFile?.delete()
+        recordFile = null
     }
 
     LaunchedEffect(mediaPagerIndex) {
@@ -180,9 +399,12 @@ fun MainScreen(
         }
     }
 
-    val displayedMessages = remember(messages, searchQuery) {
-        if (searchQuery.isBlank()) messages
-        else messages.filter { 
+    val displayedMessages = remember(messages, searchQuery, isPrivacyMode) {
+        val filtered = messages.filter {
+            if (isPrivacyMode) true else it.isHidden != true
+        }
+        if (searchQuery.isBlank()) filtered
+        else filtered.filter { 
             it.content.contains(searchQuery, ignoreCase = true) || 
             it.sender.contains(searchQuery, ignoreCase = true)
         }
@@ -280,6 +502,8 @@ fun MainScreen(
                         autoDownloadLimit = autoDownloadLimit,
                         downloadProgress = downloadProgress,
                         isDownloading = isDownloading,
+                        playingMessageId = playingMessageId,
+                        onPlayAudio = { playAudioMessage(it) },
                         onMediaClick = { clickedMsg ->
                             if (selectedIds.isNotEmpty()) {
                                 selectedIds = if (selectedIds.contains(clickedMsg.id)) {
@@ -293,7 +517,9 @@ fun MainScreen(
                                     if (index != -1) {
                                         mediaPagerIndex = index
                                     }
-                                } else if (clickedMsg.type == MessageType.FILE || clickedMsg.type == MessageType.AUDIO) {
+                                } else if (clickedMsg.type == MessageType.AUDIO) {
+                                    playAudioMessage(clickedMsg)
+                                } else if (clickedMsg.type == MessageType.FILE) {
                                     openFileWithDefaultApp(context, chatRepository, clickedMsg)
                                 }
                             }
@@ -307,45 +533,145 @@ fun MainScreen(
                 }
             }
 
-            Column(modifier = Modifier.navigationBarsPadding()) {
+            Column(modifier = Modifier.navigationBarsPadding().background(MaterialTheme.colorScheme.surface)) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(8.dp)
+                        .padding(horizontal = 4.dp, vertical = 6.dp)
                         .imePadding(),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.Bottom
                 ) {
-                    IconButton(onClick = { 
-                        isAttachmentPanelVisible = !isAttachmentPanelVisible
-                        if (isAttachmentPanelVisible) {
-                            keyboardController?.hide()
-                        }
-                    }) {
-                        Icon(
-                            if (isAttachmentPanelVisible) Icons.Default.Close else Icons.Default.Add, 
-                            contentDescription = "Attach"
-                        )
-                    }
-                    TextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        modifier = Modifier.weight(1f).onFocusChanged { 
-                            if (it.isFocused) {
+                    // 1. Voice / Keyboard Toggle
+                    IconButton(
+                        onClick = { 
+                            isVoiceMode = !isVoiceMode 
+                            if (isVoiceMode) {
+                                keyboardController?.hide()
+                                focusManager.clearFocus()
                                 isAttachmentPanelVisible = false
-                                keyboardController?.show()
+                            } else {
+                                focusManager.clearFocus()
                             }
                         },
-                        placeholder = { Text("Type a message") },
-                        shape = MaterialTheme.shapes.medium,
-                        colors = TextFieldDefaults.textFieldColors(
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isVoiceMode) Icons.Default.Keyboard else Icons.Default.Mic, 
+                            contentDescription = "Voice Mode",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(
-                        onClick = {
-                            if (inputText.isNotBlank()) {
+                    }
+
+                    // 2. Input Area (Text field or Hold-to-Talk button)
+                    if (isVoiceMode) {
+                        var isRecording by remember { mutableStateOf(false) }
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(40.dp)
+                                .padding(horizontal = 4.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(
+                                    if (isRecording) MaterialTheme.colorScheme.primaryContainer 
+                                    else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                                .pointerInput(Unit) {
+                                    detectTapGestures(
+                                        onPress = {
+                                            if (!hasAudioPermission) {
+                                                audioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                            } else {
+                                                try {
+                                                    isRecording = true
+                                                    startVoiceRecording()
+                                                    val released = tryAwaitRelease()
+                                                    if (released) {
+                                                        stopAndSendVoice()
+                                                    } else {
+                                                        cancelVoiceRecording()
+                                                    }
+                                                } catch (e: Exception) {
+                                                    Log.e("MainScreen", "Recording error", e)
+                                                    cancelVoiceRecording()
+                                                } finally {
+                                                    isRecording = false
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                        ) {
+                            Text(
+                                text = if (isRecording) "松开 发送" else "按住 说话",
+                                fontWeight = FontWeight.Bold,
+                                color = if (isRecording) MaterialTheme.colorScheme.onPrimaryContainer 
+                                        else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        TextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(horizontal = 4.dp)
+                                .defaultMinSize(minHeight = 40.dp)
+                                .onFocusChanged { 
+                                    if (it.isFocused) {
+                                        isAttachmentPanelVisible = false
+                                    }
+                                },
+                            placeholder = { },
+                            shape = MaterialTheme.shapes.small,
+                            colors = TextFieldDefaults.colors(
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            maxLines = 4
+                        )
+                    }
+
+                    // 3. Location Attachment Toggle Button
+                    if (!isVoiceMode && inputText.isBlank()) {
+                        IconButton(
+                            onClick = {
+                                attachLocationEnabled = !attachLocationEnabled
+                                if (attachLocationEnabled && !hasLocationPermission) {
+                                    locationPermissionLauncher.launch(
+                                        arrayOf(
+                                            android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                            android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                        )
+                                    )
+                                }
+                            },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocationOn,
+                                contentDescription = "Attach Location Toggle",
+                                tint = if (attachLocationEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    // 4. "+" Add or Send Button
+                    if (inputText.isNotBlank() && !isVoiceMode) {
+                        IconButton(
+                            onClick = {
+                                if (inputText.startsWith("##") && inputText.endsWith("##")) {
+                                    val pin = inputText.substring(2, inputText.length - 2)
+                                    if (pin == "1234") {
+                                        isPrivacyMode = !isPrivacyMode
+                                        android.widget.Toast.makeText(context, if (isPrivacyMode) "已进入隐私空间" else "已退出隐私空间", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                    inputText = ""
+                                    return@IconButton
+                                }
+
                                 scope.launch {
                                     if (inputText.startsWith("/link ", ignoreCase = true)) {
                                         val fileName = inputText.substring(6).trim()
@@ -353,18 +679,43 @@ fun MainScreen(
                                             chatRepository.linkServerFile(fileName)
                                         }
                                     } else {
-                                        chatRepository.sendMessage(inputText)
+                                        var finalContent = inputText
+                                        if (attachLocationEnabled) {
+                                            val address = fetchAddressQuickly(context)
+                                            if (address != null) {
+                                                finalContent = "$finalContent\n[位置] $address"
+                                            }
+                                        }
+                                        chatRepository.sendMessage(finalContent, folderId = currentFolderId)
                                     }
                                     inputText = ""
                                 }
-                            }
-                        },
-                        colors = IconButtonDefaults.iconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        )
-                    ) {
-                        Icon(Icons.Default.Send, contentDescription = "Send")
+                            },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Send, 
+                                contentDescription = "Send Message",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = { 
+                                isAttachmentPanelVisible = !isAttachmentPanelVisible
+                                if (isAttachmentPanelVisible) {
+                                    keyboardController?.hide()
+                                    focusManager.clearFocus()
+                                }
+                            },
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AddCircleOutline,
+                                contentDescription = "Attachment Options",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
@@ -380,6 +731,19 @@ fun MainScreen(
                         },
                         onFileClick = {
                             filePickerLauncher.launch("*/*")
+                            isAttachmentPanelVisible = false
+                        },
+                        onLocationClick = {
+                            if (!hasLocationPermission) {
+                                locationPermissionLauncher.launch(
+                                    arrayOf(
+                                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                        android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                    )
+                                )
+                            } else {
+                                sendNativeLocation(context, chatRepository, scope, folderId = currentFolderId)
+                            }
                             isAttachmentPanelVisible = false
                         }
                     )
@@ -404,27 +768,31 @@ fun MainScreen(
             }
         }
 
-        // Selection Toolbar
+        // Selection Toolbar (Bottom floating pill bar)
         if (selectedIds.isNotEmpty()) {
             Surface(
-                modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth().statusBarsPadding(),
-                color = MaterialTheme.colorScheme.primaryContainer,
-                tonalElevation = 8.dp
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 64.dp) // Lift it slightly above bottom input bar
+                    .navigationBarsPadding()
+                    .wrapContentWidth(),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                tonalElevation = 8.dp,
+                shadowElevation = 8.dp
             ) {
                 Row(
-                    modifier = Modifier.padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
                     IconButton(onClick = { selectedIds = emptySet() }) {
                         Icon(Icons.Default.Close, contentDescription = "Cancel")
                     }
-                    Text(
-                        text = "${selectedIds.size} selected", 
-                        modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    val clipboardManager = LocalClipboardManager.current
+
+                    // 1. Copy (only for text messages)
                     if (selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.TEXT }) {
+                        val clipboardManager = LocalClipboardManager.current
                         IconButton(onClick = {
                             val textToCopy = selectedIds.mapNotNull { id ->
                                 messages.find { it.id == id }
@@ -438,6 +806,77 @@ fun MainScreen(
                             Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
                         }
                     }
+
+                    // 2. Edit Text / Caption
+                    if (selectedIds.size == 1) {
+                        val firstId = selectedIds.firstOrNull()
+                        val singleMsg = if (firstId != null) messages.find { it.id == firstId } else null
+                        if (singleMsg != null) {
+                            IconButton(onClick = {
+                                editingTargetMessage = singleMsg
+                                if (singleMsg.type == MessageType.TEXT) {
+                                    showEditTextDialog = true
+                                } else {
+                                    showEditCaptionDialog = true
+                                }
+                            }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit")
+                            }
+                        }
+                    }
+
+                    // 3. Pack Folder
+                    IconButton(onClick = {
+                        folderAnnotation = ""
+                        showPackFolderDialog = true
+                    }) {
+                        Icon(Icons.Default.Folder, contentDescription = "Pack Folder")
+                    }
+
+                    // 4. Unpack Folder
+                    if (selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.FOLDER }) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                selectedIds.forEach { id ->
+                                    val msg = messages.find { it.id == id }
+                                    if (msg?.type == MessageType.FOLDER) {
+                                        chatRepository.unpackFolder(id)
+                                    }
+                                }
+                                selectedIds = emptySet()
+                            }
+                        }) {
+                            Icon(Icons.Default.FolderOff, contentDescription = "Unpack Folder")
+                        }
+                    }
+
+                    // 5. Combine / Merge (Grid)
+                    if (selectedIds.size >= 2) {
+                        IconButton(onClick = {
+                            val newGroupId = "group_${System.currentTimeMillis()}"
+                            scope.launch {
+                                chatRepository.groupSelectedMessages(selectedIds, newGroupId)
+                                selectedIds = emptySet()
+                            }
+                        }) {
+                            Icon(Icons.Default.GroupWork, contentDescription = "Combine")
+                        }
+                    }
+
+                    // 6. Split / Ungroup
+                    if (selectedIds.any { id -> !messages.find { it.id == id }?.groupId.isNullOrEmpty() }) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                val selectedMsgs = messages.filter { selectedIds.contains(it.id) }
+                                chatRepository.ungroupMessages(selectedMsgs)
+                                selectedIds = emptySet()
+                            }
+                        }) {
+                            Icon(Icons.Default.CallSplit, contentDescription = "Uncombine")
+                        }
+                    }
+
+                    // 7. Share
                     IconButton(onClick = { 
                         val uris = selectedIds.mapNotNull { id ->
                             val msg = messages.find { it.id == id }
@@ -461,13 +900,91 @@ fun MainScreen(
                     }) {
                         Icon(Icons.Default.Share, contentDescription = "Share")
                     }
-                    IconButton(onClick = { 
-                        scope.launch {
-                            chatRepository.deleteMessages(selectedIds.toList())
-                            selectedIds = emptySet()
+
+                    // 8. Delete (Long Press to Hide in Privacy Space silently)
+                    Box(
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .combinedClickable(
+                                onClick = {
+                                    scope.launch {
+                                        chatRepository.deleteMessages(selectedIds.toList())
+                                        selectedIds = emptySet()
+                                    }
+                                },
+                                onLongClick = {
+                                    scope.launch {
+                                        chatRepository.toggleHideMessages(selectedIds)
+                                        selectedIds = emptySet()
+                                        android.widget.Toast.makeText(context, "已移入隐私空间", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        if (isRecordingVoiceState) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = MaterialTheme.shapes.large,
+                    modifier = Modifier.size(160.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxSize().padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = "Recording",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center,
+                            modifier = Modifier.fillMaxWidth().height(32.dp)
+                        ) {
+                            val barCount = 7
+                            for (i in 0 until barCount) {
+                                val factor = when (i) {
+                                    0, 6 -> 0.3f
+                                    1, 5 -> 0.6f
+                                    2, 4 -> 0.9f
+                                    else -> 1.0f
+                                }
+                                val barHeight = (currentAmplitude * 32.dp.value * factor).coerceAtLeast(4f)
+                                Box(
+                                    modifier = Modifier
+                                        .padding(horizontal = 2.dp)
+                                        .width(4.dp)
+                                        .height(barHeight.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.primary)
+                                )
+                            }
                         }
-                    }) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete")
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Recording...", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
@@ -923,6 +1440,8 @@ fun ChatBubble(
     autoDownloadLimit: Long,
     downloadProgress: Map<String, Int>,
     isDownloading: Boolean,
+    playingMessageId: String?,
+    onPlayAudio: (ChatMessage) -> Unit,
     onMediaClick: (ChatMessage) -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -947,14 +1466,11 @@ fun ChatBubble(
                 onLongClick = onLongClick
             )
             .padding(horizontal = 8.dp),
-        horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start,
+        horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.Top
     ) {
         if (!isOutgoing) {
-            Avatar(displayName.take(1).uppercase())
-            Spacer(modifier = Modifier.width(8.dp))
-            
-            // Name on the left side, aligned top
+            // Name on the left of the bubble
             Text(
                 text = displayName,
                 style = MaterialTheme.typography.labelSmall,
@@ -962,8 +1478,8 @@ fun ChatBubble(
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .padding(top = 2.dp, end = 4.dp) // Tiny top padding for visual alignment with bubble top
-                    .widthIn(max = 64.dp) // Constrain width to prevent squeezing message too much
+                    .padding(top = 2.dp, end = 4.dp)
+                    .widthIn(max = 64.dp)
             )
         } else {
             // Outgoing
@@ -1180,6 +1696,50 @@ fun ChatBubble(
                         }
                         
                         if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
+                    }
+                }
+                MessageType.FOLDER -> {
+                    FolderBubble(
+                        message = message,
+                        isSelected = isSelected,
+                        onSelectToggle = { onMediaClick(message) },
+                        onLongClick = onLongClick
+                    )
+                }
+                MessageType.AUDIO -> {
+                    val localFile = remember(message.id) {
+                        chatRepository.getLocalFile(message.id, message.content)
+                    }
+                    val isPlaying = playingMessageId == message.id
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = bubbleColor),
+                        shape = MaterialTheme.shapes.medium,
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
+                        modifier = Modifier
+                            .clickable {
+                                onPlayAudio(message)
+                            }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                                .width(Math.min(80 + (message.videoDuration * 4).toInt(), 200).dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
+                                contentDescription = null,
+                                tint = contentColor,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "${message.videoDuration}\"",
+                                color = contentColor,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
                 }
                 else -> {
@@ -1423,6 +1983,7 @@ private fun getFileName(context: android.content.Context, uri: Uri): String {
 fun AttachmentPanel(
     onImageClick: () -> Unit,
     onFileClick: () -> Unit,
+    onLocationClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -1441,6 +2002,12 @@ fun AttachmentPanel(
                 label = "Images",
                 color = Color(0xFF4CAF50),
                 onClick = onImageClick
+            )
+            AttachmentOption(
+                icon = Icons.Default.LocationOn,
+                label = "Location",
+                color = Color(0xFFFF9800),
+                onClick = onLocationClick
             )
             AttachmentOption(
                 icon = Icons.Default.InsertDriveFile,
@@ -1629,3 +2196,172 @@ fun SecurityOverlay(chatRepository: ChatRepository) {
         }
     }
 }
+
+fun sendNativeLocation(
+    context: android.content.Context, 
+    chatRepository: ChatRepository, 
+    scope: kotlinx.coroutines.CoroutineScope,
+    categories: List<String>? = null,
+    folderId: String? = null
+) {
+    val locationManager = context.getSystemService(android.content.Context.LOCATION_SERVICE) as android.location.LocationManager
+    val isGpsEnabled = locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)
+    val isNetworkEnabled = locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+    
+    val provider = when {
+        isNetworkEnabled -> android.location.LocationManager.NETWORK_PROVIDER
+        isGpsEnabled -> android.location.LocationManager.GPS_PROVIDER
+        else -> null
+    }
+    
+    if (provider == null) {
+        android.widget.Toast.makeText(context, "无法获取位置：GPS 或网络定位未开启", android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
+    
+    try {
+        val location = locationManager.getLastKnownLocation(provider)
+        if (location != null) {
+            resolveAndSendLocation(context, location, chatRepository, scope, categories, folderId)
+        } else {
+            locationManager.requestSingleUpdate(provider, object : android.location.LocationListener {
+                override fun onLocationChanged(loc: android.location.Location) {
+                    resolveAndSendLocation(context, loc, chatRepository, scope, categories, folderId)
+                }
+                override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+            }, null)
+        }
+    } catch (e: SecurityException) {
+        android.widget.Toast.makeText(context, "获取位置失败：无权限", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun resolveAndSendLocation(
+    context: android.content.Context,
+    location: android.location.Location,
+    chatRepository: ChatRepository,
+    scope: kotlinx.coroutines.CoroutineScope,
+    categories: List<String>? = null,
+    folderId: String? = null
+) {
+    scope.launch(Dispatchers.IO) {
+        val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+        var addressText = "纬度: ${location.latitude}, 经度: ${location.longitude}"
+        try {
+            val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
+            if (!addresses.isNullOrEmpty()) {
+                val address = addresses[0]
+                val sb = java.lang.StringBuilder()
+                address.adminArea?.let { sb.append(it) }
+                val locality = address.locality
+                if (locality != null && !sb.contains(locality)) {
+                    sb.append(locality)
+                }
+                address.subLocality?.let { sb.append(it) }
+                address.thoroughfare?.let { sb.append(it) }
+                address.subThoroughfare?.let { sb.append(it) }
+                addressText = if (sb.isNotEmpty()) sb.toString() else (address.getAddressLine(0) ?: addressText)
+            }
+        } catch (e: Exception) {
+            Log.e("MainScreen", "Geocoder failed", e)
+        }
+        
+        withContext(Dispatchers.Main) {
+            scope.launch {
+                chatRepository.sendMessage(
+                    content = "[位置] $addressText",
+                    type = MessageType.TEXT,
+                    categories = categories,
+                    folderId = folderId
+                )
+            }
+        }
+    }
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun FolderBubble(
+    message: ChatMessage,
+    isSelected: Boolean,
+    onSelectToggle: () -> Unit,
+    onLongClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        Card(
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                else MaterialTheme.colorScheme.surfaceVariant
+            ),
+            modifier = Modifier
+                .width(160.dp)
+                .combinedClickable(
+                    onClick = onSelectToggle,
+                    onLongClick = onLongClick
+                )
+        ) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Folder,
+                    contentDescription = "文件夹",
+                    modifier = Modifier.size(48.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = if (message.content.isNotBlank()) message.content else "文件夹",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2
+                )
+            }
+        }
+    }
+}
+
+suspend fun fetchAddressQuickly(context: android.content.Context): String? = withContext(Dispatchers.IO) {
+    val locationManager = context.getSystemService(android.content.Context.LOCATION_SERVICE) as android.location.LocationManager
+    val isGpsEnabled = locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)
+    val isNetworkEnabled = locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+    val provider = when {
+        isNetworkEnabled -> android.location.LocationManager.NETWORK_PROVIDER
+        isGpsEnabled -> android.location.LocationManager.GPS_PROVIDER
+        else -> null
+    } ?: return@withContext null
+    
+    try {
+        val location = locationManager.getLastKnownLocation(provider) ?: return@withContext null
+        val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+        val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
+        if (!addresses.isNullOrEmpty()) {
+            val address = addresses[0]
+            val sb = java.lang.StringBuilder()
+            address.adminArea?.let { sb.append(it) }
+            val locality = address.locality
+            if (locality != null && !sb.contains(locality)) {
+                sb.append(locality)
+            }
+            address.subLocality?.let { sb.append(it) }
+            address.thoroughfare?.let { sb.append(it) }
+            address.subThoroughfare?.let { sb.append(it) }
+            if (sb.isNotEmpty()) sb.toString() else (address.getAddressLine(0) ?: "未知位置")
+        } else {
+            "纬度: ${location.latitude}, 经度: ${location.longitude}"
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+

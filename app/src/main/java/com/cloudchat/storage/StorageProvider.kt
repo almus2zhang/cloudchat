@@ -21,4 +21,18 @@ interface StorageProvider {
     suspend fun getLastModified(fileName: String): Long
     suspend fun deleteFile(fileName: String)
     fun getFullUrl(fileName: String): String
+    suspend fun uploadFileRange(
+        inputStream: InputStream,
+        fileName: String,
+        contentType: String,
+        startByte: Long,
+        endByte: Long,
+        totalLength: Long,
+        onProgress: ((Int) -> Unit)? = null
+    ): String {
+        throw UnsupportedOperationException("Range upload not supported by this provider")
+    }
+    suspend fun recycleFile(fileName: String) {
+        deleteFile(fileName)
+    }
 }

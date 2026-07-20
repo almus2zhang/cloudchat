@@ -7,6 +7,7 @@ import android.util.Log
 import com.cloudchat.model.ChatMessage
 import com.cloudchat.model.MessageStatus
 import com.cloudchat.model.ServerConfig
+import java.util.UUID
 import com.cloudchat.storage.S3StorageProvider
 import com.cloudchat.storage.StorageProvider
 import com.cloudchat.storage.WebDavStorageProvider
@@ -40,7 +41,16 @@ class ChatRepository(private val context: Context) {
         const val TOTP_SECRET = "CLOUDSYNC2FA2222"
         const val TOTP_STEP = 30000L // 30 seconds
     }
-    private val gson = Gson()
+    private val gson = com.google.gson.GsonBuilder()
+        .registerTypeAdapter(com.cloudchat.model.MessageType::class.java, com.google.gson.JsonDeserializer { jsonElement, _, _ ->
+            try {
+                if (jsonElement == null || jsonElement.isJsonNull) com.cloudchat.model.MessageType.TEXT
+                else com.cloudchat.model.MessageType.valueOf(jsonElement.asString.uppercase())
+            } catch (e: Exception) {
+                com.cloudchat.model.MessageType.TEXT
+            }
+        })
+        .create()
     private var storageProvider: StorageProvider? = null
     private var authStorageProvider: StorageProvider? = null
     private var currentConfig: ServerConfig? = null
@@ -176,14 +186,49 @@ class ChatRepository(private val context: Context) {
         
         try {
             _downloadProgress.update { it + (messageId to 0) }
-            provider.downloadFile(fileName, tmpFile) { progress ->
-                // Check if download was cancelled
-                synchronized(cancelledDownloads) {
-                    if (cancelledDownloads.contains(messageId)) {
-                        throw InterruptedException("Download cancelled by user")
+
+            val message = _messages.value.find { it.id == messageId }
+            val isChunked = message?.isChunked ?: false
+            val totalChunks = message?.totalChunks ?: 0
+
+            if (isChunked && totalChunks > 0) {
+                // Download chunks and merge
+                tmpFile.outputStream().use { mergedOut ->
+                    var partIdx = 0
+                    while (partIdx < totalChunks) {
+                        val partName = "${fileName}.part${partIdx}"
+                        val partTmpFile = File(tmpFile.absolutePath + ".part${partIdx}")
+                        if (partTmpFile.exists()) partTmpFile.delete()
+                        
+                        val currentPartIdx = partIdx
+                        provider.downloadFile(partName, partTmpFile) { progress ->
+                            synchronized(cancelledDownloads) {
+                                if (cancelledDownloads.contains(messageId)) {
+                                    throw InterruptedException("Download cancelled by user")
+                                }
+                            }
+                            val overallProgress = ((currentPartIdx * 100) / totalChunks) + (progress / totalChunks)
+                            _downloadProgress.update { it + (messageId to overallProgress) }
+                        }
+                        
+                        // Append to merged file
+                        partTmpFile.inputStream().use { partIn ->
+                            partIn.copyTo(mergedOut)
+                        }
+                        partTmpFile.delete()
+                        partIdx++
                     }
                 }
-                _downloadProgress.update { it + (messageId to progress) }
+            } else {
+                provider.downloadFile(fileName, tmpFile) { progress ->
+                    // Check if download was cancelled
+                    synchronized(cancelledDownloads) {
+                        if (cancelledDownloads.contains(messageId)) {
+                            throw InterruptedException("Download cancelled by user")
+                        }
+                    }
+                    _downloadProgress.update { it + (messageId to progress) }
+                }
             }
             
             // Check one more time before renaming
@@ -216,6 +261,10 @@ class ChatRepository(private val context: Context) {
             Log.d("ChatRepository", "Download cancelled: $fileName")
             _downloadProgress.update { it - messageId }
             if (tmpFile.exists()) tmpFile.delete()
+            for (p in 0 until 200) {
+                val partTmpFile = File(tmpFile.absolutePath + ".part${p}")
+                if (partTmpFile.exists()) partTmpFile.delete()
+            }
             
             synchronized(activeDownloads) {
                 activeDownloads.remove(messageId)
@@ -225,6 +274,10 @@ class ChatRepository(private val context: Context) {
             Log.e("ChatRepository", "Download to cache failed: $fileName", e)
             _downloadProgress.update { it - messageId }
             if (tmpFile.exists()) tmpFile.delete()
+            for (p in 0 until 200) {
+                val partTmpFile = File(tmpFile.absolutePath + ".part${p}")
+                if (partTmpFile.exists()) partTmpFile.delete()
+            }
             
             synchronized(activeDownloads) {
                 activeDownloads.remove(messageId)
@@ -244,7 +297,9 @@ class ChatRepository(private val context: Context) {
     suspend fun updateConfig(config: ServerConfig, appMode: com.cloudchat.model.AppMode) {
         currentConfig = config
         if (config.type == com.cloudchat.model.StorageType.WEBDAV) {
-            NetworkUtils.currentAuth = Credentials.basic(config.webDavUser, config.webDavPass)
+            val user = config.webDavUser ?: ""
+            val pass = config.webDavPass ?: ""
+            NetworkUtils.currentAuth = try { Credentials.basic(user, pass) } catch (e: Exception) { null }
         } else {
             NetworkUtils.currentAuth = null
         }
@@ -260,7 +315,8 @@ class ChatRepository(private val context: Context) {
 
         // Data provider points to a subdirectory in FULL mode for user isolation
         val dataDir = if (appMode == com.cloudchat.model.AppMode.FULL) {
-            "${config.saveDir.trimEnd('/')}/$authId"
+            val subPath = if (!config.fullModePath.isNullOrBlank()) config.fullModePath else authId
+            "${config.saveDir.trimEnd('/')}/$subPath"
         } else {
             config.saveDir
         }
@@ -340,7 +396,8 @@ class ChatRepository(private val context: Context) {
         if (file.exists()) {
             try {
                 val json = file.readText()
-                val history: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type)
+                val rawHistory: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
+                val history = rawHistory?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
                 _messages.value = history
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Load failed", e)
@@ -359,7 +416,11 @@ class ChatRepository(private val context: Context) {
         type: com.cloudchat.model.MessageType = com.cloudchat.model.MessageType.TEXT, 
         inputStream: InputStream? = null, 
         fileName: String? = null,
-        localUri: String? = null
+        localUri: String? = null,
+        locationAddress: String? = null,
+        categories: List<String>? = null,
+        groupId: String? = null,
+        folderId: String? = null
     ) {
         val provider = storageProvider ?: return
         val config = currentConfig ?: return
@@ -370,7 +431,7 @@ class ChatRepository(private val context: Context) {
         if (localUri != null) {
             val uri = Uri.parse(localUri)
             fileSize = getFileSizeFromUri(uri)
-            if (type == com.cloudchat.model.MessageType.VIDEO) {
+            if (type == com.cloudchat.model.MessageType.VIDEO || type == com.cloudchat.model.MessageType.AUDIO) {
                 videoDuration = getVideoDuration(uri)
             }
         }
@@ -382,6 +443,10 @@ class ChatRepository(private val context: Context) {
 
         val remoteUrl = fileName
 
+        val useChunking = (inputStream != null && fileName != null && config.type == com.cloudchat.model.StorageType.WEBDAV && config.webDavChunkSize > 0L && fileSize > config.webDavChunkSize)
+        val chunkSize = if (useChunking) config.webDavChunkSize else 0L
+        val totalChunks = if (useChunking) ((fileSize + chunkSize - 1) / chunkSize).toInt() else 0
+
         val newMessage = ChatMessage(
             sender = config.username, // Username identifies the sender
             senderName = config.username,
@@ -391,27 +456,18 @@ class ChatRepository(private val context: Context) {
             remoteUrl = remoteUrl,
             fileSize = fileSize,
             videoDuration = videoDuration,
-            status = if (inputStream != null) MessageStatus.SENDING else MessageStatus.SUCCESS
+            status = if (inputStream != null) MessageStatus.SENDING else MessageStatus.SUCCESS,
+            locationAddress = locationAddress,
+            isChunked = useChunking,
+            chunkSize = chunkSize,
+            totalChunks = totalChunks,
+            categories = categories,
+            groupId = groupId,
+            folderId = folderId
         )
 
         localUri?.let { uriStr ->
             transientLocalUris[newMessage.id] = uriStr
-            // Copy to local cache for offline access and sharing
-            if (fileName != null) {
-                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                    try {
-                        val uri = Uri.parse(uriStr)
-                        val targetFile = getLocalFile(newMessage.id, fileName)
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            targetFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e("ChatRepository", "Failed to copy to cache: $fileName", e)
-                    }
-                }
-            }
         }
         _messages.update { it + newMessage }
         saveLocalHistory(config.id)
@@ -422,53 +478,181 @@ class ChatRepository(private val context: Context) {
 
         withContext(Dispatchers.IO) {
             try {
-                if (inputStream != null && fileName != null) {
+                if (localUri != null && fileName != null) {
+                    try {
+                        val uri = Uri.parse(localUri)
+                        val targetFile = getLocalFile(newMessage.id, fileName)
+                        if (!targetFile.exists() || targetFile.length() == 0L) {
+                            context.contentResolver.openInputStream(uri)?.use { input ->
+                                targetFile.outputStream().use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("ChatRepository", "Failed to copy file to local cache: $fileName", e)
+                    }
+                }
+
+                if (fileName != null) {
                     val contentType = when(type) {
                         com.cloudchat.model.MessageType.IMAGE -> "image/jpeg"
                         com.cloudchat.model.MessageType.VIDEO -> "video/mp4"
                         else -> "application/octet-stream"
                     }
-                    
-                    // Upload Thumbnail first if possible
-                    val thumbFile = localUri?.let { generateThumbnail(Uri.parse(it), type) }
-                    var currentThumbnailUrl: String? = null
-                    if (thumbFile != null && thumbFile.exists()) {
-                        val thumbName = "thumb_${fileName}"
-                        try {
-                            provider.uploadFile(thumbFile.inputStream(), thumbName, "image/jpeg", thumbFile.length()) { _ -> }
-                            _messages.update { list ->
-                                list.map { if (it.id == newMessage.id) it.copy(thumbnailUrl = thumbName) else it }
+
+                    val targetFile = getLocalFile(newMessage.id, fileName)
+                    val uploadStream = if (targetFile.exists() && targetFile.length() > 0L) {
+                        targetFile.inputStream()
+                    } else if (localUri != null) {
+                        context.contentResolver.openInputStream(Uri.parse(localUri))
+                    } else {
+                        inputStream
+                    }
+
+                    if (uploadStream == null) {
+                        throw IllegalStateException("No valid input stream available for file upload")
+                    }
+
+                    uploadStream.use { streamToUpload ->
+                        // Upload Thumbnail first if possible
+                        val thumbFile = localUri?.let { generateThumbnail(Uri.parse(it), type) }
+                        if (thumbFile != null && thumbFile.exists()) {
+                            val thumbName = "thumb_${fileName}"
+                            try {
+                                provider.uploadFile(thumbFile.inputStream(), thumbName, "image/jpeg", thumbFile.length()) { _ -> }
+                                _messages.update { list ->
+                                    list.map { if (it.id == newMessage.id) it.copy(thumbnailUrl = thumbName) else it }
+                                }
+                            } catch (e: Exception) {
+                                Log.e("ChatRepository", "Thumb upload failed", e)
                             }
-                        } catch (e: Exception) {
-                            Log.e("ChatRepository", "Thumb upload failed", e)
+                        }
+
+                        // Upload main file
+                        var serverSupportsRangePut = false
+                        if (useChunking) {
+                            try {
+                                val testFileName = "range_test_${System.currentTimeMillis()}.tmp"
+                                val byte1 = byteArrayOf(65)
+                                provider.uploadFileRange(
+                                    byte1.inputStream(),
+                                    testFileName,
+                                    "application/octet-stream",
+                                    0L,
+                                    0L,
+                                    2L
+                                )
+                                val byte2 = byteArrayOf(66)
+                                provider.uploadFileRange(
+                                    byte2.inputStream(),
+                                    testFileName,
+                                    "application/octet-stream",
+                                    1L,
+                                    1L,
+                                    2L
+                                )
+                                val size = provider.getFileSize(testFileName)
+                                if (size == 2L) {
+                                    serverSupportsRangePut = true
+                                }
+                                provider.deleteFile(testFileName)
+                            } catch (e: Exception) {
+                                Log.w("ChatRepository", "Server does not support Range PUT: ${e.message}")
+                            }
+                        }
+
+                        if (useChunking && serverSupportsRangePut) {
+                            // Server supports Range PUT! Upload directly to the final file name using Content-Range.
+                            _messages.update { list ->
+                                list.map { if (it.id == newMessage.id) it.copy(isChunked = false, chunkSize = 0L, totalChunks = 0) else it }
+                            }
+
+                            val buffer = ByteArray(1024 * 64)
+                            var partIdx = 0
+
+                            while (partIdx < totalChunks) {
+                                val chunkFile = File(context.cacheDir, "${newMessage.id}.part${partIdx}")
+                                chunkFile.outputStream().use { out ->
+                                    var bytesWritten = 0L
+                                    while (bytesWritten < chunkSize) {
+                                        val toRead = Math.min(buffer.size.toLong(), chunkSize - bytesWritten).toInt()
+                                        val read = streamToUpload.read(buffer, 0, toRead)
+                                        if (read == -1) break
+                                        out.write(buffer, 0, read)
+                                        bytesWritten += read
+                                    }
+                                }
+
+                                val partLength = chunkFile.length()
+                                val startByte = partIdx * chunkSize
+                                val endByte = startByte + partLength - 1
+                                val currentPartIdx = partIdx
+                                chunkFile.inputStream().use { partIn ->
+                                    provider.uploadFileRange(
+                                        partIn,
+                                        fileName,
+                                        contentType,
+                                        startByte,
+                                        endByte,
+                                        fileSize,
+                                        onProgress = { progress ->
+                                            val overallProgress = ((currentPartIdx * 100) / totalChunks) + (progress / totalChunks)
+                                            _uploadProgress.update { it + (newMessage.id to overallProgress) }
+                                        }
+                                    )
+                                }
+                                chunkFile.delete()
+                                partIdx++
+                            }
+                        } else if (useChunking) {
+                            // Fallback to client-side chunking
+                            val buffer = ByteArray(1024 * 64)
+                            var partIdx = 0
+
+                            while (partIdx < totalChunks) {
+                                val chunkFile = File(context.cacheDir, "${newMessage.id}.part${partIdx}")
+                                chunkFile.outputStream().use { out ->
+                                    var bytesWritten = 0L
+                                    while (bytesWritten < chunkSize) {
+                                        val toRead = Math.min(buffer.size.toLong(), chunkSize - bytesWritten).toInt()
+                                        val read = streamToUpload.read(buffer, 0, toRead)
+                                        if (read == -1) break
+                                        out.write(buffer, 0, read)
+                                        bytesWritten += read
+                                    }
+                                }
+
+                                val partName = "${fileName}.part${partIdx}"
+                                val partLength = chunkFile.length()
+                                val currentPartIdx = partIdx
+                                chunkFile.inputStream().use { partIn ->
+                                    provider.uploadFile(partIn, partName, contentType, partLength) { progress ->
+                                        val overallProgress = ((currentPartIdx * 100) / totalChunks) + (progress / totalChunks)
+                                        _uploadProgress.update { it + (newMessage.id to overallProgress) }
+                                    }
+                                }
+                                chunkFile.delete()
+                                partIdx++
+                            }
+                        } else {
+                            val actualLength = if (targetFile.exists()) targetFile.length() else fileSize
+                            provider.uploadFile(streamToUpload, fileName, contentType, actualLength) { progress ->
+                                _uploadProgress.update { it + (newMessage.id to progress) }
+                            }
                         }
                     }
 
-                    // Upload main file
-                    provider.uploadFile(inputStream, fileName, contentType, fileSize) { progress ->
-                        _uploadProgress.update { it + (newMessage.id to progress) }
-                    }
-                    
-                    // Relaxed Verification: Trust the uploadFile call first.
-                    // Only mark failed if uploadFile threw exception (caught below).
-                    val remoteSize = try { provider.getFileSize(fileName) } catch (e: Exception) { -1L }
-                    
-                    if (remoteSize <= 0) {
-                        Log.w("ChatRepository", "Upload finished but remote size check failed or returned 0. Assuming success anyway.")
-                    }
-                    
                     updateMessageStatus(newMessage.id, MessageStatus.SUCCESS)
-                    
-                    // Ensure progress is cleared or set to 100
-                    _uploadProgress.update { it + (newMessage.id to -1) }
+                    _uploadProgress.update { it - newMessage.id }
                 } else {
                     provider.uploadText(content, "msg_${System.currentTimeMillis()}.txt")
                 }
                 provider.uploadText(gson.toJson(_messages.value), "chat_history.json")
             } catch (e: Exception) {
-                Log.e("ChatRepository", "Cloud sync failed", e)
-                updateMessageStatus(newMessage.id, MessageStatus.FAILED)
+                Log.e("ChatRepository", "Cloud upload failed for message ${newMessage.id}", e)
                 _uploadProgress.update { it - newMessage.id }
+                updateMessageStatus(newMessage.id, MessageStatus.FAILED)
             }
         }
     }
@@ -480,23 +664,55 @@ class ChatRepository(private val context: Context) {
         syncHistory()
     }
 
+    private fun sanitizeMessage(msg: ChatMessage?): ChatMessage? {
+        if (msg == null) return null
+        if (msg.id.isBlank() && msg.content.isBlank() && msg.remoteUrl.isNullOrBlank()) return null
+
+        val safeId = if (msg.id.isBlank()) UUID.randomUUID().toString() else msg.id
+        val safeContent = msg.content ?: ""
+        val safeType = msg.type ?: com.cloudchat.model.MessageType.TEXT
+        val safeTimestamp = if (msg.timestamp <= 0L) System.currentTimeMillis() else msg.timestamp
+        val safeSender = msg.sender ?: "Unknown"
+        val currentUsername = currentConfig?.username ?: ""
+        val safeIsOutgoing = if (currentUsername.isNotBlank()) (safeSender == currentUsername) else msg.isOutgoing
+
+        return msg.copy(
+            id = safeId,
+            content = safeContent,
+            type = safeType,
+            timestamp = safeTimestamp,
+            sender = safeSender,
+            senderName = msg.senderName ?: safeSender,
+            isOutgoing = safeIsOutgoing,
+            categories = msg.categories ?: emptyList()
+        )
+    }
+
     suspend fun deleteMessages(ids: List<String>) {
-        val messagesToDelete = _messages.value.filter { it.id in ids }
+        val selectedMsgs = _messages.value.filter { it.id in ids }
+        val targetContents = selectedMsgs.map { it.content }.filter { it.isNotBlank() }.toSet()
+        val targetTimestamps = selectedMsgs.map { it.timestamp }.toSet()
+
+        val messagesToDelete = _messages.value.filter { 
+            it.id in ids || (targetContents.contains(it.content) && targetTimestamps.contains(it.timestamp))
+        }
         _messages.update { list ->
-            list.filterNot { it.id in ids }
+            list.filterNot { 
+                it.id in ids || (targetContents.contains(it.content) && targetTimestamps.contains(it.timestamp))
+            }
         }
         
-        // Asynchronously delete files from cloud
+        // Asynchronously recycle files from cloud
         GlobalScope.launch(Dispatchers.IO) {
             val provider = storageProvider ?: return@launch
             messagesToDelete.forEach { msg ->
                 if (msg.type != com.cloudchat.model.MessageType.TEXT) {
-                    // Delete main file
-                    try { provider.deleteFile(msg.content) } catch (e: Exception) {}
-                    // Delete thumbnail if exists
+                    // Recycle main file
+                    try { provider.recycleFile(msg.content) } catch (e: Exception) {}
+                    // Recycle thumbnail if exists
                     msg.thumbnailUrl?.let { url ->
                         val thumbName = "thumb_${msg.content}"
-                        try { provider.deleteFile(thumbName) } catch (e: Exception) {}
+                        try { provider.recycleFile(thumbName) } catch (e: Exception) {}
                     }
                 }
             }
@@ -613,7 +829,8 @@ class ChatRepository(private val context: Context) {
                     provider.downloadFile("chat_history.json", tempFile)
                     if (tempFile.exists()) {
                         val json = tempFile.readText()
-                        val cloudList: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type)
+                        val rawCloudList: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
+                        val cloudList = rawCloudList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
                         
                         val localIds = currentList.map { it.id }.toSet()
                         // Merge logic: include cloud messages that are NOT in local AND NOT in excludeIds
@@ -850,7 +1067,8 @@ class ChatRepository(private val context: Context) {
             provider.downloadFile("chat_history.json", tempFile)
             if (tempFile.exists()) {
                 val json = tempFile.readText()
-                val cloudHistory: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type)
+                val rawCloudHistory: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) ?: emptyList()
+                val cloudHistory = rawCloudHistory.mapNotNull { sanitizeMessage(it) }
                 val cloudIds = cloudHistory.map { it.id }.toSet()
 
                 _messages.update { current ->
@@ -880,9 +1098,11 @@ class ChatRepository(private val context: Context) {
 
     fun getAuthHeaders(): Map<String, String> {
         val config = currentConfig ?: return emptyMap()
-        if (config.type == com.cloudchat.model.StorageType.WEBDAV && config.webDavUser.isNotEmpty()) {
-             val credentials = okhttp3.Credentials.basic(config.webDavUser, config.webDavPass)
-             return mapOf("Authorization" to credentials)
+        if (config.type == com.cloudchat.model.StorageType.WEBDAV && !config.webDavUser.isNullOrEmpty()) {
+             val user = config.webDavUser ?: ""
+             val pass = config.webDavPass ?: ""
+             val credentials = try { okhttp3.Credentials.basic(user, pass) } catch (e: Exception) { null }
+             return if (credentials != null) mapOf("Authorization" to credentials) else emptyMap()
         }
         return emptyMap()
     }
@@ -891,5 +1111,168 @@ class ChatRepository(private val context: Context) {
         if (urlOrPath == null) return null
         if (urlOrPath.startsWith("http") || urlOrPath.startsWith("content://") || urlOrPath.startsWith("file://")) return urlOrPath
         return storageProvider?.getFullUrl(urlOrPath)
+    }
+
+    suspend fun updateMessageCategories(messageId: String, categoryIds: List<String>) {
+        _messages.update { list ->
+            list.map { if (it.id == messageId) it.copy(categories = categoryIds) else it }
+        }
+        syncHistory()
+    }
+
+    suspend fun addMessageCategory(messageId: String, categoryId: String) {
+        _messages.update { list ->
+            list.map { 
+                if (it.id == messageId) {
+                    val updated = (it.safeCategories + categoryId).distinct()
+                    it.copy(categories = updated)
+                } else it 
+            }
+        }
+        syncHistory()
+    }
+
+    suspend fun removeMessagesFromCategory(messageIds: List<String>, categoryId: String) {
+        _messages.update { list ->
+            list.map { 
+                if (messageIds.contains(it.id)) {
+                    val updated = it.safeCategories - categoryId
+                    it.copy(categories = updated)
+                } else it 
+            }
+        }
+        syncHistory()
+    }
+
+    suspend fun toggleHideMessages(messageIds: Set<String>) {
+        _messages.update { list ->
+            list.map {
+                if (messageIds.contains(it.id)) {
+                    it.copy(isHidden = !it.isHidden)
+                } else it
+            }
+        }
+        syncHistory()
+    }
+
+    suspend fun groupSelectedMessages(messageIds: Set<String>, newGroupId: String) {
+        _messages.update { list ->
+            val existingGroupIds = list
+                .filter { messageIds.contains(it.id) && !it.groupId.isNullOrEmpty() }
+                .mapNotNull { it.groupId }
+                .toSet()
+
+            val allTargetIds = list
+                .filter { messageIds.contains(it.id) || (!it.groupId.isNullOrEmpty() && existingGroupIds.contains(it.groupId)) }
+                .map { it.id }
+                .toSet()
+
+            list.map {
+                if (allTargetIds.contains(it.id)) {
+                    it.copy(groupId = newGroupId)
+                } else it
+            }
+        }
+        syncHistory()
+    }
+
+    suspend fun ungroupMessages(messages: List<ChatMessage>) {
+        val targetIds = messages.map { it.id }.toSet()
+
+        _messages.update { list ->
+            // Detach only selected target messages
+            val updated = list.map {
+                if (targetIds.contains(it.id)) {
+                    it.copy(groupId = null)
+                } else it
+            }
+
+            // Clean up groups that now have fewer than 2 remaining member messages
+            val groupCounts = updated
+                .mapNotNull { it.groupId }
+                .groupingBy { it }
+                .eachCount()
+
+            updated.map {
+                if (!it.groupId.isNullOrEmpty() && (groupCounts[it.groupId] ?: 0) < 2) {
+                    it.copy(groupId = null)
+                } else it
+            }
+        }
+        syncHistory()
+    }
+
+    suspend fun editTextMessage(messageId: String, newContent: String) {
+        _messages.update { list ->
+            list.map {
+                if (it.id == messageId) {
+                    it.copy(content = newContent, isEdited = true)
+                } else it
+            }
+        }
+        syncHistory()
+    }
+
+    suspend fun updateMessageCaption(messageId: String, newCaption: String?) {
+        _messages.update { list ->
+            list.map {
+                if (it.id == messageId) {
+                    it.copy(caption = newCaption?.ifBlank { null })
+                } else it
+            }
+        }
+        syncHistory()
+    }
+
+    suspend fun packIntoFolder(messages: List<com.cloudchat.model.ChatMessage>, annotation: String, existingFolderId: String? = null) {
+        if (messages.isEmpty()) return
+        
+        val folderId = existingFolderId ?: "folder_${java.util.UUID.randomUUID()}"
+        
+        if (existingFolderId == null) {
+            val config = currentConfig ?: return
+            val folderMsg = com.cloudchat.model.ChatMessage(
+                id = folderId,
+                sender = config.username,
+                content = annotation,
+                type = com.cloudchat.model.MessageType.FOLDER,
+                timestamp = System.currentTimeMillis(),
+                isOutgoing = true,
+                status = com.cloudchat.model.MessageStatus.SUCCESS
+            )
+            
+            _messages.update { list ->
+                val updatedList = list.toMutableList()
+                updatedList.add(folderMsg)
+                updatedList.map { msg ->
+                    if (messages.any { it.id == msg.id }) {
+                        msg.copy(folderId = folderId)
+                    } else msg
+                }
+            }
+        } else {
+            _messages.update { list ->
+                list.map { msg ->
+                    if (messages.any { it.id == msg.id }) {
+                        msg.copy(folderId = folderId)
+                    } else if (msg.id == folderId && annotation.isNotBlank()) {
+                        val newContent = if (msg.content.isBlank()) annotation else "${msg.content} / $annotation"
+                        msg.copy(content = newContent)
+                    } else msg
+                }
+            }
+        }
+        syncHistory()
+    }
+
+    suspend fun unpackFolder(folderId: String) {
+        _messages.update { list ->
+            list.filter { it.id != folderId }.map { msg ->
+                if (msg.folderId == folderId) {
+                    msg.copy(folderId = null)
+                } else msg
+            }
+        }
+        syncHistory()
     }
 }

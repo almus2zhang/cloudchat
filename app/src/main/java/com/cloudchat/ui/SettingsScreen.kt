@@ -40,6 +40,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val appMode by settingsRepository.appMode.collectAsState(initial = com.cloudchat.model.AppMode.SELF_BUILT)
 
     var editingConfig by remember { mutableStateOf<ServerConfig?>(null) }
+    var deletingAccountConfig by remember { mutableStateOf<ServerConfig?>(null) }
     var isTesting by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
 
@@ -116,7 +117,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                                 }
                             },
                             onDelete = { 
-                                coroutineScope.launch { settingsRepository.deleteAccount(account.id) }
+                                deletingAccountConfig = account
                             }
                         )
                     }
@@ -212,6 +213,20 @@ fun SettingsScreen(onBack: () -> Unit) {
                     visualTransformation = PasswordVisualTransformation()
                 )
 
+                if (appMode == com.cloudchat.model.AppMode.FULL) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextField(
+                        value = config.fullModePath ?: "",
+                        onValueChange = { 
+                            editingConfig = config.copy(fullModePath = it.ifEmpty { null })
+                        },
+                        label = { Text("子路径设置 (Custom Sub-path)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("默认为手机 ID 后六位") }
+                    )
+                    Text("文件将保存在 /public/子路径 下", style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(start = 4.dp))
+                }
+
                 if (appMode == com.cloudchat.model.AppMode.SELF_BUILT) {
                     Spacer(modifier = Modifier.height(8.dp))
                     TextField(
@@ -244,9 +259,19 @@ fun SettingsScreen(onBack: () -> Unit) {
                         onValueChange = { 
                             editingConfig = if (config.type == StorageType.WEBDAV) config.copy(webDavUrl = it) else config.copy(endpoint = it)
                         },
-                        label = { Text(if (config.type == StorageType.S3) "S3 Endpoint" else "WebDAV URL") },
+                        label = { Text(if (config.type == StorageType.S3) "S3 Endpoint" else "WebDAV URL (Primary)") },
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    if (config.type == StorageType.WEBDAV) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextField(
+                            value = config.webDavFallbackUrl,
+                            onValueChange = { editingConfig = config.copy(webDavFallbackUrl = it) },
+                            label = { Text("WebDAV Fallback URL (Optional)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
 
                     if (config.type == StorageType.WEBDAV) {
                         TextField(
@@ -260,6 +285,23 @@ fun SettingsScreen(onBack: () -> Unit) {
                             onValueChange = { editingConfig = config.copy(webDavPass = it) },
                             label = { Text("Password") },
                             visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        var chunkSizeText by remember(config.webDavChunkSize) {
+                            mutableStateOf(if (config.webDavChunkSize > 0L) (config.webDavChunkSize / (1024 * 1024L)).toString() else "")
+                        }
+                        TextField(
+                            value = chunkSizeText,
+                            onValueChange = {
+                                chunkSizeText = it
+                                val mb = it.toLongOrNull() ?: 0L
+                                editingConfig = config.copy(webDavChunkSize = mb * 1024 * 1024L)
+                            },
+                            label = { Text("WebDAV Chunk Size (MB, 0 to disable)") },
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                            ),
                             modifier = Modifier.fillMaxWidth()
                         )
                     } else {
@@ -382,6 +424,30 @@ fun SettingsScreen(onBack: () -> Unit) {
             dismissButton = {
                 TextButton(onClick = { showPasswordDialog = false }) {
                     Text("Cancel")
+                }
+            }
+        )
+    }
+
+    val deletingAccount = deletingAccountConfig
+    if (deletingAccount != null) {
+        AlertDialog(
+            onDismissRequest = { deletingAccountConfig = null },
+            title = { Text("确认删除配置") },
+            text = { Text("确定要删除配置“${deletingAccount.username}”吗？此操作将清除本地相关的连接信息。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    deletingAccountConfig = null
+                    coroutineScope.launch {
+                        settingsRepository.deleteAccount(deletingAccount.id)
+                    }
+                }) {
+                    Text("确定", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletingAccountConfig = null }) {
+                    Text("取消")
                 }
             }
         )

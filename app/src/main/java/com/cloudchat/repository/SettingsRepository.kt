@@ -11,6 +11,7 @@ import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
+import com.cloudchat.model.ChatCategory
 import com.cloudchat.utils.ConfigHelper
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
@@ -20,6 +21,7 @@ class SettingsRepository(private val context: Context) {
 
     companion object {
         private val APP_MODE = stringPreferencesKey("app_mode")
+        private val CATEGORIES_KEY = stringPreferencesKey("categories_json")
 
         private fun getAccountsKey(mode: String) = stringPreferencesKey("accounts_json_$mode")
         private fun getCurrentAccountIdKey(mode: String) = stringPreferencesKey("current_account_id_$mode")
@@ -149,4 +151,25 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    val categories: Flow<List<ChatCategory>> = context.dataStore.data.map { prefs ->
+        val json = prefs[CATEGORIES_KEY]
+        if (json.isNullOrEmpty()) {
+            val defaults = listOf(
+                ChatCategory(id = "diary", name = "日记"),
+                ChatCategory(id = "transfer", name = "传输"),
+                ChatCategory(id = "work", name = "工作"),
+                ChatCategory(id = "privacy", name = "隐私")
+            )
+            defaults
+        } else {
+            val type = object : TypeToken<List<ChatCategory>>() {}.type
+            gson.fromJson(json, type)
+        }
+    }
+
+    suspend fun saveCategories(list: List<ChatCategory>) {
+        context.dataStore.edit { prefs ->
+            prefs[CATEGORIES_KEY] = gson.toJson(list)
+        }
+    }
 }
