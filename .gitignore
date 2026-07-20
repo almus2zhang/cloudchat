@@ -42,3 +42,11 @@ fix_icons.py
 
 # Kotlin
 .kotlin/
+
+# Privacy: local chat history / user inputs / edit artifacts (NEVER commit)
+.codebuddy/
+chat_history.json
+user_inputs.jsonl
+MainScreen_edits.json
+mainscreen_edits.txt
+
