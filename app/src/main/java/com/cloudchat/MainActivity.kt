@@ -19,6 +19,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.ui.unit.dp
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -83,6 +84,8 @@ class MainActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
                 var isTopBarVisible by remember { mutableStateOf(true) }
                 var topBarActions by remember { mutableStateOf<@Composable RowScope.() -> Unit>({}) }
+                var topBarTitle by remember { mutableStateOf("CloudChat") }
+                var onTopBarBackClick by remember { mutableStateOf<(() -> Unit)?>(null) }
                 
                 // Wait for storage to load the appMode
                 val appMode = appModeState ?: return@CloudChatTheme
@@ -105,7 +108,14 @@ class MainActivity : ComponentActivity() {
                     topBar = {
                         if (isTopBarVisible && appMode != com.cloudchat.model.AppMode.NOT_SET) {
                             TopAppBar(
-                                title = { Text("CloudChat", style = MaterialTheme.typography.titleLarge) },
+                                title = { Text(topBarTitle, style = MaterialTheme.typography.titleLarge) },
+                                navigationIcon = {
+                                    if (onTopBarBackClick != null) {
+                                    IconButton(modifier = Modifier.size(40.dp), onClick = { onTopBarBackClick?.invoke() }) {
+                                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
+                                    }
+                                    }
+                                },
                                 colors = TopAppBarDefaults.topAppBarColors(
                                     containerColor = MaterialTheme.colorScheme.surface,
                                     titleContentColor = MaterialTheme.colorScheme.onSurface,
@@ -114,6 +124,7 @@ class MainActivity : ComponentActivity() {
                                 actions = {
                                     topBarActions(this)
                                     IconButton(
+                                        modifier = Modifier.size(40.dp),
                                         onClick = { navController.navigate("settings") }
                                     ) {
                                         Icon(
@@ -165,7 +176,9 @@ class MainActivity : ComponentActivity() {
                                         },
                                         setTopBarActions = { actions ->
                                             topBarActions = actions
-                                        }
+                                        },
+                                        setTopBarTitle = { topBarTitle = it },
+                                        setTopBarNavigationIcon = { onTopBarBackClick = it }
                                     )
                                 }
                             }

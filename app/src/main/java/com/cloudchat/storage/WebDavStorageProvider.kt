@@ -93,50 +93,62 @@ class WebDavStorageProvider(
         }
     }
 
-    override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            // 1. Test Primary URL
-            val primaryResult = testSingleUrl(config.webDavUrl)
-            if (primaryResult.isFailure) {
-                return@withContext Result.failure(Exception("主地址检查失败: ${primaryResult.exceptionOrNull()?.message}"))
-            }
+    override suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
+        val report = StringBuilder()
+        var allOk = true
 
-            // 2. Test Fallback URL (if configured)
-            val fallbackUrl = config.webDavFallbackUrl
-            if (!fallbackUrl.isNullOrBlank()) {
-                val fallbackResult = testSingleUrl(fallbackUrl)
-                if (fallbackResult.isFailure) {
-                    return@withContext Result.failure(Exception("备用地址检查失败: ${fallbackResult.exceptionOrNull()?.message}"))
-                }
-            }
-
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
+        // 主地址：使用 WebDAV PROPFIND 列出文件/目录（非 GET）
+        val primary = testSingleUrl(config.webDavUrl)
+        if (primary.isSuccess) {
+            report.appendLine("主地址: ${primary.getOrNull()}")
+        } else {
+            allOk = false
+            report.appendLine("主地址: 连接失败 - ${primary.exceptionOrNull()?.message ?: "未知错误"}")
         }
+
+        // 备用地址
+        val fallbackUrl = config.webDavFallbackUrl
+        if (!fallbackUrl.isNullOrBlank()) {
+            val fb = testSingleUrl(fallbackUrl)
+            if (fb.isSuccess) {
+                report.appendLine("备用地址: ${fb.getOrNull()}")
+            } else {
+                allOk = false
+                report.appendLine("备用地址: 连接失败 - ${fb.exceptionOrNull()?.message ?: "未知错误"}")
+            }
+        } else {
+            report.appendLine("备用地址: 未配置")
+        }
+
+        val detail = report.toString().trimEnd()
+        if (allOk) Result.success(detail) else Result.failure(Exception(detail))
     }
 
-    private suspend fun testSingleUrl(baseUrl: String): Result<Unit> = withContext(Dispatchers.IO) {
-        try {
-            val request = Request.Builder()
-                .url(baseUrl)
-                .addHeader("Authorization", auth)
-                .method("PROPFIND", "<?xml version=\"1.0\" encoding=\"utf-8\" ?><D:propfind xmlns:D=\"DAV:\"><D:prop/></D:propfind>".toRequestBody("text/xml".toMediaType()))
-                .build()
-            client.newCall(request).execute().use { response ->
-                when {
-                    response.code == 401 -> Result.failure(Exception("401 认证失败 (账号密码错误)"))
-                    response.code == 404 -> {
-                        mkCol(baseUrl)
-                        Result.success(Unit)
-                    }
-                    response.isSuccessful -> Result.success(Unit)
-                    else -> Result.failure(Exception("HTTP ${response.code}"))
-                }
+    private fun testSingleUrl(baseUrl: String): Result<String> {
+        repeat(2) { attempt ->
+            try {
+                val request = Request.Builder()
+                    .url(baseUrl)
+                    .header("Depth", "1")
+                    .header("Content-Type", "application/xml; charset=utf-8")
+                    .method(
+                        "PROPFIND",
+                        "<?xml version=\"1.0\" encoding=\"utf-8\" ?><D:propfind xmlns:D=\"DAV:\"><D:prop/></D:propfind>"
+                            .toRequestBody("application/xml; charset=utf-8".toMediaType())
+                    )
+                    .header("Authorization", auth)
+                    .build()
+                val response = client.newCall(request).execute()
+                val code = response.code
+                response.close()
+                // 只要服务器返回了 HTTP 响应，即说明地址可达（连接成功）。
+                // 403/401 等仅表示权限/认证问题，并不代表服务器不可达。
+                return Result.success("HTTP $code")
+            } catch (e: Exception) {
+                if (attempt == 1) return Result.failure(e)
             }
-        } catch (e: Exception) {
-            Result.failure(e)
         }
+        return Result.failure(Exception("未知错误"))
     }
 
     private fun mkCol(url: String) {

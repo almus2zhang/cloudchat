@@ -5,7 +5,7 @@ import java.io.File
 import java.io.InputStream
 
 interface StorageProvider {
-    suspend fun testConnection(): Result<Unit>
+    suspend fun testConnection(): Result<String>
     suspend fun uploadFile(
         inputStream: InputStream, 
         fileName: String, 

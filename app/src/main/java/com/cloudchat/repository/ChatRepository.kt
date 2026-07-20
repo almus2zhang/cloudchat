@@ -1157,19 +1157,46 @@ class ChatRepository(private val context: Context) {
 
     suspend fun groupSelectedMessages(messageIds: Set<String>, newGroupId: String) {
         _messages.update { list ->
-            val existingGroupIds = list
-                .filter { messageIds.contains(it.id) && !it.groupId.isNullOrEmpty() }
-                .mapNotNull { it.groupId }
+            // Only IMAGE/VIDEO participate in grid aggregation; other types are filtered out.
+            val mediaSelected = list.filter {
+                messageIds.contains(it.id) &&
+                    (it.type == com.cloudchat.model.MessageType.IMAGE ||
+                        it.type == com.cloudchat.model.MessageType.VIDEO)
+            }
+            val mediaSelectedIds = mediaSelected.map { it.id }.toSet()
+
+            if (mediaSelectedIds.isEmpty()) return@update list
+
+            // Existing grids that any selected media already belongs to.
+            val existingGroupIds = mediaSelected
+                .mapNotNull { it.groupId?.takeIf { g -> g.isNotBlank() } }
                 .toSet()
 
-            val allTargetIds = list
-                .filter { messageIds.contains(it.id) || (!it.groupId.isNullOrEmpty() && existingGroupIds.contains(it.groupId)) }
+            // All members of those existing grids must join the merge.
+            val membersOfExistingGroups = list
+                .filter {
+                    (it.type == com.cloudchat.model.MessageType.IMAGE ||
+                        it.type == com.cloudchat.model.MessageType.VIDEO) &&
+                        !it.groupId.isNullOrEmpty() && existingGroupIds.contains(it.groupId)
+                }
                 .map { it.id }
                 .toSet()
 
+            val allTargetIds = mediaSelectedIds union membersOfExistingGroups
+
+            // Resulting group id:
+            // - exactly one existing grid involved -> keep it (loose media enter that grid)
+            // - several grids involved -> merge all of them into one new grid
+            // - none involved -> brand new grid
+            val targetGroupId = if (existingGroupIds.size == 1) {
+                existingGroupIds.first()
+            } else {
+                newGroupId
+            }
+
             list.map {
                 if (allTargetIds.contains(it.id)) {
-                    it.copy(groupId = newGroupId)
+                    it.copy(groupId = targetGroupId)
                 } else it
             }
         }
@@ -1177,26 +1204,47 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun ungroupMessages(messages: List<ChatMessage>) {
-        val targetIds = messages.map { it.id }.toSet()
+        val selectedIds = messages.map { it.id }.toSet()
 
         _messages.update { list ->
-            // Detach only selected target messages
-            val updated = list.map {
-                if (targetIds.contains(it.id)) {
-                    it.copy(groupId = null)
-                } else it
+            // Group the selected messages by their current groupId (ignore ungrouped ones).
+            val selectedByGroup = list
+                .filter { selectedIds.contains(it.id) && !it.groupId.isNullOrEmpty() }
+                .groupBy { it.groupId!! }
+
+            if (selectedByGroup.isEmpty()) return@update list
+
+            // id -> new groupId (null means detach)
+            val reassign = HashMap<String, String?>()
+            var splitCounter = 0L
+            val splitBase = System.currentTimeMillis()
+
+            selectedByGroup.forEach { (groupId, selectedInGroup) ->
+                val allInGroup = list.filter { it.groupId == groupId }
+                val remaining = allInGroup.filter { !selectedIds.contains(it.id) }
+
+                if (remaining.isEmpty()) {
+                    // Whole group selected -> fully ungroup.
+                    allInGroup.forEach { reassign[it.id] = null }
+                } else {
+                    // Subset selected -> split the subset into a new group.
+                    if (selectedInGroup.size >= 2) {
+                        val newSplitGroupId = "group_${splitBase + splitCounter}"
+                        splitCounter++
+                        selectedInGroup.forEach { reassign[it.id] = newSplitGroupId }
+                    } else {
+                        // A single item cannot form a grid -> detach it.
+                        selectedInGroup.forEach { reassign[it.id] = null }
+                    }
+                    // Remaining stays in the original group, unless only one is left.
+                    if (remaining.size < 2) {
+                        remaining.forEach { reassign[it.id] = null }
+                    }
+                }
             }
 
-            // Clean up groups that now have fewer than 2 remaining member messages
-            val groupCounts = updated
-                .mapNotNull { it.groupId }
-                .groupingBy { it }
-                .eachCount()
-
-            updated.map {
-                if (!it.groupId.isNullOrEmpty() && (groupCounts[it.groupId] ?: 0) < 2) {
-                    it.copy(groupId = null)
-                } else it
+            list.map {
+                if (reassign.containsKey(it.id)) it.copy(groupId = reassign[it.id]) else it
             }
         }
         syncHistory()
@@ -1218,6 +1266,19 @@ class ChatRepository(private val context: Context) {
             list.map {
                 if (it.id == messageId) {
                     it.copy(caption = newCaption?.ifBlank { null })
+                } else it
+            }
+        }
+        syncHistory()
+    }
+
+    suspend fun renameFolder(folderId: String, newName: String) {
+        val trimmed = newName.trim()
+        if (trimmed.isBlank()) return
+        _messages.update { list ->
+            list.map {
+                if (it.id == folderId && it.type == com.cloudchat.model.MessageType.FOLDER) {
+                    it.copy(content = trimmed)
                 } else it
             }
         }

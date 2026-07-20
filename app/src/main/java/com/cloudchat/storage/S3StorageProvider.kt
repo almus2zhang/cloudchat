@@ -37,10 +37,10 @@ class S3StorageProvider(
             return if (root.isEmpty()) "$userDir/" else "$root/$userDir/"
         }
 
-    override suspend fun testConnection(): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
         try {
             s3Client.listBuckets()
-            Result.success(Unit)
+            Result.success("S3 连接成功")
         } catch (e: Exception) {
             Result.failure(e)
         }

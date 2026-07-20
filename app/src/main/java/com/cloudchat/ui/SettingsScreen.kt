@@ -343,21 +343,21 @@ fun SettingsScreen(onBack: () -> Unit) {
                         onClick = {
                             coroutineScope.launch {
                                 isTesting = true
-                                testResult = "Testing..."
+                                testResult = "验证中..."
                                 val provider = if (config.type == StorageType.S3) {
                                     S3StorageProvider(config, config.saveDir)
                                 } else {
                                     WebDavStorageProvider(config, config.saveDir, appMode == com.cloudchat.model.AppMode.FULL)
                                 }
                                 val result = provider.testConnection()
-                                testResult = if (result.isSuccess) "Success!" else "Failed: ${result.exceptionOrNull()?.message}"
+                                testResult = if (result.isSuccess) "验证成功\n${result.getOrNull() ?: ""}" else "验证失败\n${result.exceptionOrNull()?.message ?: "未知错误"}"
                                 isTesting = false
                             }
                         },
                         modifier = Modifier.weight(1f),
                         enabled = !isTesting
                     ) {
-                        Text(if (isTesting) "..." else "Test")
+                        Text(if (isTesting) "验证中..." else "测试验证")
                     }
 
                     Button(
@@ -379,7 +379,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
 
                 testResult?.let {
-                    Text(it, color = if (it == "Success!") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                    Text(it, color = if (it.startsWith("验证成功")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
                 }
             }
         }
