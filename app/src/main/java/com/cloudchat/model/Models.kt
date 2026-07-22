@@ -63,6 +63,7 @@ data class ServerConfig(
     val autoDownloadLimit: Long = 5 * 1024 * 1024L,
     val configPassword: String? = null,
     val fullModePath: String? = null,
+    val webDavIgnoreCert: Boolean = false, // 忽略证书校验（用于自签名/私有 CA 的 WebDAV，如 Lucky）
     val webDavChunkSize: Long = 0L // 0 means no chunking, >0 means chunk size in bytes
 )
 

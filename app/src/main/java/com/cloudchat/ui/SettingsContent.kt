@@ -1,10 +1,12 @@
 package com.cloudchat.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.cloudchat.model.ServerConfig
@@ -89,6 +91,19 @@ fun SettingsContent(
                 label = { Text("WebDAV Password") },
                 modifier = Modifier.fillMaxWidth()
             )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .clickable { onConfigChange(config.copy(webDavIgnoreCert = !config.webDavIgnoreCert)) }
+            ) {
+                Checkbox(
+                    checked = config.webDavIgnoreCert,
+                    onCheckedChange = { onConfigChange(config.copy(webDavIgnoreCert = it)) }
+                )
+                Text("忽略证书校验（自签名/私有 CA，如 Lucky）")
+            }
         }
     }
 }

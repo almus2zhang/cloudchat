@@ -102,6 +102,7 @@ fun MainScreen(
     val downloadProgress by chatRepository.downloadProgress.collectAsState()
     val activeDownloadIds by chatRepository.activeDownloadIds.collectAsState()
     val syncInterval by chatRepository.syncInterval.collectAsState()
+    val isServerConnected by chatRepository.isServerConnected.collectAsState()
     val autoDownloadLimit = currentConfig?.autoDownloadLimit ?: (5 * 1024 * 1024L)
     
     var inputText by remember { mutableStateOf("") }
@@ -113,6 +114,7 @@ fun MainScreen(
     var isAttachmentPanelVisible by remember { mutableStateOf(false) }
     var attachLocationEnabled by remember { mutableStateOf(false) }
     var isPrivacyMode by remember { mutableStateOf(false) }
+    var lastPrivacyActivity by remember { mutableStateOf(System.currentTimeMillis()) }
     var viewOnlyPrivacyItems by remember { mutableStateOf(false) }
     var showChangePrivacyPasswordDialog by remember { mutableStateOf(false) }
     val sharedPrefs = remember { context.getSharedPreferences("cloudchat_privacy", android.content.Context.MODE_PRIVATE) }
@@ -210,8 +212,8 @@ fun MainScreen(
         }
     }
 
-    // Handle back button to clear selection or close panel or exit folder
-    BackHandler(enabled = selectedIds.isNotEmpty() || isAttachmentPanelVisible || isTextSelected || currentFolderId != null) {
+    // Handle back button: clear selection / close panel / exit folder / exit privacy mode
+    BackHandler(enabled = selectedIds.isNotEmpty() || isAttachmentPanelVisible || isTextSelected || currentFolderId != null || isPrivacyMode) {
         if (selectedIds.isNotEmpty()) {
             selectedIds = emptySet()
         } else if (isTextSelected) {
@@ -221,6 +223,26 @@ fun MainScreen(
             isAttachmentPanelVisible = false
         } else if (currentFolderId != null) {
             currentFolderId = null
+        } else if (isPrivacyMode) {
+            isPrivacyMode = false
+            viewOnlyPrivacyItems = false
+            android.widget.Toast.makeText(context, "已退出隐私模式", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // 隐私模式：5 分钟无操作自动退出
+    LaunchedEffect(isPrivacyMode) {
+        if (isPrivacyMode) {
+            lastPrivacyActivity = System.currentTimeMillis()
+            while (isPrivacyMode) {
+                delay(15_000)
+                if (System.currentTimeMillis() - lastPrivacyActivity > 5 * 60 * 1000) {
+                    isPrivacyMode = false
+                    viewOnlyPrivacyItems = false
+                    android.widget.Toast.makeText(context, "隐私模式已因无操作自动退出", android.widget.Toast.LENGTH_SHORT).show()
+                    break
+                }
+            }
         }
     }
 
@@ -366,7 +388,7 @@ fun MainScreen(
     val searchFocusRequester = remember { FocusRequester() }
 
     // Inject search and sync icons into TopAppBar
-    LaunchedEffect(isSearchActive, searchQuery, syncInterval, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId) {
+    LaunchedEffect(isSearchActive, searchQuery, syncInterval, isServerConnected, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId) {
         setTopBarActions {
             if (isSearchActive) {
                 // Auto-focus when search is activated
@@ -418,7 +440,8 @@ fun MainScreen(
                 }) {
                     Icon(
                         imageVector = Icons.Default.Sync,
-                        contentDescription = "立即刷新"
+                        contentDescription = "立即刷新",
+                        tint = if (isServerConnected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
                     )
                 }
 
@@ -429,7 +452,7 @@ fun MainScreen(
                     Icon(
                         imageVector = Icons.Default.Bolt,
                         contentDescription = if (isFast) "快速同步" else "普通同步",
-                        tint = if (isFast) Color(0xFFFFC107) else Color.Gray
+                        tint = if (isServerConnected) (if (isFast) Color(0xFFFFC107) else Color.Gray) else MaterialTheme.colorScheme.error
                     )
                 }
                 
@@ -524,12 +547,14 @@ fun MainScreen(
                     val name = getFileName(context, uri)
                     val stream = context.contentResolver.openInputStream(uri)
                     val type = determineMessageType(context, uri, name)
+                    val address = if (attachLocationEnabled) fetchAddressQuickly(context) else null
                     chatRepository.sendMessage(
                         content = name, 
                         type = type, 
                         inputStream = stream, 
                         fileName = name,
                         localUri = uri.toString(),
+                        locationAddress = address,
                         folderId = currentFolderId
                     )
                 } catch (e: Exception) {
@@ -568,7 +593,16 @@ fun MainScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize().pointerInput(isPrivacyMode) {
+        if (isPrivacyMode) {
+            awaitPointerEventScope {
+                while (true) {
+                    awaitPointerEvent()
+                    lastPrivacyActivity = System.currentTimeMillis()
+                }
+            }
+        }
+    }) {
         Column(modifier = Modifier.fillMaxSize()) {
 
             // Folder header: show the folder name/annotation while browsing inside it
@@ -1076,6 +1110,23 @@ fun MainScreen(
                         }
                     }) {
                         Icon(Icons.Default.Share, contentDescription = "Share")
+                    }
+
+                    // 移出隐私空间（仅在隐私模式下显示）
+                    if (isPrivacyMode) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                chatRepository.toggleHideMessages(selectedIds)
+                                selectedIds = emptySet()
+                                android.widget.Toast.makeText(context, "已移出隐私空间", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.VisibilityOff,
+                                contentDescription = "移出隐私空间",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
 
                     // Delete: long press -> silently move to privacy space; short press -> confirm deletion
@@ -2075,6 +2126,15 @@ fun ChatBubble(
                         modifier = Modifier.padding(end = 6.dp)
                     )
                 }
+                // 地址（点亮地址图标时附加）：小字显示，样式与注释一致，位于时间之前
+                if (!message.locationAddress.isNullOrBlank()) {
+                    Text(
+                        text = message.locationAddress,
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                        color = Color.Gray,
+                        modifier = Modifier.padding(end = 6.dp)
+                    )
+                }
                 Text(
                     text = formatTimestamp(message.timestamp),
                     style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
@@ -2726,21 +2786,26 @@ fun ImageGroupBubble(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.End
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.Top
     ) {
+        // Name on the LEFT of the grid, slightly up (same as other items)
+        val displayName = group.messages.first().senderName ?: group.messages.first().sender
+        Text(
+            text = displayName,
+            style = MaterialTheme.typography.labelSmall,
+            color = getUserColor(displayName),
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            modifier = Modifier
+                .padding(top = 2.dp, end = 4.dp)
+                .widthIn(max = 64.dp)
+        )
+
         Column(
-            horizontalAlignment = Alignment.Start,
+            horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
             modifier = Modifier.widthIn(max = 280.dp)
         ) {
-            // Name at the TOP-LEFT of the item
-            val displayName = group.messages.first().senderName ?: group.messages.first().sender
-            Text(
-                text = displayName,
-                style = MaterialTheme.typography.labelSmall,
-                color = getUserColor(displayName),
-                modifier = Modifier.padding(bottom = 2.dp)
-            )
-
             Card(
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                 shape = MaterialTheme.shapes.medium,

@@ -80,6 +80,9 @@ class ChatRepository(private val context: Context) {
     private val _securityError = MutableStateFlow<String?>(null)
     val securityError = _securityError.asStateFlow()
 
+    private val _isServerConnected = MutableStateFlow(true)
+    val isServerConnected = _isServerConnected.asStateFlow()
+
     private val deviceId: String by lazy {
         android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "unknown_device"
     }
@@ -706,7 +709,7 @@ class ChatRepository(private val context: Context) {
         GlobalScope.launch(Dispatchers.IO) {
             val provider = storageProvider ?: return@launch
             messagesToDelete.forEach { msg ->
-                if (msg.type != com.cloudchat.model.MessageType.TEXT) {
+                if (msg.type != com.cloudchat.model.MessageType.TEXT && msg.content.isNotBlank()) {
                     // Recycle main file
                     try { provider.recycleFile(msg.content) } catch (e: Exception) {}
                     // Recycle thumbnail if exists
@@ -843,8 +846,10 @@ class ChatRepository(private val context: Context) {
 
                 provider.uploadText(gson.toJson(mergedList.sortedBy { it.timestamp }), "chat_history.json")
                 lastKnownCloudTime = provider.getLastModified("chat_history.json")
+                _isServerConnected.value = true
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Cloud sync on delete failed", e)
+                _isServerConnected.value = false
             }
         }
     }
@@ -1063,36 +1068,34 @@ class ChatRepository(private val context: Context) {
         val provider = storageProvider ?: return@withContext
         val config = currentConfig ?: return@withContext
         try {
-            val tempFile = File(context.cacheDir, "cloud_history.json")
-            provider.downloadFile("chat_history.json", tempFile)
-            if (tempFile.exists()) {
-                val json = tempFile.readText()
-                val rawCloudHistory: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) ?: emptyList()
-                val cloudHistory = rawCloudHistory.mapNotNull { sanitizeMessage(it) }
-                val cloudIds = cloudHistory.map { it.id }.toSet()
-
-                _messages.update { current ->
-                    // 1. Keep all messages from cloud
-                    // 2. Keep local messages that are NOT SUCCESS (sending or failed) and NOT in cloud
-                    // 3. Keep local messages that are SUCCESS but somehow NOT in cloud? (Wait, if they are SUCCESS but not in cloud, they were likely DELETED by others)
-                    
-                    val pendingOrFailed = current.filter { it.status != MessageStatus.SUCCESS && it.id !in cloudIds }
-                    
-                    val merged = cloudHistory.map { cloudMsg ->
-                        current.find { it.id == cloudMsg.id }?.let { localMsg ->
-                             // Prefer local if SUCCESS, but usually cloud version of a SUCCESS message is the same.
-                             // Update local if cloud has more info? Not much to update usually.
-                             cloudMsg // Cloud is truth for historical messages
-                        } ?: cloudMsg
-                    } + pendingOrFailed
-                    
-                    merged.sortedBy { it.timestamp }
-                }
-                saveLocalHistory(config.id)
-                lastKnownCloudTime = provider.getLastModified("chat_history.json")
+            // chat_history.json 是唯一真相来源：
+            // - 不存在（404）→ 以本地为准，不动本地消息
+            // - 存在 → 以云端为准，与其同步
+            val json = provider.downloadText("chat_history.json")
+            if (json == null) {
+                _isServerConnected.value = true
+                return@withContext
             }
+            val rawCloudHistory: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) ?: emptyList()
+            val cloudHistory = rawCloudHistory.mapNotNull { sanitizeMessage(it) }
+            val cloudIds = cloudHistory.map { it.id }.toSet()
+
+            _messages.update { current ->
+                // 1. 云端消息为历史真相
+                // 2. 保留本地「未成功(发送中/失败) 且不在云端」的消息，避免丢失正在发送的内容
+                val pendingOrFailed = current.filter { it.status != MessageStatus.SUCCESS && it.id !in cloudIds }
+                val merged = cloudHistory.map { cloudMsg ->
+                    current.find { it.id == cloudMsg.id }?.let { cloudMsg } ?: cloudMsg
+                } + pendingOrFailed
+                merged.sortedBy { it.timestamp }
+            }
+
+            saveLocalHistory(config.id)
+            lastKnownCloudTime = provider.getLastModified("chat_history.json")
+            _isServerConnected.value = true
         } catch (e: Exception) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
+            _isServerConnected.value = false
         }
     }
 
