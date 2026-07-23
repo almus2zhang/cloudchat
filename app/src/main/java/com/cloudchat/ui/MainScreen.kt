@@ -4,6 +4,8 @@ import android.net.Uri
 import android.util.Log
 import android.content.ContentValues
 import android.provider.MediaStore
+import android.provider.DocumentsContract
+import android.content.ContentUris
 import android.os.Build
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
@@ -11,10 +13,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.IntentSenderRequest
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -75,7 +79,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.runtime.snapshotFlow
 import java.io.File
@@ -119,6 +122,7 @@ fun MainScreen(
     var showChangePrivacyPasswordDialog by remember { mutableStateOf(false) }
     val sharedPrefs = remember { context.getSharedPreferences("cloudchat_privacy", android.content.Context.MODE_PRIVATE) }
     var privacyPin by remember { mutableStateOf(sharedPrefs.getString("pin", "1234") ?: "1234") }
+    var deleteSourceAfterSend by remember { mutableStateOf(sharedPrefs.getBoolean("delete_source_after_send", false)) }
     val appMode by settingsRepository.appMode.collectAsState(initial = com.cloudchat.model.AppMode.NOT_SET)
     val isSecurityAuthenticated by chatRepository.isSecurityAuthenticated.collectAsState()
     var showSecurityOverlay by remember { mutableStateOf(false) }
@@ -133,7 +137,7 @@ fun MainScreen(
     var showEditTextDialog by remember { mutableStateOf(false) }
     var showEditCaptionDialog by remember { mutableStateOf(false) }
     var editingTargetMessage by remember { mutableStateOf<com.cloudchat.model.ChatMessage?>(null) }
-
+    var isMediaSyncing by remember { mutableStateOf(false) }
     // --- Selection and Haptic States ---
     var textSelectionClearKey by remember { mutableStateOf(0) }
     var isTextSelected by remember { mutableStateOf(false) }
@@ -141,6 +145,94 @@ fun MainScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val scope = rememberCoroutineScope()
+
+    // —— 移动模式：上传成功后删除源文件（图库需用户授权确认，避免误删）——
+    val sourceDeleteQueue = remember { mutableStateListOf<Uri>() }
+    val sourceDeleteLauncher = remember {
+        mutableStateOf<androidx.activity.result.ActivityResultLauncher<IntentSenderRequest>?>(null)
+    }
+
+    // 把图库返回的 SAF 代理 URI（content://com.android.providers.media.documents/...）
+    // 解析为真正的 MediaStore URI（content://media/external/...），createWriteRequest 才能生效
+    fun resolveMediaStoreUri(uri: Uri): Uri {
+        if (DocumentsContract.isDocumentUri(context, uri)) {
+            try {
+                val docId = DocumentsContract.getDocumentId(uri)
+                val split = docId.split(":")
+                if (split.size == 2) {
+                    val type = split[0]
+                    val id = split[1].toLongOrNull() ?: return uri
+                    val contentUri = when (type) {
+                        "image" -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                        "video" -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                        "audio" -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                        else -> MediaStore.Files.getContentUri("external")
+                    }
+                    return ContentUris.withAppendedId(contentUri, id)
+                }
+            } catch (e: Exception) {
+                Log.w("MainScreen", "Failed to resolve media document uri", e)
+            }
+        }
+        return uri
+    }
+
+    fun advanceSourceDelete() {
+        val uri = sourceDeleteQueue.firstOrNull() ?: return
+        when (uri.scheme) {
+            "file" -> {
+                try { File(uri.path ?: "").delete() }
+                catch (e: Exception) { Log.w("MainScreen", "Failed to delete source (file)", e) }
+                sourceDeleteQueue.removeAt(0)
+                advanceSourceDelete()
+            }
+            "content" -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val realUri = resolveMediaStoreUri(uri)
+                    try {
+                        val req = MediaStore.createWriteRequest(context.contentResolver, listOf(realUri))
+                        sourceDeleteLauncher.value?.launch(IntentSenderRequest.Builder(req.intentSender).build())
+                    } catch (e: Exception) {
+                        // 部分 content URI（如 SAF 文档）不支持 createWriteRequest，回退直接删除
+                        Log.w("MainScreen", "createWriteRequest failed, fallback to direct delete", e)
+                        try { context.contentResolver.delete(realUri, null, null) }
+                        catch (e2: Exception) { Log.w("MainScreen", "Fallback delete failed", e2) }
+                        sourceDeleteQueue.removeAt(0)
+                        advanceSourceDelete()
+                    }
+                } else {
+                    try { context.contentResolver.delete(uri, null, null) }
+                    catch (e: Exception) { Log.w("MainScreen", "Failed to delete source (content)", e) }
+                    sourceDeleteQueue.removeAt(0)
+                    advanceSourceDelete()
+                }
+            }
+        }
+    }
+
+    sourceDeleteLauncher.value = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val uri = sourceDeleteQueue.firstOrNull()
+        if (uri != null) {
+            if (result.resultCode == android.app.Activity.RESULT_OK) {
+                val realUri = resolveMediaStoreUri(uri)
+                try { context.contentResolver.delete(realUri, null, null) }
+                catch (e: Exception) { Log.w("MainScreen", "Failed to delete source (content)", e) }
+            } else {
+                Log.i("MainScreen", "User denied deleting source: $uri")
+            }
+            sourceDeleteQueue.removeAt(0)
+            advanceSourceDelete()
+        }
+    }
+
+    LaunchedEffect(chatRepository) {
+        chatRepository.sourceReadyToDelete.collect { uriStr ->
+            sourceDeleteQueue.add(Uri.parse(uriStr))
+            if (sourceDeleteQueue.size == 1) advanceSourceDelete()
+        }
+    }
 
     LaunchedEffect(currentFolderId, messages) {
         if (currentFolderId != null) {
@@ -445,6 +537,23 @@ fun MainScreen(
                     )
                 }
 
+                // Sync All Media Files Button
+                IconButton(modifier = Modifier.size(40.dp), onClick = {
+                    if (isMediaSyncing) return@IconButton
+                    isMediaSyncing = true
+                    scope.launch {
+                        chatRepository.syncAllMediaFiles { current, total ->
+                            if (current >= total || total == 0) isMediaSyncing = false
+                        }
+                    }
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.CloudSync,
+                        contentDescription = "同步所有文件",
+                        tint = if (isMediaSyncing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
                 // Sync Interval Toggle (Bolt icon colored by mode)
                 IconButton(modifier = Modifier.size(40.dp), onClick = {
                     chatRepository.setSyncInterval(if (isFast) 5000L else 1000L)
@@ -555,7 +664,8 @@ fun MainScreen(
                         fileName = name,
                         localUri = uri.toString(),
                         locationAddress = address,
-                        folderId = currentFolderId
+                        folderId = currentFolderId,
+                        deleteSourceFile = deleteSourceAfterSend && type == com.cloudchat.model.MessageType.IMAGE
                     )
                 } catch (e: Exception) {
                     Log.e("MainScreen", "Failed to open file", e)
@@ -565,7 +675,7 @@ fun MainScreen(
     }
 
     val multimediaPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia(),
+        contract = ActivityResultContracts.GetMultipleContents(),
         onResult = handleUris
     )
 
@@ -581,12 +691,14 @@ fun MainScreen(
                 data.uri?.let { uri ->
                     val stream = context.contentResolver.openInputStream(uri)
                     val name = getFileName(context, uri)
-                    chatRepository.sendMessage(name, determineMessageType(context, uri, name), stream, name, uri.toString(), folderId = currentFolderId)
+                    val type = determineMessageType(context, uri, name)
+                    chatRepository.sendMessage(name, type, stream, name, uri.toString(), folderId = currentFolderId, deleteSourceFile = deleteSourceAfterSend && type == com.cloudchat.model.MessageType.IMAGE)
                 }
                 data.uris?.forEach { uri ->
                     val stream = context.contentResolver.openInputStream(uri)
                     val name = getFileName(context, uri)
-                    chatRepository.sendMessage(name, determineMessageType(context, uri, name), stream, name, uri.toString(), folderId = currentFolderId)
+                    val type = determineMessageType(context, uri, name)
+                    chatRepository.sendMessage(name, type, stream, name, uri.toString(), folderId = currentFolderId, deleteSourceFile = deleteSourceAfterSend && type == com.cloudchat.model.MessageType.IMAGE)
                 }
                 onSharedDataHandled()
             }
@@ -729,6 +841,9 @@ fun MainScreen(
                                     if (selectedIds.isEmpty()) {
                                         selectedIds = setOf(clickedMsg.id)
                                     }
+                                },
+                                onLongClickGroup = {
+                                    selectedIds = selectedIds + uiItem.messages.map { it.id }
                                 }
                             )
                         }
@@ -930,7 +1045,7 @@ fun MainScreen(
                 ) {
                     AttachmentPanel(
                         onImageClick = {
-                            multimediaPickerLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+                            multimediaPickerLauncher.launch("image/*")
                             isAttachmentPanelVisible = false
                         },
                         onFileClick = {
@@ -949,6 +1064,11 @@ fun MainScreen(
                                 sendNativeLocation(context, chatRepository, scope, folderId = currentFolderId)
                             }
                             isAttachmentPanelVisible = false
+                        },
+                        deleteSourceAfterSend = deleteSourceAfterSend,
+                        onToggleDeleteSource = {
+                            deleteSourceAfterSend = it
+                            sharedPrefs.edit().putBoolean("delete_source_after_send", it).apply()
                         }
                     )
                 }
@@ -967,7 +1087,15 @@ fun MainScreen(
                     initialIndex = initialIndex,
                     chatRepository = chatRepository,
                     onDismiss = { mediaPagerIndex = null },
-                    onSelectIndex = { mediaPagerIndex = it }
+                    onSelectIndex = { mediaPagerIndex = it },
+                    selectedIds = selectedIds,
+                    onToggleSelect = { clickedMsg ->
+                        selectedIds = if (selectedIds.contains(clickedMsg.id)) {
+                            selectedIds - clickedMsg.id
+                        } else {
+                            selectedIds + clickedMsg.id
+                        }
+                    }
                 )
             }
         }
@@ -1319,7 +1447,9 @@ fun MediaPagerOverlay(
     initialIndex: Int,
     chatRepository: ChatRepository,
     onDismiss: () -> Unit,
-    onSelectIndex: (Int) -> Unit
+    onSelectIndex: (Int) -> Unit,
+    selectedIds: Set<String> = emptySet(),
+    onToggleSelect: (ChatMessage) -> Unit = {}
 ) {
     val pagerState = rememberPagerState(initialPage = initialIndex, pageCount = { mediaMessages.size })
     var showGrid by remember { mutableStateOf(false) }
@@ -1528,13 +1658,30 @@ fun MediaPagerOverlay(
                                 modifier = Modifier
                                     .aspectRatio(1f)
                                     .clip(MaterialTheme.shapes.small)
-                                    .clickable { 
-                                        scope.launch {
-                                            pagerState.scrollToPage(index)
-                                            onSelectIndex(index)
-                                            showGrid = false
+                                    .background(Color.Transparent)
+                                    .then(
+                                        if (selectedIds.contains(msg.id))
+                                            Modifier.border(2.dp, Color(0xFF81C784))
+                                        else Modifier
+                                    )
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selectedIds.isNotEmpty()) {
+                                                onToggleSelect(msg)
+                                            } else {
+                                                scope.launch {
+                                                    pagerState.scrollToPage(index)
+                                                    onSelectIndex(index)
+                                                    showGrid = false
+                                                }
+                                            }
+                                        },
+                                        onLongClick = {
+                                            if (!selectedIds.contains(msg.id)) {
+                                                onToggleSelect(msg)
+                                            }
                                         }
-                                    }
+                                    )
                             ) {
                                 AsyncImage(
                                     model = uri,
@@ -1542,6 +1689,21 @@ fun MediaPagerOverlay(
                                     modifier = Modifier.fillMaxSize(),
                                     contentScale = ContentScale.Crop
                                 )
+                                if (selectedIds.contains(msg.id)) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(Color.Black.copy(alpha = 0.35f)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = "Selected",
+                                            tint = Color(0xFF81C784),
+                                            modifier = Modifier.size(28.dp)
+                                        )
+                                    }
+                                }
                                 if (msg.type == MessageType.VIDEO) {
                                     Icon(
                                         Icons.Default.PlayArrow, 
@@ -2303,6 +2465,8 @@ fun AttachmentPanel(
     onImageClick: () -> Unit,
     onFileClick: () -> Unit,
     onLocationClick: () -> Unit,
+    deleteSourceAfterSend: Boolean = false,
+    onToggleDeleteSource: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -2310,30 +2474,54 @@ fun AttachmentPanel(
         tonalElevation = 2.dp,
         modifier = modifier.fillMaxWidth()
     ) {
-        Row(
+        Column(
             modifier = Modifier
-                .padding(vertical = 32.dp, horizontal = 16.dp)
-                .fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
+                .fillMaxWidth()
+                .padding(vertical = 16.dp, horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            AttachmentOption(
-                icon = Icons.Default.Image,
-                label = "Images",
-                color = Color(0xFF4CAF50),
-                onClick = onImageClick
-            )
-            AttachmentOption(
-                icon = Icons.Default.LocationOn,
-                label = "Location",
-                color = Color(0xFFFF9800),
-                onClick = onLocationClick
-            )
-            AttachmentOption(
-                icon = Icons.Default.InsertDriveFile,
-                label = "Files",
-                color = Color(0xFF2196F3),
-                onClick = onFileClick
-            )
+            Row(
+                modifier = Modifier
+                    .padding(vertical = 16.dp)
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                AttachmentOption(
+                    icon = Icons.Default.Image,
+                    label = "Images",
+                    color = Color(0xFF4CAF50),
+                    onClick = onImageClick
+                )
+                AttachmentOption(
+                    icon = Icons.Default.LocationOn,
+                    label = "Location",
+                    color = Color(0xFFFF9800),
+                    onClick = onLocationClick
+                )
+                AttachmentOption(
+                    icon = Icons.Default.InsertDriveFile,
+                    label = "Files",
+                    color = Color(0xFF2196F3),
+                    onClick = onFileClick
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = deleteSourceAfterSend,
+                    onCheckedChange = onToggleDeleteSource
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "发送后删除源文件（移动）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
         }
     }
 }
@@ -2769,7 +2957,8 @@ fun ImageGroupBubble(
     selectedIds: Set<String>,
     onSelectToggle: (com.cloudchat.model.ChatMessage) -> Unit,
     onMediaClick: (com.cloudchat.model.ChatMessage) -> Unit,
-    onLongClick: (com.cloudchat.model.ChatMessage) -> Unit
+    onLongClick: (com.cloudchat.model.ChatMessage) -> Unit,
+    onLongClickGroup: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val isOutgoing = group.messages.first().isOutgoing
@@ -2785,7 +2974,11 @@ fun ImageGroupBubble(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
+            .padding(vertical = 4.dp)
+            .combinedClickable(
+                onClick = {},
+                onLongClick = onLongClickGroup
+            ),
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.Top
     ) {
@@ -2865,7 +3058,7 @@ fun ImageGroupBubble(
                                                 Icon(
                                                     imageVector = Icons.Default.CheckCircle,
                                                     contentDescription = "Selected",
-                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    tint = Color(0xFF81C784),
                                                     modifier = Modifier.size(24.dp)
                                                 )
                                             }

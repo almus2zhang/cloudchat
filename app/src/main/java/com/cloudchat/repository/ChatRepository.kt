@@ -26,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
@@ -81,6 +82,9 @@ class ChatRepository(private val context: Context) {
     val securityError = _securityError.asStateFlow()
 
     private val _isServerConnected = MutableStateFlow(true)
+
+    /** 文件已成功上传后，待删除的源文件 URI（图库需经用户授权确认才可删）。 */
+    val sourceReadyToDelete = MutableSharedFlow<String>(extraBufferCapacity = 32)
     val isServerConnected = _isServerConnected.asStateFlow()
 
     private val deviceId: String by lazy {
@@ -298,6 +302,7 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun updateConfig(config: ServerConfig, appMode: com.cloudchat.model.AppMode) {
+        val oldConfig = currentConfig
         currentConfig = config
         if (config.type == com.cloudchat.model.StorageType.WEBDAV) {
             val user = config.webDavUser ?: ""
@@ -337,9 +342,28 @@ class ChatRepository(private val context: Context) {
             storageProvider?.testConnection()
         }
 
-        loadLocalHistory(config.id)
-        if (_messages.value.isEmpty()) {
+        // 判断存储位置/账号是否发生变化。若变化（例如仅调整了 serverPath/saveDir，
+        // 但 config.id 不变），旧的本地缓存历史已失效，必须按云端（新位置）重新加载，
+        // 否则会错误地显示上一个位置的消息。
+        val locationChanged = oldConfig == null || oldConfig.id != config.id ||
+            oldConfig.type != config.type ||
+            oldConfig.webDavUrl != config.webDavUrl ||
+            oldConfig.serverPath != config.serverPath ||
+            oldConfig.saveDir != config.saveDir ||
+            oldConfig.username != config.username ||
+            oldConfig.bucket != config.bucket ||
+            oldConfig.fullModePath != config.fullModePath
+
+        if (locationChanged) {
+            // 位置变了：清空旧消息，直接以新位置的云端历史为准（无历史则显示空）
+            _messages.value = emptyList()
             refreshHistoryFromCloud()
+        } else {
+            // 位置未变（仅修改证书/分块等设置）：保留本地缓存，离线也能看
+            loadLocalHistory(config.id)
+            if (_messages.value.isEmpty()) {
+                refreshHistoryFromCloud()
+            }
         }
         uploadLoginLog(config)
         startSyncLoop()
@@ -423,7 +447,8 @@ class ChatRepository(private val context: Context) {
         locationAddress: String? = null,
         categories: List<String>? = null,
         groupId: String? = null,
-        folderId: String? = null
+        folderId: String? = null,
+        deleteSourceFile: Boolean = false
     ) {
         val provider = storageProvider ?: return
         val config = currentConfig ?: return
@@ -648,6 +673,15 @@ class ChatRepository(private val context: Context) {
 
                     updateMessageStatus(newMessage.id, MessageStatus.SUCCESS)
                     _uploadProgress.update { it - newMessage.id }
+
+                    // 移动模式：上传已成功，先把应用内显示指向本地缓存副本，
+                    // 再通知 UI 删除原始源文件（图库需用户授权，避免误删）
+                    if (deleteSourceFile && localUri != null) {
+                        val cache = getLocalFile(newMessage.id, newMessage.content)
+                        if (cache.exists()) transientLocalUris[newMessage.id] = "file://${cache.absolutePath}"
+                        else transientLocalUris.remove(newMessage.id)
+                        sourceReadyToDelete.tryEmit(localUri)
+                    }
                 } else {
                     provider.uploadText(content, "msg_${System.currentTimeMillis()}.txt")
                 }
@@ -814,42 +848,68 @@ class ChatRepository(private val context: Context) {
     private fun syncHistory(excludeIds: List<String> = emptyList()) {
         val config = currentConfig ?: return
         val currentList = _messages.value
+        // 本地仅作为离线缓存，不影响云端真相
         context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE).edit().putString("history_${config.id}", gson.toJson(currentList)).apply()
-        
-        // Also save to the file we were using
+
+        // Also save to the file we were using (offline cache only)
         val file = getLocalHistoryFile(config.id)
         file.writeText(gson.toJson(currentList))
-        
+
         // Sync to cloud in background
         GlobalScope.launch(Dispatchers.IO) {
             try {
                 val provider = storageProvider ?: return@launch
-                
-                // Fetch latest from cloud first to merge
+
+                // 以云端 history 为唯一真相来源：先下载云端，再决定合并什么
                 val tempFile = File(context.cacheDir, "cloud_history_merge.json")
-                var mergedList = currentList
+                var cloudList: List<ChatMessage> = emptyList()
+                var cloudExists = false
                 try {
                     provider.downloadFile("chat_history.json", tempFile)
                     if (tempFile.exists()) {
                         val json = tempFile.readText()
                         val rawCloudList: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
-                        val cloudList = rawCloudList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
-                        
-                        val localIds = currentList.map { it.id }.toSet()
-                        // Merge logic: include cloud messages that are NOT in local AND NOT in excludeIds
-                        val uniqueCloud = cloudList.filter { it.id !in localIds && it.id !in excludeIds }
-                        mergedList = currentList + uniqueCloud
+                        cloudList = rawCloudList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
+                        cloudExists = true
                     }
                 } catch (e: Exception) {
-                    // History might not exist yet
+                    // History might not exist yet on the server
                 }
 
-                provider.uploadText(gson.toJson(mergedList.sortedBy { it.timestamp }), "chat_history.json")
-                lastKnownCloudTime = provider.getLastModified("chat_history.json")
+                val cloudIds = cloudList.map { it.id }.toSet()
+                // 仅把本地「未成功(正在发送/失败)且不在云端」的条目合并上去；
+                // 本地已成功但云端没有的条目视为上一位置/旧会话的残留，不以本地为准上传。
+                val localPending = currentList.filter {
+                    it.status != MessageStatus.SUCCESS && it.id !in cloudIds && it.id !in excludeIds
+                }
+
+                if (cloudExists) {
+                    // 云端已有历史：以云端为基础，过滤掉被删除的条目(excludeIds)
+                    val filteredCloudList = cloudList.filter { it.id !in excludeIds }
+                    
+                    // 合并策略：
+                    // 1. 如果云端和本地都有该消息，以本地为准（因为本地可能有最新修改，如文本编辑、加入文件夹等）
+                    // 2. 如果只有云端有（且未被删除），保留云端版本
+                    // 3. 如果只有本地有（如因竞态未写入云端的新消息），保留本地版本
+                    val mergedList = filteredCloudList.map { cloudMsg ->
+                        currentList.find { it.id == cloudMsg.id } ?: cloudMsg
+                    } + currentList.filter { it.id !in filteredCloudList.map { m -> m.id } }
+                    
+                    val finalList = mergedList.sortedBy { it.timestamp }
+                    provider.uploadText(gson.toJson(finalList), "chat_history.json")
+                    lastKnownCloudTime = provider.getLastModified("chat_history.json")
+                    _messages.update { finalList }
+                } else {
+                    // 云端尚无 history：只上传本地正在发送的条目，绝不把本地成功消息推上去
+                    if (localPending.isNotEmpty()) {
+                        provider.uploadText(gson.toJson(localPending.sortedBy { it.timestamp }), "chat_history.json")
+                        lastKnownCloudTime = provider.getLastModified("chat_history.json")
+                    }
+                }
                 _isServerConnected.value = true
             } catch (e: Exception) {
-                Log.e("ChatRepository", "Cloud sync on delete failed", e)
-                _isServerConnected.value = false
+                Log.e("ChatRepository", "Cloud sync failed", e)
+                _isServerConnected.value = storageProvider?.isReachable() ?: false
             }
         }
     }
@@ -1073,6 +1133,13 @@ class ChatRepository(private val context: Context) {
             // - 存在 → 以云端为准，与其同步
             val json = provider.downloadText("chat_history.json")
             if (json == null) {
+                _messages.update { current ->
+                    // Keep only pending or failed messages
+                    current.filter { it.status != MessageStatus.SUCCESS }
+                }
+                saveLocalHistory(config.id)
+                provider.uploadText("[]", "chat_history.json")
+                lastKnownCloudTime = provider.getLastModified("chat_history.json")
                 _isServerConnected.value = true
                 return@withContext
             }
@@ -1095,7 +1162,7 @@ class ChatRepository(private val context: Context) {
             _isServerConnected.value = true
         } catch (e: Exception) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
-            _isServerConnected.value = false
+            _isServerConnected.value = provider.isReachable()
         }
     }
 
@@ -1338,5 +1405,57 @@ class ChatRepository(private val context: Context) {
             }
         }
         syncHistory()
+    }
+
+    suspend fun syncAllMediaFiles(onProgress: (Int, Int) -> Unit) = withContext(Dispatchers.IO) {
+        val provider = storageProvider ?: return@withContext
+        val allMediaMsgs = _messages.value.filter { 
+            it.type in listOf(com.cloudchat.model.MessageType.IMAGE, com.cloudchat.model.MessageType.VIDEO, com.cloudchat.model.MessageType.AUDIO, com.cloudchat.model.MessageType.FILE) 
+        }
+        val total = allMediaMsgs.size
+        if (total == 0) {
+            onProgress(0, 0)
+            return@withContext
+        }
+        
+        var current = 0
+        allMediaMsgs.forEach { msg ->
+            current++
+            onProgress(current, total)
+            
+            val fileName = msg.content
+            if (fileName.isBlank()) return@forEach
+            
+            val localFile = getLocalFile(msg.id, fileName)
+            val cloudLastModified = provider.getLastModified(fileName)
+            val cloudExists = cloudLastModified > 0
+            val localExists = localFile.exists()
+            
+            if (localExists && !cloudExists) {
+                // Upload to server
+                try {
+                    provider.uploadFile(localFile.inputStream(), fileName, "application/octet-stream", localFile.length(), null)
+                    msg.thumbnailUrl?.let { thumbUrl ->
+                        val thumbFile = File(context.cacheDir, "thumb_$fileName")
+                        if (thumbFile.exists()) {
+                            provider.uploadFile(thumbFile.inputStream(), "thumb_$fileName", "image/jpeg", thumbFile.length(), null)
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("ChatRepository", "Sync upload failed for $fileName", e)
+                }
+            } else if (!localExists && cloudExists) {
+                // Download to local
+                try {
+                    downloadFileToCache(msg.id, fileName, msg.remoteUrl ?: "")
+                    msg.thumbnailUrl?.let { thumbUrl ->
+                        val thumbFile = File(context.cacheDir, "thumb_$fileName")
+                        provider.downloadFile("thumb_$fileName", thumbFile, null)
+                    }
+                } catch (e: Exception) {
+                    Log.e("ChatRepository", "Sync download failed for $fileName", e)
+                }
+            }
+        }
     }
 }

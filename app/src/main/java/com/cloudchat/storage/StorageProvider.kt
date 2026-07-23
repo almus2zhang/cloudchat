@@ -19,6 +19,8 @@ interface StorageProvider {
     suspend fun downloadFile(fileName: String, destination: File, onProgress: ((Int) -> Unit)? = null)
     suspend fun getFileSize(fileName: String): Long // For verification
     suspend fun getLastModified(fileName: String): Long
+    /** 任一配置地址（主/备用）能否连通。默认 true；WebDAV 会实测两个地址。 */
+    suspend fun isReachable(): Boolean = true
     suspend fun deleteFile(fileName: String)
     fun getFullUrl(fileName: String): String
     suspend fun uploadFileRange(

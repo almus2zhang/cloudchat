@@ -184,6 +184,23 @@ class WebDavStorageProvider(
         if (allOk) Result.success(detail) else Result.failure(Exception(detail))
     }
 
+    override suspend fun isReachable(): Boolean = withContext(Dispatchers.IO) {
+        suspend fun tryOnce(url: String): Boolean = try {
+            // 只要能收到任意 HTTP 响应（含 401/403/404）即说明网络可达；
+            // 仅当连接层异常（DNS/TLS/超时/拒绝）抛 IOException 时才算不可达。
+            val resp = client.newCall(
+                Request.Builder().url(url).head().addHeader("Authorization", auth).build()
+            ).execute()
+            resp.close()
+            true
+        } catch (e: Exception) {
+            false
+        }
+        if (tryOnce(getBaseUrl(false))) return@withContext true
+        if (!config.webDavFallbackUrl.isNullOrBlank() && tryOnce(getBaseUrl(true))) return@withContext true
+        false
+    }
+
     private fun testSingleUrl(testUrl: String): Result<String> {
         repeat(2) { attempt ->
             try {
