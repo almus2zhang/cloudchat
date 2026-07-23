@@ -36,7 +36,9 @@ data class ChatMessage(
     val isHidden: Boolean = false,
     val caption: String? = null,
     val isEdited: Boolean = false,
-    val folderId: String? = null // For packing messages into a FOLDER
+    val folderId: String? = null, // For packing messages into a FOLDER
+    val isDeleted: Boolean = false,
+    val lastModified: Long = System.currentTimeMillis()
 ) {
     val safeCategories: List<String>
         get() = categories ?: emptyList()

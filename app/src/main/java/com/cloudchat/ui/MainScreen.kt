@@ -138,6 +138,7 @@ fun MainScreen(
     var showEditCaptionDialog by remember { mutableStateOf(false) }
     var editingTargetMessage by remember { mutableStateOf<com.cloudchat.model.ChatMessage?>(null) }
     var isMediaSyncing by remember { mutableStateOf(false) }
+    var showImagePicker by remember { mutableStateOf(false) }
     // --- Selection and Haptic States ---
     var textSelectionClearKey by remember { mutableStateOf(0) }
     var isTextSelected by remember { mutableStateOf(false) }
@@ -594,6 +595,7 @@ fun MainScreen(
 
     val displayedMessages = remember(messages, searchQuery, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId) {
         val filtered = messages.filter {
+            if (it.isDeleted) return@filter false
             val matchesPrivacy = if (isPrivacyMode) {
                 if (viewOnlyPrivacyItems) it.isHidden == true else true
             } else {
@@ -1045,7 +1047,7 @@ fun MainScreen(
                 ) {
                     AttachmentPanel(
                         onImageClick = {
-                            multimediaPickerLauncher.launch("image/*")
+                            showImagePicker = true
                             isAttachmentPanelVisible = false
                         },
                         onFileClick = {
@@ -1139,6 +1141,8 @@ fun MainScreen(
                         }
                     }
 
+
+
                     // 2. Edit Text / Caption / Rename Folder
                     if (selectedIds.size == 1) {
                         val firstId = selectedIds.firstOrNull()
@@ -1189,12 +1193,38 @@ fun MainScreen(
                         }
                     }
 
-                    // 5. Combine / Merge (Grid)
+                    // 5. Combine / Merge (Text & Grid)
                     if (selectedIds.size >= 2) {
                         IconButton(onClick = {
                             val newGroupId = "group_${System.currentTimeMillis()}"
                             scope.launch {
-                                chatRepository.groupSelectedMessages(selectedIds, newGroupId)
+                                val selectedTextMsgs = selectedIds.mapNotNull { id -> messages.find { it.id == id } }.filter { it.type == MessageType.TEXT }
+                                val textIds = selectedTextMsgs.map { it.id }.toSet()
+                                val nonTextIds = selectedIds - textIds
+
+                                // Merge texts
+                                if (selectedTextMsgs.size >= 2) {
+                                    val mergedText = selectedTextMsgs.sortedBy { it.timestamp }.joinToString("\n") { it.content }
+                                    chatRepository.deleteMessages(textIds.toList())
+                                    chatRepository.sendMessage(
+                                        content = mergedText,
+                                        type = MessageType.TEXT,
+                                        inputStream = null,
+                                        fileName = null,
+                                        localUri = null,
+                                        locationAddress = null,
+                                        folderId = currentFolderId,
+                                        deleteSourceFile = false
+                                    )
+                                }
+
+                                // Group images (and other types)
+                                if (nonTextIds.size >= 2) {
+                                    chatRepository.groupSelectedMessages(nonTextIds, newGroupId)
+                                } else if (nonTextIds.size == 1 && selectedTextMsgs.isEmpty()) {
+                                    // Normally not reachable because total size >= 2
+                                }
+
                                 selectedIds = emptySet()
                             }
                         }) {
@@ -1280,8 +1310,11 @@ fun MainScreen(
                                             }
                                         }
                                         if (!longPressHandled) {
-                                            // Short press: ask for delete confirmation
-                                            showDeleteMessagesConfirmDialog = true
+                                            // Short press: execute delete immediately
+                                            scope.launch {
+                                                chatRepository.deleteMessages(selectedIds.toList())
+                                                selectedIds = emptySet()
+                                            }
                                         }
                                     }
                                 )
@@ -1356,6 +1389,49 @@ fun MainScreen(
 
         if (showSecurityOverlay) {
             SecurityOverlay(chatRepository = chatRepository)
+        }
+
+        if (showImagePicker) {
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = { showImagePicker = false },
+                properties = androidx.compose.ui.window.DialogProperties(
+                    usePlatformDefaultWidth = false,
+                    decorFitsSystemWindows = false
+                )
+            ) {
+                Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                    ImagePickerScreen(
+                        onResult = { selectedItems, isMove ->
+                            showImagePicker = false
+                            scope.launch {
+                                selectedItems.forEach { item ->
+                                    try {
+                                        val name = getFileName(context, item.uri)
+                                        val stream = context.contentResolver.openInputStream(item.uri)
+                                        val type = determineMessageType(context, item.uri, name)
+                                        val address = if (attachLocationEnabled) fetchAddressQuickly(context) else null
+                                        chatRepository.sendMessage(
+                                            content = name, 
+                                            type = type, 
+                                            inputStream = stream, 
+                                            fileName = name,
+                                            localUri = item.uri.toString(),
+                                            locationAddress = address,
+                                            folderId = currentFolderId,
+                                            deleteSourceFile = isMove
+                                        )
+                                    } catch (e: Exception) {
+                                        android.util.Log.e("MainScreen", "Failed to open file", e)
+                                    }
+                                }
+                            }
+                        },
+                        onCancel = {
+                            showImagePicker = false
+                        }
+                    )
+                }
+            }
         }
 
         MainScreenDialogs(
@@ -2503,23 +2579,6 @@ fun AttachmentPanel(
                     label = "Files",
                     color = Color(0xFF2196F3),
                     onClick = onFileClick
-                )
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Checkbox(
-                    checked = deleteSourceAfterSend,
-                    onCheckedChange = onToggleDeleteSource
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "发送后删除源文件（移动）",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
         }

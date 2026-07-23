@@ -405,7 +405,7 @@ class ChatRepository(private val context: Context) {
                 delay(_syncInterval.value)
                 try {
                     val provider = storageProvider ?: continue
-                    val remoteTime = provider.getLastModified("chat_history.json")
+                    val remoteTime = provider.getLastModified("chat_index.json")
                     if (remoteTime > lastKnownCloudTime) {
                         Log.d("ChatRepository", "Cloud change detected, refreshing...")
                         refreshHistoryFromCloud()
@@ -685,7 +685,6 @@ class ChatRepository(private val context: Context) {
                 } else {
                     provider.uploadText(content, "msg_${System.currentTimeMillis()}.txt")
                 }
-                provider.uploadText(gson.toJson(_messages.value), "chat_history.json")
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Cloud upload failed for message ${newMessage.id}", e)
                 _uploadProgress.update { it - newMessage.id }
@@ -733,9 +732,14 @@ class ChatRepository(private val context: Context) {
         val messagesToDelete = _messages.value.filter { 
             it.id in ids || (targetContents.contains(it.content) && targetTimestamps.contains(it.timestamp))
         }
+        
         _messages.update { list ->
-            list.filterNot { 
-                it.id in ids || (targetContents.contains(it.content) && targetTimestamps.contains(it.timestamp))
+            list.map { msg ->
+                if (msg.id in ids || (targetContents.contains(msg.content) && targetTimestamps.contains(msg.timestamp))) {
+                    msg.copy(isDeleted = true, lastModified = System.currentTimeMillis())
+                } else {
+                    msg
+                }
             }
         }
         
@@ -845,67 +849,76 @@ class ChatRepository(private val context: Context) {
         }
     }
 
+    private fun getMonthShardName(timestamp: Long): String {
+        val sdf = java.text.SimpleDateFormat("yyyy_MM", java.util.Locale.getDefault())
+        return "chat_history_${sdf.format(java.util.Date(timestamp))}.json"
+    }
+
     private fun syncHistory(excludeIds: List<String> = emptyList()) {
         val config = currentConfig ?: return
         val currentList = _messages.value
-        // 本地仅作为离线缓存，不影响云端真相
         context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE).edit().putString("history_${config.id}", gson.toJson(currentList)).apply()
+        getLocalHistoryFile(config.id).writeText(gson.toJson(currentList))
 
-        // Also save to the file we were using (offline cache only)
-        val file = getLocalHistoryFile(config.id)
-        file.writeText(gson.toJson(currentList))
-
-        // Sync to cloud in background
         GlobalScope.launch(Dispatchers.IO) {
             try {
                 val provider = storageProvider ?: return@launch
-
-                // 以云端 history 为唯一真相来源：先下载云端，再决定合并什么
-                val tempFile = File(context.cacheDir, "cloud_history_merge.json")
-                var cloudList: List<ChatMessage> = emptyList()
-                var cloudExists = false
-                try {
-                    provider.downloadFile("chat_history.json", tempFile)
-                    if (tempFile.exists()) {
-                        val json = tempFile.readText()
-                        val rawCloudList: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
-                        cloudList = rawCloudList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
-                        cloudExists = true
-                    }
-                } catch (e: Exception) {
-                    // History might not exist yet on the server
+                
+                var indexJson = provider.downloadText("chat_index.json")
+                val shardNames = mutableSetOf<String>()
+                if (indexJson != null) {
+                    try {
+                        val list: List<String> = gson.fromJson(indexJson, object : TypeToken<List<String>>() {}.type)
+                        shardNames.addAll(list)
+                    } catch (e: Exception) {}
                 }
-
-                val cloudIds = cloudList.map { it.id }.toSet()
-                // 仅把本地「未成功(正在发送/失败)且不在云端」的条目合并上去；
-                // 本地已成功但云端没有的条目视为上一位置/旧会话的残留，不以本地为准上传。
-                val localPending = currentList.filter {
-                    it.status != MessageStatus.SUCCESS && it.id !in cloudIds && it.id !in excludeIds
+                
+                val shardsData = mutableMapOf<String, MutableList<ChatMessage>>()
+                currentList.forEach { msg ->
+                    val shardName = getMonthShardName(msg.timestamp)
+                    shardNames.add(shardName)
+                    if (shardsData[shardName] == null) shardsData[shardName] = mutableListOf()
+                    shardsData[shardName]?.add(msg)
                 }
-
-                if (cloudExists) {
-                    // 云端已有历史：以云端为基础，过滤掉被删除的条目(excludeIds)
-                    val filteredCloudList = cloudList.filter { it.id !in excludeIds }
+                
+                var indexChanged = false
+                
+                shardNames.forEach { shardName ->
+                    val tempFile = File(context.cacheDir, "merge_$shardName")
+                    var cloudList: List<ChatMessage> = emptyList()
+                    try {
+                        provider.downloadFile(shardName, tempFile)
+                        if (tempFile.exists()) {
+                            val json = tempFile.readText()
+                            val rawList: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
+                            cloudList = rawList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
+                        }
+                    } catch (e: Exception) {}
                     
-                    // 合并策略：
-                    // 1. 如果云端和本地都有该消息，以本地为准（因为本地可能有最新修改，如文本编辑、加入文件夹等）
-                    // 2. 如果只有云端有（且未被删除），保留云端版本
-                    // 3. 如果只有本地有（如因竞态未写入云端的新消息），保留本地版本
-                    val mergedList = filteredCloudList.map { cloudMsg ->
-                        currentList.find { it.id == cloudMsg.id } ?: cloudMsg
-                    } + currentList.filter { it.id !in filteredCloudList.map { m -> m.id } }
+                    val cloudMap = cloudList.associateBy { it.id }.toMutableMap()
+                    var shardChanged = false
                     
-                    val finalList = mergedList.sortedBy { it.timestamp }
-                    provider.uploadText(gson.toJson(finalList), "chat_history.json")
-                    lastKnownCloudTime = provider.getLastModified("chat_history.json")
-                    _messages.update { finalList }
-                } else {
-                    // 云端尚无 history：只上传本地正在发送的条目，绝不把本地成功消息推上去
-                    if (localPending.isNotEmpty()) {
-                        provider.uploadText(gson.toJson(localPending.sortedBy { it.timestamp }), "chat_history.json")
-                        lastKnownCloudTime = provider.getLastModified("chat_history.json")
+                    val localShardMsgs = shardsData[shardName] ?: emptyList()
+                    localShardMsgs.forEach { localMsg ->
+                        val cloudMsg = cloudMap[localMsg.id]
+                        if (cloudMsg == null || localMsg.lastModified > cloudMsg.lastModified || localMsg.status != MessageStatus.SUCCESS) {
+                            cloudMap[localMsg.id] = localMsg
+                            shardChanged = true
+                        }
+                    }
+                    
+                    if (shardChanged || cloudList.isEmpty()) {
+                        val mergedList = cloudMap.values.sortedBy { it.timestamp }
+                        provider.uploadText(gson.toJson(mergedList), shardName)
+                        indexChanged = true
                     }
                 }
+                
+                if (indexChanged || indexJson == null) {
+                    provider.uploadText(gson.toJson(shardNames.toList()), "chat_index.json")
+                }
+                
+                lastKnownCloudTime = provider.getLastModified("chat_index.json")
                 _isServerConnected.value = true
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Cloud sync failed", e)
@@ -973,8 +986,7 @@ class ChatRepository(private val context: Context) {
         
         withContext(Dispatchers.IO) {
             try {
-                provider.uploadText(gson.toJson(_messages.value), "chat_history.json")
-                lastKnownCloudTime = provider.getLastModified("chat_history.json")
+                syncHistory()
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Link file sync failed", e)
             }
@@ -1128,37 +1140,52 @@ class ChatRepository(private val context: Context) {
         val provider = storageProvider ?: return@withContext
         val config = currentConfig ?: return@withContext
         try {
-            // chat_history.json 是唯一真相来源：
-            // - 不存在（404）→ 以本地为准，不动本地消息
-            // - 存在 → 以云端为准，与其同步
-            val json = provider.downloadText("chat_history.json")
-            if (json == null) {
-                _messages.update { current ->
-                    // Keep only pending or failed messages
-                    current.filter { it.status != MessageStatus.SUCCESS }
+            var indexJson = provider.downloadText("chat_index.json")
+            if (indexJson == null) {
+                // Migration: Check if chat_history.json exists
+                val oldJson = provider.downloadText("chat_history.json")
+                if (oldJson != null) {
+                    val rawCloudHistory: List<ChatMessage> = try { gson.fromJson(oldJson, object : TypeToken<List<ChatMessage>>() {}.type) } catch(e:Exception){emptyList()}
+                    val cloudHistory = rawCloudHistory.mapNotNull { sanitizeMessage(it) }
+                    // Shard it
+                    val shards = cloudHistory.groupBy { getMonthShardName(it.timestamp) }
+                    shards.forEach { (shardName, msgs) ->
+                        provider.uploadText(gson.toJson(msgs.sortedBy{it.timestamp}), shardName)
+                    }
+                    provider.uploadText(gson.toJson(shards.keys.toList()), "chat_index.json")
+                    try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
+                    indexJson = gson.toJson(shards.keys.toList())
+                } else {
+                    provider.uploadText("[]", "chat_index.json")
+                    indexJson = "[]"
                 }
-                saveLocalHistory(config.id)
-                provider.uploadText("[]", "chat_history.json")
-                lastKnownCloudTime = provider.getLastModified("chat_history.json")
-                _isServerConnected.value = true
-                return@withContext
             }
-            val rawCloudHistory: List<ChatMessage> = gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) ?: emptyList()
-            val cloudHistory = rawCloudHistory.mapNotNull { sanitizeMessage(it) }
-            val cloudIds = cloudHistory.map { it.id }.toSet()
+            
+            val shardNames: List<String> = try { gson.fromJson(indexJson, object : TypeToken<List<String>>() {}.type) } catch(e:Exception){emptyList()}
+            val allCloudMsgs = mutableListOf<ChatMessage>()
+            
+            shardNames.forEach { shard ->
+                val json = provider.downloadText(shard)
+                if (json != null) {
+                    val raw: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
+                    if (raw != null) {
+                        allCloudMsgs.addAll(raw.mapNotNull { sanitizeMessage(it) })
+                    }
+                }
+            }
+            
+            val cloudIds = allCloudMsgs.map { it.id }.toSet()
 
             _messages.update { current ->
-                // 1. 云端消息为历史真相
-                // 2. 保留本地「未成功(发送中/失败) 且不在云端」的消息，避免丢失正在发送的内容
                 val pendingOrFailed = current.filter { it.status != MessageStatus.SUCCESS && it.id !in cloudIds }
-                val merged = cloudHistory.map { cloudMsg ->
-                    current.find { it.id == cloudMsg.id }?.let { cloudMsg } ?: cloudMsg
+                val merged = allCloudMsgs.map { cloudMsg ->
+                    current.find { it.id == cloudMsg.id }?.let { if (it.lastModified > cloudMsg.lastModified) it else cloudMsg } ?: cloudMsg
                 } + pendingOrFailed
                 merged.sortedBy { it.timestamp }
             }
 
             saveLocalHistory(config.id)
-            lastKnownCloudTime = provider.getLastModified("chat_history.json")
+            lastKnownCloudTime = provider.getLastModified("chat_index.json")
             _isServerConnected.value = true
         } catch (e: Exception) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
