@@ -844,8 +844,23 @@ fun MainScreen(
                                         selectedIds = setOf(clickedMsg.id)
                                     }
                                 },
+                                onClickGroup = {
+                                    if (selectedIds.isNotEmpty()) {
+                                        val groupIds = uiItem.messages.map { it.id }.toSet()
+                                        if (selectedIds.containsAll(groupIds)) {
+                                            selectedIds = selectedIds - groupIds
+                                        } else {
+                                            selectedIds = selectedIds + groupIds
+                                        }
+                                    }
+                                },
                                 onLongClickGroup = {
-                                    selectedIds = selectedIds + uiItem.messages.map { it.id }
+                                    val groupIds = uiItem.messages.map { it.id }.toSet()
+                                    if (selectedIds.containsAll(groupIds)) {
+                                        selectedIds = selectedIds - groupIds
+                                    } else {
+                                        selectedIds = selectedIds + groupIds
+                                    }
                                 }
                             )
                         }
@@ -1310,11 +1325,8 @@ fun MainScreen(
                                             }
                                         }
                                         if (!longPressHandled) {
-                                            // Short press: execute delete immediately
-                                            scope.launch {
-                                                chatRepository.deleteMessages(selectedIds.toList())
-                                                selectedIds = emptySet()
-                                            }
+                                            // Short press: confirm deletion
+                                            showDeleteMessagesConfirmDialog = true
                                         }
                                     }
                                 )
@@ -2973,37 +2985,10 @@ fun groupMessages(messages: List<com.cloudchat.model.ChatMessage>): List<ChatUiI
             continue
         }
 
-        // 2. Fallback to contiguous images group (same sender, within 60 seconds, no groupId)
-        if (msg.type == com.cloudchat.model.MessageType.IMAGE) {
-            val group = mutableListOf<com.cloudchat.model.ChatMessage>()
-            group.add(msg)
-            var j = i + 1
-            while (j < messages.size && j - i < 9) {
-                val nextMsg = messages[j]
-                if (nextMsg.type == com.cloudchat.model.MessageType.IMAGE &&
-                    nextMsg.sender == msg.sender &&
-                    nextMsg.groupId.isNullOrEmpty() &&
-                    Math.abs(nextMsg.timestamp - group.last().timestamp) <= 60000L
-                ) {
-                    group.add(nextMsg)
-                    j++
-                } else {
-                    break
-                }
-            }
-            group.forEach { emitted.add(it.id) }
-            if (group.size > 1) {
-                result.add(ChatUiItem.ImageGroup(group))
-                i = j
-            } else {
-                result.add(ChatUiItem.SingleMessage(msg))
-                i++
-            }
-        } else {
-            result.add(ChatUiItem.SingleMessage(msg))
-            emitted.add(msg.id)
-            i++
-        }
+        // 2. Normal message rendering (no auto-grouping)
+        result.add(ChatUiItem.SingleMessage(msg))
+        emitted.add(msg.id)
+        i++
     }
     return result
 }
@@ -3017,7 +3002,8 @@ fun ImageGroupBubble(
     onSelectToggle: (com.cloudchat.model.ChatMessage) -> Unit,
     onMediaClick: (com.cloudchat.model.ChatMessage) -> Unit,
     onLongClick: (com.cloudchat.model.ChatMessage) -> Unit,
-    onLongClickGroup: () -> Unit = {}
+    onLongClickGroup: () -> Unit = {},
+    onClickGroup: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val isOutgoing = group.messages.first().isOutgoing
@@ -3035,7 +3021,7 @@ fun ImageGroupBubble(
             .fillMaxWidth()
             .padding(vertical = 4.dp)
             .combinedClickable(
-                onClick = {},
+                onClick = onClickGroup,
                 onLongClick = onLongClickGroup
             ),
         horizontalArrangement = Arrangement.End,

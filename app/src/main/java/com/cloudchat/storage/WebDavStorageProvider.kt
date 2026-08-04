@@ -451,8 +451,8 @@ class WebDavStorageProvider(
             return@withContext
         }
         runWithRetry { currentBaseUrl ->
-            // Try to create the .trash directory
-            val recycleBinUrl = "${currentBaseUrl}.trash"
+            // Try to create the .trash directory (must end with / for MKCOL)
+            val recycleBinUrl = "${currentBaseUrl}.trash/"
             try {
                 val mkcolRequest = Request.Builder()
                     .url(recycleBinUrl)

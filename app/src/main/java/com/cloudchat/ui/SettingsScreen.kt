@@ -106,6 +106,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                                     editingConfig = if (appMode == com.cloudchat.model.AppMode.FULL) {
                                         account.copy(
                                             webDavUrl = SettingsRepository.FIXED_FULL_CONFIG.webDavUrl,
+                                            webDavFallbackUrl = SettingsRepository.FIXED_FULL_CONFIG.webDavFallbackUrl,
                                             serverPath = SettingsRepository.FIXED_FULL_CONFIG.serverPath,
                                             webDavUser = SettingsRepository.FIXED_FULL_CONFIG.webDavUser,
                                             webDavPass = SettingsRepository.FIXED_FULL_CONFIG.webDavPass,

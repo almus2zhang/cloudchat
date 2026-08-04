@@ -31,6 +31,7 @@ class SettingsRepository(private val context: Context) {
             id = "fixed_full_id",
             type = StorageType.WEBDAV,
             webDavUrl = ConfigHelper.getUrl(),
+            webDavFallbackUrl = ConfigHelper.getFallbackUrl(),
             serverPath = "/",
             saveDir = "public",
             webDavUser = ConfigHelper.getUser(),
