@@ -41,6 +41,18 @@ class ChatRepository(private val context: Context) {
     companion object {
         const val TOTP_SECRET = "CLOUDSYNC2FA2222"
         const val TOTP_STEP = 30000L // 30 seconds
+
+        fun getSafeAvatarFileName(username: String): String {
+            val clean = username.trim().ifEmpty { "user" }
+            val isPureAscii = clean.all { it.code in 32..126 }
+            if (isPureAscii) {
+                val key = clean.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+                return "avatar_${key}.jpg"
+            }
+            val bytes = java.security.MessageDigest.getInstance("SHA-256").digest(clean.toByteArray(Charsets.UTF_8))
+            val hex = bytes.joinToString("") { "%02x".format(it) }.take(12)
+            return "avatar_u_${hex}.jpg"
+        }
     }
     private val gson = com.google.gson.GsonBuilder()
         .registerTypeAdapter(com.cloudchat.model.MessageType::class.java, com.google.gson.JsonDeserializer { jsonElement, _, _ ->
@@ -188,8 +200,7 @@ class ChatRepository(private val context: Context) {
 
     suspend fun uploadCustomAvatar(config: ServerConfig, imageUri: Uri): String? = withContext(Dispatchers.IO) {
         try {
-            val sanitizedUser = (config.username.ifEmpty { "user" }).replace(Regex("[^a-zA-Z0-9_-]"), "_")
-            val avatarFileName = "avatar_${sanitizedUser}.jpg"
+            val avatarFileName = getSafeAvatarFileName(config.username)
 
             val inputStream = context.contentResolver.openInputStream(imageUri) ?: return@withContext null
             val originalBitmap = BitmapFactory.decodeStream(inputStream)
