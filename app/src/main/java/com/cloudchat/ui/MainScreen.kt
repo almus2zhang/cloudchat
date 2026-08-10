@@ -1185,7 +1185,11 @@ fun MainScreen(
 
                     // 3. Pack Folder
                     IconButton(onClick = {
-                        folderAnnotation = ""
+                        val selectedMessages = messages.filter { selectedIds.contains(it.id) }
+                        val existingFolder = selectedMessages.find { it.type == MessageType.FOLDER }
+                            ?: if (currentFolderId != null) messages.find { it.id == currentFolderId } else null
+
+                        folderAnnotation = existingFolder?.content ?: ""
                         showPackFolderDialog = true
                     }) {
                         Icon(Icons.Default.Folder, contentDescription = "Pack Folder")
