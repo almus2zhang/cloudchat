@@ -130,6 +130,7 @@ fun MainScreen(
     // --- Dialog and Action States ---
     var showDeleteMessagesConfirmDialog by remember { mutableStateOf(false) }
     var showPackFolderDialog by remember { mutableStateOf(false) }
+    var showUnpackFolderConfirmDialog by remember { mutableStateOf(false) }
     var folderAnnotation by remember { mutableStateOf("") }
     var showRenameFolderDialog by remember { mutableStateOf(false) }
     var renameFolderText by remember { mutableStateOf("") }
@@ -1195,18 +1196,13 @@ fun MainScreen(
                         Icon(Icons.Default.Folder, contentDescription = "Pack Folder")
                     }
 
-                    // 4. Unpack Folder
-                    if (selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.FOLDER }) {
+                    // 4. Unpack Folder / Move out of folder
+                    val hasFolderToUnpack = selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.FOLDER }
+                    val hasItemsInFolder = currentFolderId != null || selectedIds.any { id -> messages.find { it.id == id }?.folderId != null }
+
+                    if (hasFolderToUnpack || hasItemsInFolder) {
                         IconButton(onClick = {
-                            scope.launch {
-                                selectedIds.forEach { id ->
-                                    val msg = messages.find { it.id == id }
-                                    if (msg?.type == MessageType.FOLDER) {
-                                        chatRepository.unpackFolder(id)
-                                    }
-                                }
-                                selectedIds = emptySet()
-                            }
+                            showUnpackFolderConfirmDialog = true
                         }) {
                             Icon(Icons.Default.FolderOff, contentDescription = "Unpack Folder")
                         }
@@ -1464,6 +1460,28 @@ fun MainScreen(
                     selectedIds = emptySet()
                 }
             },
+            showUnpackFolderConfirmDialog = showUnpackFolderConfirmDialog,
+            onUnpackConfirmDismiss = { showUnpackFolderConfirmDialog = false },
+            onUnpackConfirmConfirm = {
+                showUnpackFolderConfirmDialog = false
+                scope.launch {
+                    selectedIds.forEach { id ->
+                        val msg = messages.find { it.id == id }
+                        if (msg?.type == MessageType.FOLDER) {
+                            chatRepository.unpackFolder(id)
+                        }
+                    }
+                    val nonFolderIds = selectedIds.filter { id ->
+                        messages.find { it.id == id }?.type != MessageType.FOLDER
+                    }
+                    if (nonFolderIds.isNotEmpty()) {
+                        chatRepository.removeFromFolder(nonFolderIds)
+                    }
+                    selectedIds = emptySet()
+                }
+            },
+            isUnpackingFolderObj = selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.FOLDER },
+            selectedCount = selectedIds.size,
             showEditTextDialog = showEditTextDialog,
             onEditTextDismiss = {
                 showEditTextDialog = false
@@ -3234,6 +3252,11 @@ fun MainScreenDialogs(
     folderAnnotation: String,
     onFolderAnnotationChange: (String) -> Unit,
     onPackFolderConfirm: (String) -> Unit,
+    showUnpackFolderConfirmDialog: Boolean = false,
+    onUnpackConfirmDismiss: () -> Unit = {},
+    onUnpackConfirmConfirm: () -> Unit = {},
+    isUnpackingFolderObj: Boolean = false,
+    selectedCount: Int = 0,
     showEditTextDialog: Boolean,
     onEditTextDismiss: () -> Unit,
     editingTargetMessage: com.cloudchat.model.ChatMessage?,
@@ -3272,6 +3295,34 @@ fun MainScreenDialogs(
             },
             dismissButton = {
                 TextButton(onClick = onPackFolderDismiss) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    if (showUnpackFolderConfirmDialog) {
+        val titleText = if (isUnpackingFolderObj) "解散文件夹确认" else "移出文件夹确认"
+        val bodyText = if (isUnpackingFolderObj) {
+            "确定要解散选中的文件夹并将所有条目移出吗？"
+        } else {
+            "确定要将选中的 ${selectedCount} 个条目移出文件夹吗？"
+        }
+
+        AlertDialog(
+            onDismissRequest = onUnpackConfirmDismiss,
+            title = { Text(titleText) },
+            text = { Text(bodyText) },
+            confirmButton = {
+                Button(
+                    onClick = onUnpackConfirmConfirm,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Text("确认移出")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onUnpackConfirmDismiss) {
                     Text("取消")
                 }
             }

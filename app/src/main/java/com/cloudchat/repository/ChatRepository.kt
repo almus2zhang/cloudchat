@@ -1532,6 +1532,19 @@ class ChatRepository(private val context: Context) {
         syncHistory()
     }
 
+    suspend fun removeFromFolder(messageIds: List<String>) {
+        if (messageIds.isEmpty()) return
+        val now = System.currentTimeMillis()
+        _messages.update { list ->
+            list.map { msg ->
+                if (msg.id in messageIds) {
+                    msg.copy(folderId = null, lastModified = now)
+                } else msg
+            }
+        }
+        syncHistory()
+    }
+
     suspend fun syncAllMediaFiles(onProgress: (Int, Int) -> Unit) = withContext(Dispatchers.IO) {
         val provider = storageProvider ?: return@withContext
         val allMediaMsgs = _messages.value.filter { 
