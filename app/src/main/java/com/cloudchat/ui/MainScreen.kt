@@ -20,9 +20,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import java.io.InputStream
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -1024,11 +1021,7 @@ fun MainScreen(
                                             val pin = inputText.substring(2, inputText.length - 2)
                                             if (pin == privacyPin) {
                                                 isPrivacyMode = !isPrivacyMode
-                                                if (isPrivacyMode) {
-                                                    viewOnlyPrivacyItems = true
-                                                } else {
-                                                    viewOnlyPrivacyItems = false
-                                                }
+                                                android.widget.Toast.makeText(context, if (isPrivacyMode) "已进入隐私空间" else "已退出隐私空间", android.widget.Toast.LENGTH_SHORT).show()
                                             }
                                             inputText = ""
                                         }
@@ -1163,35 +1156,6 @@ fun MainScreen(
                         }
                     }
 
-                    // Position controls (Top, Up, Down, Bottom)
-                    IconButton(onClick = {
-                        chatRepository.moveMessagesTop(selectedIds, displayedMessages)
-                        selectedIds = emptySet()
-                    }) {
-                        Icon(Icons.Default.VerticalAlignTop, contentDescription = "置顶")
-                    }
-
-                    IconButton(onClick = {
-                        chatRepository.moveMessagesUp(selectedIds, displayedMessages)
-                        selectedIds = emptySet()
-                    }) {
-                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "上移")
-                    }
-
-                    IconButton(onClick = {
-                        chatRepository.moveMessagesDown(selectedIds, displayedMessages)
-                        selectedIds = emptySet()
-                    }) {
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = "下移")
-                    }
-
-                    IconButton(onClick = {
-                        chatRepository.moveMessagesBottom(selectedIds, displayedMessages)
-                        selectedIds = emptySet()
-                    }) {
-                        Icon(Icons.Default.VerticalAlignBottom, contentDescription = "置底")
-                    }
-
 
 
                     // 2. Edit Text / Caption / Rename Folder
@@ -1221,55 +1185,26 @@ fun MainScreen(
 
                     // 3. Pack Folder
                     IconButton(onClick = {
-                        val selectedMessages = messages.filter { selectedIds.contains(it.id) }
-                        val existingFolder = selectedMessages.find { it.type == MessageType.FOLDER }
-                        if (existingFolder != null) {
-                            scope.launch {
-                                chatRepository.packIntoFolder(
-                                    messages = selectedMessages.filter { it.type != MessageType.FOLDER },
-                                    annotation = "",
-                                    existingFolderId = existingFolder.id
-                                )
-                                selectedIds = emptySet()
-                            }
-                        } else {
-                            folderAnnotation = ""
-                            showPackFolderDialog = true
-                        }
+                        folderAnnotation = ""
+                        showPackFolderDialog = true
                     }) {
                         Icon(Icons.Default.Folder, contentDescription = "Pack Folder")
                     }
 
-                    // 4. Unpack Folder / Remove from Folder (移出文件夹)
-                    if (currentFolderId != null || selectedIds.any { id -> 
-                        val m = messages.find { it.id == id }
-                        m?.type == MessageType.FOLDER || m?.folderId != null
-                    }) {
+                    // 4. Unpack Folder
+                    if (selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.FOLDER }) {
                         IconButton(onClick = {
                             scope.launch {
-                                val selectedFolderItemIds = mutableListOf<String>()
-                                val selectedMsgIdsInFolder = mutableListOf<String>()
-
                                 selectedIds.forEach { id ->
                                     val msg = messages.find { it.id == id }
                                     if (msg?.type == MessageType.FOLDER) {
-                                        selectedFolderItemIds.add(id)
-                                    } else if (msg?.folderId != null || currentFolderId != null) {
-                                        selectedMsgIdsInFolder.add(id)
+                                        chatRepository.unpackFolder(id)
                                     }
                                 }
-
-                                selectedFolderItemIds.forEach { id ->
-                                    chatRepository.unpackFolder(id)
-                                }
-                                if (selectedMsgIdsInFolder.isNotEmpty()) {
-                                    chatRepository.removeMessagesFromFolder(selectedMsgIdsInFolder)
-                                }
-
                                 selectedIds = emptySet()
                             }
                         }) {
-                            Icon(Icons.Default.FolderOff, contentDescription = "移出文件夹")
+                            Icon(Icons.Default.FolderOff, contentDescription = "Unpack Folder")
                         }
                     }
 
@@ -1512,7 +1447,6 @@ fun MainScreen(
         }
 
         MainScreenDialogs(
-            chatRepository = chatRepository,
             showPackFolderDialog = showPackFolderDialog,
             onPackFolderDismiss = { showPackFolderDialog = false },
             folderAnnotation = folderAnnotation,
@@ -2420,19 +2354,19 @@ fun ChatBubble(
                 }
             }
 
-            // Status, Caption, Location, Time (FlowRow: Same line, wrap when content is long)
-            @OptIn(ExperimentalLayoutApi::class)
-            FlowRow(
-                horizontalArrangement = Arrangement.Start,
+            // Status and Time
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(top = 2.dp)
             ) {
                 if (message.status == MessageStatus.SENDING) {
                     val progressText = if (progress != null && progress != -1) "$progress%" else "..."
                     Text(
-                        text = "Sending $progressText ",
+                        text = "Sending $progressText",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
+                    Spacer(modifier = Modifier.width(4.dp))
                 }
                 if (!message.caption.isNullOrBlank()) {
                     Text(
@@ -3184,27 +3118,26 @@ fun ImageGroupBubble(
                 }
             }
             
-            // Merged captions and timestamp (FlowRow: Same line, wrap when content is long)
+            // Merged captions: join every non-blank member caption with a comma.
             val mergedCaption = group.messages
                 .mapNotNull { it.caption?.takeIf { c -> c.isNotBlank() } }
                 .joinToString("，")
+            if (mergedCaption.isNotBlank()) {
+                Text(
+                    text = mergedCaption,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = contentColor,
+                    modifier = Modifier.padding(top = 2.dp, start = 6.dp, end = 6.dp)
+                )
+            }
 
-            @OptIn(ExperimentalLayoutApi::class)
-            FlowRow(
-                horizontalArrangement = Arrangement.Start,
-                modifier = Modifier.padding(top = 2.dp, start = 4.dp, end = 4.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(top = 2.dp, end = 4.dp, start = 4.dp)
             ) {
-                if (mergedCaption.isNotBlank()) {
-                    Text(
-                        text = mergedCaption,
-                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                        color = Color.Gray,
-                        modifier = Modifier.padding(end = 6.dp)
-                    )
-                }
                 Text(
                     text = formatTimestamp(group.timestamp),
-                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    style = MaterialTheme.typography.labelSmall,
                     color = Color.Gray
                 )
             }
@@ -3212,177 +3145,8 @@ fun ImageGroupBubble(
     }
 }
 
-fun extractImageExifTime(context: android.content.Context, chatRepository: ChatRepository, message: ChatMessage): String? {
-    try {
-        val uriStr = chatRepository.getTransientUri(message.id, message.content)
-        val file = chatRepository.getLocalFile(message.id, message.content)
-        
-        val inputStream: InputStream? = when {
-            uriStr?.startsWith("content://") == true -> context.contentResolver.openInputStream(Uri.parse(uriStr))
-            file.exists() -> file.inputStream()
-            else -> null
-        }
-        
-        val exif = inputStream?.use { androidx.exifinterface.media.ExifInterface(it) } 
-            ?: if (file.exists()) androidx.exifinterface.media.ExifInterface(file) else null
-            
-        if (exif != null) {
-            val dateTime = exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL)
-                ?: exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME)
-                ?: exif.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_DIGITIZED)
-            if (!dateTime.isNullOrBlank()) {
-                val formatted = dateTime.replaceFirst(":", "-").replaceFirst(":", "-").trim()
-                return formatted
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("MainScreen", "Failed to extract EXIF time", e)
-    }
-    return null
-}
-
-fun formatDetailedAddress(addr: android.location.Address): String {
-    val sb = java.lang.StringBuilder()
-    
-    val admin = addr.adminArea
-    if (!admin.isNullOrBlank() && admin != "中国" && admin != addr.countryName) {
-        sb.append(admin)
-    }
-    val loc = addr.locality
-    if (!loc.isNullOrBlank() && loc != "中国" && loc != addr.countryName && !sb.contains(loc)) {
-        sb.append(loc)
-    }
-    val sub = addr.subLocality
-    if (!sub.isNullOrBlank() && !sb.contains(sub)) {
-        sb.append(sub)
-    }
-    val road = addr.thoroughfare
-    if (!road.isNullOrBlank() && !sb.contains(road)) {
-        sb.append(road)
-    }
-    val num = addr.subThoroughfare
-    if (!num.isNullOrBlank() && !sb.contains(num)) {
-        sb.append(num)
-    }
-    val feat = addr.featureName
-    if (!feat.isNullOrBlank() && feat != addr.countryName && feat != loc && feat != admin && !sb.contains(feat)) {
-        sb.append(feat)
-    }
-    
-    var constructed = sb.toString().trim()
-    if (constructed.startsWith("中国")) {
-        constructed = constructed.removePrefix("中国").trim()
-    }
-    
-    if (constructed.isNotBlank() && constructed != "中国" && constructed != addr.countryName) {
-        return constructed
-    }
-    
-    val rawLine = addr.getAddressLine(0) ?: ""
-    if (rawLine.isNotBlank()) {
-        var line0 = rawLine.trim()
-        if (line0.startsWith("中国")) {
-            line0 = line0.removePrefix("中国").trim().removePrefix(",").removePrefix(" ")
-        }
-        if (addr.countryName != null && line0.startsWith(addr.countryName!!)) {
-            line0 = line0.removePrefix(addr.countryName!!).trim().removePrefix(",").removePrefix(" ")
-        }
-        if (line0.isNotBlank() && line0 != "中国" && line0 != addr.countryName) {
-            return line0
-        }
-    }
-    
-    return constructed.ifBlank { addr.countryName ?: "未知位置" }
-}
-
-suspend fun extractImageExifLocation(context: android.content.Context, chatRepository: ChatRepository, message: ChatMessage): String? {
-    try {
-        val uriStr = chatRepository.getTransientUri(message.id, message.content)
-        val file = chatRepository.getLocalFile(message.id, message.content)
-        
-        val inputStream: InputStream? = when {
-            uriStr?.startsWith("content://") == true -> context.contentResolver.openInputStream(Uri.parse(uriStr))
-            file.exists() -> file.inputStream()
-            else -> null
-        }
-        
-        val exif = inputStream?.use { androidx.exifinterface.media.ExifInterface(it) } 
-            ?: if (file.exists()) androidx.exifinterface.media.ExifInterface(file) else null
-            
-        if (exif != null) {
-            val latLong = exif.latLong
-            if (latLong != null && latLong.size >= 2) {
-                val lat = latLong[0]
-                val lng = latLong[1]
-                
-                // 1. Try system Geocoder with detailed address formatting
-                try {
-                    val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
-                    @Suppress("DEPRECATION")
-                    val addresses = geocoder.getFromLocation(lat, lng, 1)
-                    if (!addresses.isNullOrEmpty()) {
-                        val addr = addresses[0]
-                        val detailed = formatDetailedAddress(addr)
-                        if (detailed.isNotBlank() && detailed != "中国" && detailed != addr.countryName) {
-                            return detailed
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w("MainScreen", "Geocoder failed", e)
-                }
-
-                // 2. HTTP Fallback if system Geocoder failed or returned only country name ("中国")
-                try {
-                    val client = okhttp3.OkHttpClient.Builder()
-                        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-                        .readTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-                        .build()
-                    val url = "https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=$lat&longitude=$lng&localityLanguage=zh"
-                    val request = okhttp3.Request.Builder()
-                        .url(url)
-                        .header("User-Agent", "CloudChat/1.0")
-                        .build()
-                    val response = client.newCall(request).execute()
-                    if (response.isSuccessful) {
-                        val jsonStr = response.body?.string()
-                        if (!jsonStr.isNullOrBlank()) {
-                            val jsonElem = com.google.gson.JsonParser.parseString(jsonStr)
-                            if (jsonElem.isJsonObject) {
-                                val jsonObj = jsonElem.asJsonObject
-                                val getStr = { k: String ->
-                                    val e = jsonObj.get(k)
-                                    if (e != null && !e.isJsonNull) e.asString else ""
-                                }
-                                val principalSubdivision = getStr("principalSubdivision")
-                                val city = getStr("city").ifBlank { getStr("locality") }
-                                val locality = getStr("locality")
-                                
-                                val sb = StringBuilder()
-                                if (principalSubdivision.isNotBlank() && principalSubdivision != "中国") sb.append(principalSubdivision)
-                                if (city.isNotBlank() && !sb.contains(city)) sb.append(city)
-                                if (locality.isNotBlank() && !sb.contains(locality)) sb.append(locality)
-                                
-                                val res = sb.toString().trim()
-                                if (res.isNotBlank()) return res
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w("MainScreen", "HTTP reverse geocode fallback failed", e)
-                }
-
-                return String.format(java.util.Locale.US, "%.4f, %.4f", lat, lng)
-            }
-        }
-    } catch (e: Exception) {
-        Log.e("MainScreen", "Failed to extract EXIF location", e)
-    }
-    return null
-}
-
 @Composable
 fun MainScreenDialogs(
-    chatRepository: ChatRepository,
     showPackFolderDialog: Boolean,
     onPackFolderDismiss: () -> Unit,
     folderAnnotation: String,
@@ -3460,55 +3224,16 @@ fun MainScreenDialogs(
 
     if (showEditCaptionDialog && editingTargetMessage != null) {
         var captionValue by remember { mutableStateOf(editingTargetMessage.caption ?: "") }
-        val context = LocalContext.current
-        val scope = rememberCoroutineScope()
-
         AlertDialog(
             onDismissRequest = onEditCaptionDismiss,
             title = { Text("修改文件注释") },
             text = {
-                Column {
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    ) {
-                        AssistChip(
-                            onClick = {
-                                val timeStr = extractImageExifTime(context, chatRepository, editingTargetMessage)
-                                if (!timeStr.isNullOrBlank()) {
-                                    captionValue = if (captionValue.isBlank()) timeStr else "$captionValue $timeStr"
-                                } else {
-                                    android.widget.Toast.makeText(context, "无", android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            label = { Text("时间") },
-                            leadingIcon = { Icon(Icons.Default.AccessTime, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                        )
-                        AssistChip(
-                            onClick = {
-                                scope.launch(Dispatchers.IO) {
-                                    val locStr = extractImageExifLocation(context, chatRepository, editingTargetMessage)
-                                    withContext(Dispatchers.Main) {
-                                        if (!locStr.isNullOrBlank()) {
-                                            captionValue = if (captionValue.isBlank()) locStr else "$captionValue $locStr"
-                                        } else {
-                                            android.widget.Toast.makeText(context, "无", android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            },
-                            label = { Text("地址") },
-                            leadingIcon = { Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                        )
-                    }
-
-                    OutlinedTextField(
-                        value = captionValue,
-                        onValueChange = { captionValue = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 4
-                    )
-                }
+                OutlinedTextField(
+                    value = captionValue,
+                    onValueChange = { captionValue = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 4
+                )
             },
             confirmButton = {
                 Button(onClick = { onEditCaptionConfirm(captionValue) }) {

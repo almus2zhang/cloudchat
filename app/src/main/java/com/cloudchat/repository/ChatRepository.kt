@@ -1211,20 +1211,18 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun updateMessageCategories(messageId: String, categoryIds: List<String>) {
-        val now = System.currentTimeMillis()
         _messages.update { list ->
-            list.map { if (it.id == messageId) it.copy(categories = categoryIds, lastModified = now) else it }
+            list.map { if (it.id == messageId) it.copy(categories = categoryIds) else it }
         }
         syncHistory()
     }
 
     suspend fun addMessageCategory(messageId: String, categoryId: String) {
-        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.map { 
                 if (it.id == messageId) {
                     val updated = (it.safeCategories + categoryId).distinct()
-                    it.copy(categories = updated, lastModified = now)
+                    it.copy(categories = updated)
                 } else it 
             }
         }
@@ -1232,12 +1230,11 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun removeMessagesFromCategory(messageIds: List<String>, categoryId: String) {
-        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.map { 
                 if (messageIds.contains(it.id)) {
                     val updated = it.safeCategories - categoryId
-                    it.copy(categories = updated, lastModified = now)
+                    it.copy(categories = updated)
                 } else it 
             }
         }
@@ -1245,11 +1242,10 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun toggleHideMessages(messageIds: Set<String>) {
-        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.map {
                 if (messageIds.contains(it.id)) {
-                    it.copy(isHidden = !it.isHidden, lastModified = now)
+                    it.copy(isHidden = !it.isHidden)
                 } else it
             }
         }
@@ -1257,7 +1253,6 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun groupSelectedMessages(messageIds: Set<String>, newGroupId: String) {
-        val now = System.currentTimeMillis()
         _messages.update { list ->
             // Only IMAGE/VIDEO participate in grid aggregation; other types are filtered out.
             val mediaSelected = list.filter {
@@ -1298,7 +1293,7 @@ class ChatRepository(private val context: Context) {
 
             list.map {
                 if (allTargetIds.contains(it.id)) {
-                    it.copy(groupId = targetGroupId, lastModified = now)
+                    it.copy(groupId = targetGroupId)
                 } else it
             }
         }
@@ -1306,8 +1301,8 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun ungroupMessages(messages: List<ChatMessage>) {
-        val now = System.currentTimeMillis()
         val selectedIds = messages.map { it.id }.toSet()
+
         _messages.update { list ->
             // Group the selected messages by their current groupId (ignore ungrouped ones).
             val selectedByGroup = list
@@ -1319,7 +1314,7 @@ class ChatRepository(private val context: Context) {
             // id -> new groupId (null means detach)
             val reassign = HashMap<String, String?>()
             var splitCounter = 0L
-            val splitBase = now
+            val splitBase = System.currentTimeMillis()
 
             selectedByGroup.forEach { (groupId, selectedInGroup) ->
                 val allInGroup = list.filter { it.groupId == groupId }
@@ -1346,18 +1341,17 @@ class ChatRepository(private val context: Context) {
             }
 
             list.map {
-                if (reassign.containsKey(it.id)) it.copy(groupId = reassign[it.id], lastModified = now) else it
+                if (reassign.containsKey(it.id)) it.copy(groupId = reassign[it.id]) else it
             }
         }
         syncHistory()
     }
 
     suspend fun editTextMessage(messageId: String, newContent: String) {
-        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.map {
                 if (it.id == messageId) {
-                    it.copy(content = newContent, isEdited = true, lastModified = now)
+                    it.copy(content = newContent, isEdited = true)
                 } else it
             }
         }
@@ -1365,11 +1359,10 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun updateMessageCaption(messageId: String, newCaption: String?) {
-        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.map {
                 if (it.id == messageId) {
-                    it.copy(caption = newCaption?.ifBlank { null }, lastModified = now)
+                    it.copy(caption = newCaption?.ifBlank { null })
                 } else it
             }
         }
@@ -1379,11 +1372,10 @@ class ChatRepository(private val context: Context) {
     suspend fun renameFolder(folderId: String, newName: String) {
         val trimmed = newName.trim()
         if (trimmed.isBlank()) return
-        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.map {
                 if (it.id == folderId && it.type == com.cloudchat.model.MessageType.FOLDER) {
-                    it.copy(content = trimmed, lastModified = now)
+                    it.copy(content = trimmed)
                 } else it
             }
         }
@@ -1391,8 +1383,7 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun packIntoFolder(messages: List<com.cloudchat.model.ChatMessage>, annotation: String, existingFolderId: String? = null) {
-        val now = System.currentTimeMillis()
-        if (messages.isEmpty() && existingFolderId == null) return
+        if (messages.isEmpty()) return
         
         val folderId = existingFolderId ?: "folder_${java.util.UUID.randomUUID()}"
         
@@ -1403,8 +1394,7 @@ class ChatRepository(private val context: Context) {
                 sender = config.username,
                 content = annotation,
                 type = com.cloudchat.model.MessageType.FOLDER,
-                timestamp = now,
-                lastModified = now,
+                timestamp = System.currentTimeMillis(),
                 isOutgoing = true,
                 status = com.cloudchat.model.MessageStatus.SUCCESS
             )
@@ -1414,7 +1404,7 @@ class ChatRepository(private val context: Context) {
                 updatedList.add(folderMsg)
                 updatedList.map { msg ->
                     if (messages.any { it.id == msg.id }) {
-                        msg.copy(folderId = folderId, lastModified = now)
+                        msg.copy(folderId = folderId)
                     } else msg
                 }
             }
@@ -1422,10 +1412,10 @@ class ChatRepository(private val context: Context) {
             _messages.update { list ->
                 list.map { msg ->
                     if (messages.any { it.id == msg.id }) {
-                        msg.copy(folderId = folderId, lastModified = now)
+                        msg.copy(folderId = folderId)
                     } else if (msg.id == folderId && annotation.isNotBlank()) {
                         val newContent = if (msg.content.isBlank()) annotation else "${msg.content} / $annotation"
-                        msg.copy(content = newContent, lastModified = now)
+                        msg.copy(content = newContent)
                     } else msg
                 }
             }
@@ -1434,105 +1424,11 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun unpackFolder(folderId: String) {
-        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.filter { it.id != folderId }.map { msg ->
                 if (msg.folderId == folderId) {
-                    msg.copy(folderId = null, lastModified = now)
+                    msg.copy(folderId = null)
                 } else msg
-            }
-        }
-        syncHistory()
-    }
-
-    suspend fun removeMessagesFromFolder(messageIds: Collection<String>) {
-        if (messageIds.isEmpty()) return
-        val now = System.currentTimeMillis()
-        _messages.update { list ->
-            list.map { msg ->
-                if (messageIds.contains(msg.id)) {
-                    msg.copy(folderId = null, lastModified = now)
-                } else msg
-            }
-        }
-        syncHistory()
-    }
-
-    fun moveMessagesTop(targetIds: Collection<String>, displayedList: List<ChatMessage>) {
-        if (targetIds.isEmpty() || displayedList.isEmpty()) return
-        val minTs = displayedList.minOf { it.timestamp }
-        val now = System.currentTimeMillis()
-        var step = 1000L * targetIds.size
-        _messages.update { list ->
-            list.map { msg ->
-                if (targetIds.contains(msg.id)) {
-                    val newTs = minTs - step
-                    step -= 1000L
-                    msg.copy(timestamp = newTs, lastModified = now)
-                } else msg
-            }
-        }
-        syncHistory()
-    }
-
-    fun moveMessagesBottom(targetIds: Collection<String>, displayedList: List<ChatMessage>) {
-        if (targetIds.isEmpty() || displayedList.isEmpty()) return
-        val maxTs = displayedList.maxOf { it.timestamp }
-        val now = System.currentTimeMillis()
-        var step = 1000L
-        _messages.update { list ->
-            list.map { msg ->
-                if (targetIds.contains(msg.id)) {
-                    val newTs = maxTs + step
-                    step += 1000L
-                    msg.copy(timestamp = newTs, lastModified = now)
-                } else msg
-            }
-        }
-        syncHistory()
-    }
-
-    fun moveMessagesUp(targetIds: Collection<String>, displayedList: List<ChatMessage>) {
-        if (targetIds.isEmpty() || displayedList.size < 2) return
-        val now = System.currentTimeMillis()
-        val index = displayedList.indexOfFirst { targetIds.contains(it.id) }
-        if (index <= 0) return
-        val prevMsg = displayedList[index - 1]
-        val targetMsg = displayedList[index]
-        
-        val targetTs = targetMsg.timestamp
-        val prevTs = prevMsg.timestamp
-
-        _messages.update { list ->
-            list.map { msg ->
-                when (msg.id) {
-                    targetMsg.id -> msg.copy(timestamp = if (prevTs < targetTs) prevTs - 1 else prevTs, lastModified = now)
-                    prevMsg.id -> msg.copy(timestamp = targetTs, lastModified = now)
-                    else -> msg
-                }
-            }
-        }
-        syncHistory()
-    }
-
-    fun moveMessagesDown(targetIds: Collection<String>, displayedList: List<ChatMessage>) {
-        if (targetIds.isEmpty() || displayedList.size < 2) return
-        val now = System.currentTimeMillis()
-        val index = displayedList.indexOfLast { targetIds.contains(it.id) }
-        if (index < 0 || index >= displayedList.size - 1) return
-        val nextMsg = displayedList[index + 1]
-        val targetMsg = displayedList[index]
-
-        val targetTs = targetMsg.timestamp
-        val nextTs = nextMsg.timestamp
-
-        _messages.update { list ->
-            list.map { msg ->
-                when (msg.id) {
-                    targetMsg.id -> msg.copy(timestamp = if (nextTs > targetTs) nextTs + 1 else nextTs, lastModified = now)
-                    nextMsg.id -> msg.copy(timestamp = targetTs, lastModified = now)
-                    else -> msg
-                }
             }
         }
         syncHistory()
