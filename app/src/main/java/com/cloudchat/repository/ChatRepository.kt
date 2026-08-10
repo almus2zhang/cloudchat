@@ -1460,10 +1460,11 @@ class ChatRepository(private val context: Context) {
     suspend fun renameFolder(folderId: String, newName: String) {
         val trimmed = newName.trim()
         if (trimmed.isBlank()) return
+        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.map {
                 if (it.id == folderId && it.type == com.cloudchat.model.MessageType.FOLDER) {
-                    it.copy(content = trimmed)
+                    it.copy(content = trimmed, lastModified = now)
                 } else it
             }
         }
@@ -1474,6 +1475,7 @@ class ChatRepository(private val context: Context) {
         if (messages.isEmpty()) return
         
         val folderId = existingFolderId ?: "folder_${java.util.UUID.randomUUID()}"
+        val now = System.currentTimeMillis()
         
         if (existingFolderId == null) {
             val config = currentConfig ?: return
@@ -1482,9 +1484,10 @@ class ChatRepository(private val context: Context) {
                 sender = config.username,
                 content = annotation,
                 type = com.cloudchat.model.MessageType.FOLDER,
-                timestamp = System.currentTimeMillis(),
+                timestamp = now,
                 isOutgoing = true,
-                status = com.cloudchat.model.MessageStatus.SUCCESS
+                status = com.cloudchat.model.MessageStatus.SUCCESS,
+                lastModified = now
             )
             
             _messages.update { list ->
@@ -1492,7 +1495,7 @@ class ChatRepository(private val context: Context) {
                 updatedList.add(folderMsg)
                 updatedList.map { msg ->
                     if (messages.any { it.id == msg.id }) {
-                        msg.copy(folderId = folderId)
+                        msg.copy(folderId = folderId, lastModified = now)
                     } else msg
                 }
             }
@@ -1500,10 +1503,12 @@ class ChatRepository(private val context: Context) {
             _messages.update { list ->
                 list.map { msg ->
                     if (messages.any { it.id == msg.id }) {
-                        msg.copy(folderId = folderId)
-                    } else if (msg.id == folderId && annotation.isNotBlank()) {
-                        val newContent = if (msg.content.isBlank()) annotation else "${msg.content} / $annotation"
-                        msg.copy(content = newContent)
+                        msg.copy(folderId = folderId, lastModified = now)
+                    } else if (msg.id == folderId) {
+                        val newContent = if (annotation.isNotBlank()) {
+                            if (msg.content.isBlank()) annotation else "${msg.content} / $annotation"
+                        } else msg.content
+                        msg.copy(content = newContent, lastModified = now)
                     } else msg
                 }
             }
@@ -1512,10 +1517,13 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun unpackFolder(folderId: String) {
+        val now = System.currentTimeMillis()
         _messages.update { list ->
-            list.filter { it.id != folderId }.map { msg ->
-                if (msg.folderId == folderId) {
-                    msg.copy(folderId = null)
+            list.map { msg ->
+                if (msg.id == folderId) {
+                    msg.copy(isDeleted = true, lastModified = now)
+                } else if (msg.folderId == folderId) {
+                    msg.copy(folderId = null, lastModified = now)
                 } else msg
             }
         }
