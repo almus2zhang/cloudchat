@@ -2035,17 +2035,31 @@ fun ChatBubble(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.Top
     ) {
-        // Name on the LEFT of the bubble, slightly UP, within the item
-        Text(
-            text = displayName,
-            style = MaterialTheme.typography.labelSmall,
-            color = nameColor,
-            maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            modifier = Modifier
-                .padding(top = 2.dp, end = 4.dp)
-                .widthIn(max = 64.dp)
-        )
+        // Name & Avatar on the LEFT of the bubble
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            modifier = Modifier.padding(top = 2.dp, end = 4.dp)
+        ) {
+            val userAvatarUrl = "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
+            AsyncImage(
+                model = userAvatarUrl,
+                contentDescription = "Avatar",
+                modifier = Modifier
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .border(0.5.dp, Color.LightGray, CircleShape),
+                contentScale = ContentScale.Crop
+            )
+            Text(
+                text = displayName,
+                style = MaterialTheme.typography.labelSmall,
+                color = nameColor,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 64.dp)
+            )
+        }
 
         if (isOutgoing && message.status == MessageStatus.FAILED) {
             // Retry icon for failed outgoing messages (left of the bubble)
@@ -3027,18 +3041,32 @@ fun ImageGroupBubble(
         horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.Top
     ) {
-        // Name on the LEFT of the grid, slightly up (same as other items)
+        // Name and Avatar on the LEFT of the grid
         val displayName = group.messages.first().senderName ?: group.messages.first().sender
-        Text(
-            text = displayName,
-            style = MaterialTheme.typography.labelSmall,
-            color = getUserColor(displayName),
-            maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            modifier = Modifier
-                .padding(top = 2.dp, end = 4.dp)
-                .widthIn(max = 64.dp)
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(3.dp),
+            modifier = Modifier.padding(top = 2.dp, end = 4.dp)
+        ) {
+            val userAvatarUrl = "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
+            AsyncImage(
+                model = userAvatarUrl,
+                contentDescription = "Avatar",
+                modifier = Modifier
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .border(0.5.dp, Color.LightGray, CircleShape),
+                contentScale = ContentScale.Crop
+            )
+            Text(
+                text = displayName,
+                style = MaterialTheme.typography.labelSmall,
+                color = getUserColor(displayName),
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 64.dp)
+            )
+        }
 
         Column(
             horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,

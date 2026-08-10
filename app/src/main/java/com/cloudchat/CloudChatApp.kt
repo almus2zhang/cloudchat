@@ -7,6 +7,7 @@ import coil.util.DebugLogger
 import com.cloudchat.utils.NetworkUtils
 
 import coil.decode.VideoFrameDecoder
+import coil.decode.SvgDecoder
 import coil.disk.DiskCache
 
 class CloudChatApp : Application(), ImageLoaderFactory {
@@ -17,6 +18,7 @@ class CloudChatApp : Application(), ImageLoaderFactory {
             }
             .components {
                 add(VideoFrameDecoder.Factory())
+                add(SvgDecoder.Factory())
             }
             .diskCache {
                 DiskCache.Builder()

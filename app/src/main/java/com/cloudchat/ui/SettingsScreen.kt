@@ -37,16 +37,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 
 val PRESET_AVATARS = listOf(
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Felix",
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Aria",
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Zack",
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Luna",
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Leo",
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Maya",
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Milo",
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Nova",
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Kira",
-    "https://api.dicebear.com/7.x/bottts/svg?seed=Orion"
+    "https://api.dicebear.com/7.x/bottts/png?seed=Felix",
+    "https://api.dicebear.com/7.x/bottts/png?seed=Aria",
+    "https://api.dicebear.com/7.x/bottts/png?seed=Zack",
+    "https://api.dicebear.com/7.x/bottts/png?seed=Luna",
+    "https://api.dicebear.com/7.x/bottts/png?seed=Leo",
+    "https://api.dicebear.com/7.x/bottts/png?seed=Maya",
+    "https://api.dicebear.com/7.x/bottts/png?seed=Milo",
+    "https://api.dicebear.com/7.x/bottts/png?seed=Nova",
+    "https://api.dicebear.com/7.x/bottts/png?seed=Kira",
+    "https://api.dicebear.com/7.x/bottts/png?seed=Orion"
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
