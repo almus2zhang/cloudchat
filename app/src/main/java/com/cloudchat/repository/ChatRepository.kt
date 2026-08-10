@@ -1505,9 +1505,11 @@ class ChatRepository(private val context: Context) {
                     if (messages.any { it.id == msg.id }) {
                         msg.copy(folderId = folderId, lastModified = now)
                     } else if (msg.id == folderId) {
-                        val newContent = if (annotation.isNotBlank()) {
-                            if (msg.content.isBlank()) annotation else "${msg.content} / $annotation"
-                        } else msg.content
+                        val newContent = if (annotation.isNotBlank() && annotation != msg.content) {
+                            annotation
+                        } else {
+                            msg.content
+                        }
                         msg.copy(content = newContent, lastModified = now)
                     } else msg
                 }
