@@ -28,6 +28,27 @@ import com.cloudchat.storage.S3StorageProvider
 import com.cloudchat.storage.WebDavStorageProvider
 import kotlinx.coroutines.launch
 
+import android.net.Uri
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+
+val PRESET_AVATARS = listOf(
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Felix",
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Aria",
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Zack",
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Luna",
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Leo",
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Maya",
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Milo",
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Nova",
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Kira",
+    "https://api.dicebear.com/7.x/bottts/svg?seed=Orion"
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
@@ -35,11 +56,23 @@ fun SettingsScreen(onBack: () -> Unit) {
     val settingsRepository = remember { SettingsRepository(context) }
     val coroutineScope = rememberCoroutineScope()
 
+    var editingConfig by remember { mutableStateOf<ServerConfig?>(null) }
+
+    val avatarPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let {
+            try {
+                context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {}
+            editingConfig = editingConfig?.copy(avatarUrl = it.toString())
+        }
+    }
+
     val accounts by settingsRepository.accounts.collectAsState(initial = emptyList())
     val currentConfig by settingsRepository.currentConfig.collectAsState(initial = null)
     val appMode by settingsRepository.appMode.collectAsState(initial = com.cloudchat.model.AppMode.SELF_BUILT)
 
-    var editingConfig by remember { mutableStateOf<ServerConfig?>(null) }
     var deletingAccountConfig by remember { mutableStateOf<ServerConfig?>(null) }
     var isTesting by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
@@ -194,13 +227,55 @@ fun SettingsScreen(onBack: () -> Unit) {
 
                 TextField(
                     value = config.username,
-                    onValueChange = { 
-                        editingConfig = config.copy(username = it)
-                    },
+                    onValueChange = { editingConfig = config.copy(username = it) },
                     label = { Text("用户昵称 (Name)") },
                     modifier = Modifier.fillMaxWidth(),
                     placeholder = { Text("在此输入您的名字") }
                 )
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text("个人头像设置 (Avatar)", style = MaterialTheme.typography.titleMedium)
+
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    val avatarSrc = config.avatarUrl.ifEmpty { "https://api.dicebear.com/7.x/bottts/svg?seed=${config.username.ifEmpty { "User" }}" }
+                    AsyncImage(
+                        model = avatarSrc,
+                        contentDescription = "Avatar",
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .border(2.dp, MaterialTheme.colorScheme.primary, CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+
+                    Button(onClick = { avatarPickerLauncher.launch("image/*") }) {
+                        Text("选择本地图片做头像")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                Text("系统内置精美头像：", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+                    PRESET_AVATARS.forEach { url ->
+                        val isSelected = config.avatarUrl == url
+                        AsyncImage(
+                            model = url,
+                            contentDescription = "Preset Avatar",
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(CircleShape)
+                                .border(
+                                    if (isSelected) 3.dp else 1.dp,
+                                    if (isSelected) MaterialTheme.colorScheme.primary else Color.LightGray,
+                                    CircleShape
+                                )
+                                .clickable {
+                                    editingConfig = config.copy(avatarUrl = url)
+                                },
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+                }
 
                 Spacer(modifier = Modifier.height(8.dp))
                 TextField(

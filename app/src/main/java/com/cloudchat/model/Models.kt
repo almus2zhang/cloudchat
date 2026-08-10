@@ -57,6 +57,7 @@ data class ServerConfig(
     val secretKey: String = "",
     val saveDir: String = "", // Replaced old username (path)
     val username: String = "", // New Display Name
+    val avatarUrl: String = "", // Avatar URL, preset SVG/PNG, or local image URI
     val serverPath: String = "",
     val webDavUrl: String = "",
     val webDavUser: String = "",
