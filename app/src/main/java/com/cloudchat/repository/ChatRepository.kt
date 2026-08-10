@@ -154,6 +154,81 @@ class ChatRepository(private val context: Context) {
         return getTransientUri(messageId, fileName) != null
     }
 
+    suspend fun resolveAvatarPath(avatarName: String?): String? = withContext(Dispatchers.IO) {
+        if (avatarName.isNullOrEmpty()) return@withContext null
+        if (avatarName.startsWith("http://") || avatarName.startsWith("https://") || avatarName.startsWith("content://") || avatarName.startsWith("file://") || avatarName.startsWith("data:")) {
+            return@withContext avatarName
+        }
+
+        val safeName = avatarName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+        val avatarDir = File(context.cacheDir, "avatars")
+        if (!avatarDir.exists()) avatarDir.mkdirs()
+
+        val localFile = File(avatarDir, safeName)
+        if (localFile.exists() && localFile.length() > 0) {
+            return@withContext "file://${localFile.absolutePath}"
+        }
+
+        try {
+            val provider = storageProvider
+            if (provider != null) {
+                val tmpFile = File(avatarDir, "${safeName}.tmp")
+                if (tmpFile.exists()) tmpFile.delete()
+                provider.downloadFile(avatarName, tmpFile, null)
+                if (tmpFile.exists() && tmpFile.length() > 0) {
+                    tmpFile.renameTo(localFile)
+                    return@withContext "file://${localFile.absolutePath}"
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("ChatRepository", "Failed to download avatar $avatarName", e)
+        }
+        null
+    }
+
+    suspend fun uploadCustomAvatar(config: ServerConfig, imageUri: Uri): String? = withContext(Dispatchers.IO) {
+        try {
+            val sanitizedUser = (config.username.ifEmpty { "user" }).replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val avatarFileName = "avatar_${sanitizedUser}.jpg"
+
+            val inputStream = context.contentResolver.openInputStream(imageUri) ?: return@withContext null
+            val originalBitmap = BitmapFactory.decodeStream(inputStream)
+            inputStream.close()
+
+            if (originalBitmap == null) return@withContext null
+
+            val maxSide = 128
+            val side = Math.min(originalBitmap.width, originalBitmap.height)
+            val sx = (originalBitmap.width - side) / 2
+            val sy = (originalBitmap.height - side) / 2
+            val cropped = Bitmap.createBitmap(originalBitmap, sx, sy, side, side)
+            val scaled = Bitmap.createScaledBitmap(cropped, maxSide, maxSide, true)
+
+            val avatarDir = File(context.cacheDir, "avatars")
+            if (!avatarDir.exists()) avatarDir.mkdirs()
+            val localFile = File(avatarDir, avatarFileName)
+
+            java.io.FileOutputStream(localFile).use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+
+            val provider = if (config.type == com.cloudchat.model.StorageType.S3) {
+                S3StorageProvider(config, config.saveDir)
+            } else {
+                WebDavStorageProvider(config, config.saveDir, false)
+            }
+
+            localFile.inputStream().use { input ->
+                provider.uploadFile(input, avatarFileName, "image/jpeg", localFile.length(), null)
+            }
+
+            return@withContext avatarFileName
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Failed to upload avatar", e)
+            null
+        }
+    }
+
     suspend fun downloadFileToCache(messageId: String, fileName: String, remoteUrl: String): File? {
         val fullUrl = resolveUrl(remoteUrl) ?: remoteUrl
         return downloadFileInternal(messageId, fileName, fullUrl)

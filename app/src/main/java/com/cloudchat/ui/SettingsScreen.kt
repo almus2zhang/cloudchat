@@ -58,6 +58,8 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     var editingConfig by remember { mutableStateOf<ServerConfig?>(null) }
 
+    var pendingAvatarUri by remember { mutableStateOf<Uri?>(null) }
+
     val avatarPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -65,6 +67,7 @@ fun SettingsScreen(onBack: () -> Unit) {
             try {
                 context.contentResolver.takePersistableUriPermission(it, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (e: Exception) {}
+            pendingAvatarUri = it
             editingConfig = editingConfig?.copy(avatarUrl = it.toString())
         }
     }
@@ -439,7 +442,17 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Button(
                         onClick = {
                             coroutineScope.launch {
-                                settingsRepository.saveAccount(config)
+                                var finalConfig = config
+                                val uriToUpload = pendingAvatarUri
+                                if (uriToUpload != null && config.avatarUrl.startsWith("content://")) {
+                                    val repo = com.cloudchat.repository.ChatRepository(context)
+                                    val uploadedName = repo.uploadCustomAvatar(config, uriToUpload)
+                                    if (!uploadedName.isNullOrEmpty()) {
+                                        finalConfig = config.copy(avatarUrl = uploadedName)
+                                    }
+                                }
+                                settingsRepository.saveAccount(finalConfig)
+                                pendingAvatarUri = null
                                 editingConfig = null
                                 onBack() // Auto close after save
                             }

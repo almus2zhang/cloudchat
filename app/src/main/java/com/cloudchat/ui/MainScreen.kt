@@ -1996,6 +1996,30 @@ private suspend fun saveMediaToGallery(context: android.content.Context, chatRep
     }
 }
 
+@Composable
+fun rememberAvatarUrl(
+    rawAvatar: String?,
+    senderName: String?,
+    isOutgoing: Boolean,
+    chatRepository: ChatRepository
+): String {
+    val displayName = senderName?.ifEmpty { "User" } ?: "User"
+    val fallback = "https://api.dicebear.com/7.x/bottts/png?seed=${Uri.encode(displayName)}"
+
+    val avatarName = rawAvatar?.ifEmpty { null }
+    if (avatarName == null) return fallback
+    if (avatarName.startsWith("http://") || avatarName.startsWith("https://") || avatarName.startsWith("file://") || avatarName.startsWith("data:") || avatarName.startsWith("content://")) {
+        return avatarName
+    }
+
+    var resolvedUrl by remember(avatarName) { mutableStateOf<String?>(null) }
+    LaunchedEffect(avatarName) {
+        val path = chatRepository.resolveAvatarPath(avatarName)
+        resolvedUrl = path
+    }
+    return resolvedUrl ?: fallback
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun ChatBubble(
@@ -2022,6 +2046,13 @@ fun ChatBubble(
     val displayName = message.senderName ?: message.sender
     val nameColor = getUserColor(displayName)
     
+    val userAvatarUrl = rememberAvatarUrl(
+        rawAvatar = message.senderAvatar,
+        senderName = displayName,
+        isOutgoing = isOutgoing,
+        chatRepository = chatRepository
+    )
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -2037,7 +2068,6 @@ fun ChatBubble(
     ) {
         // Left Side Avatar for Incoming Messages (44dp - ~9x area)
         if (!isOutgoing) {
-            val userAvatarUrl = message.senderAvatar?.ifEmpty { null } ?: "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
             AsyncImage(
                 model = userAvatarUrl,
                 contentDescription = "Avatar",
@@ -2406,7 +2436,6 @@ fun ChatBubble(
 
         // Right Side Avatar for Outgoing Messages (44dp - ~9x area)
         if (isOutgoing) {
-            val userAvatarUrl = message.senderAvatar?.ifEmpty { null } ?: "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
             AsyncImage(
                 model = userAvatarUrl,
                 contentDescription = "Avatar",
@@ -3043,6 +3072,12 @@ fun ImageGroupBubble(
     val contentColor = Color.Black
     
     val displayName = group.messages.first().senderName ?: group.messages.first().sender
+    val userAvatarUrl = rememberAvatarUrl(
+        rawAvatar = group.messages.first().senderAvatar,
+        senderName = displayName,
+        isOutgoing = isOutgoing,
+        chatRepository = chatRepository
+    )
 
     Row(
         modifier = Modifier
@@ -3057,7 +3092,6 @@ fun ImageGroupBubble(
     ) {
         // Left Side Avatar for Incoming Group Messages
         if (!isOutgoing) {
-            val userAvatarUrl = group.messages.first().senderAvatar?.ifEmpty { null } ?: "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
             AsyncImage(
                 model = userAvatarUrl,
                 contentDescription = "Avatar",
@@ -3175,7 +3209,6 @@ fun ImageGroupBubble(
 
         // Right Side Avatar for Outgoing Group Messages
         if (isOutgoing) {
-            val userAvatarUrl = group.messages.first().senderAvatar?.ifEmpty { null } ?: "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
             AsyncImage(
                 model = userAvatarUrl,
                 contentDescription = "Avatar",
