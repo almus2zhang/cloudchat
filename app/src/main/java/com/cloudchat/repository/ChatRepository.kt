@@ -478,6 +478,7 @@ class ChatRepository(private val context: Context) {
         val newMessage = ChatMessage(
             sender = config.username, // Username identifies the sender
             senderName = config.username,
+            senderAvatar = config.avatarUrl,
             content = fileName ?: content,
             type = type,
             isOutgoing = true,
@@ -973,6 +974,7 @@ class ChatRepository(private val context: Context) {
         val newMessage = ChatMessage(
             sender = config.username,
             senderName = config.username,
+            senderAvatar = config.avatarUrl,
             content = fileName,
             type = type,
             isOutgoing = true,

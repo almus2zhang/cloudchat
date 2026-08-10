@@ -18,6 +18,7 @@ data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val sender: String,
     val senderName: String? = null, // Display name
+    val senderAvatar: String? = null, // Sender Avatar URL
     val content: String,
     val timestamp: Long = System.currentTimeMillis(),
     val type: MessageType = MessageType.TEXT,

@@ -2032,32 +2032,21 @@ fun ChatBubble(
                 onLongClick = onLongClick
             )
             .padding(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.End,
+        horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
-        // Name & Avatar on the LEFT of the bubble
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-            modifier = Modifier.padding(top = 2.dp, end = 4.dp)
-        ) {
-            val userAvatarUrl = "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
+        // Left Side Avatar for Incoming Messages (44dp - ~9x area)
+        if (!isOutgoing) {
+            val userAvatarUrl = message.senderAvatar?.ifEmpty { null } ?: "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
             AsyncImage(
                 model = userAvatarUrl,
                 contentDescription = "Avatar",
                 modifier = Modifier
-                    .size(16.dp)
+                    .padding(end = 8.dp, top = 2.dp)
+                    .size(44.dp)
                     .clip(CircleShape)
-                    .border(0.5.dp, Color.LightGray, CircleShape),
+                    .border(1.dp, Color.LightGray, CircleShape),
                 contentScale = ContentScale.Crop
-            )
-            Text(
-                text = displayName,
-                style = MaterialTheme.typography.labelSmall,
-                color = nameColor,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 64.dp)
             )
         }
 
@@ -2080,6 +2069,14 @@ fun ChatBubble(
             horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
             modifier = Modifier.widthIn(max = 280.dp)
         ) {
+            Text(
+                text = displayName,
+                style = MaterialTheme.typography.labelSmall,
+                color = nameColor,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.padding(bottom = 2.dp)
+            )
             when (message.type) {
                 MessageType.TEXT -> {
                     Card(
@@ -2405,6 +2402,21 @@ fun ChatBubble(
                     color = Color.Gray
                 )
             }
+        }
+
+        // Right Side Avatar for Outgoing Messages (44dp - ~9x area)
+        if (isOutgoing) {
+            val userAvatarUrl = message.senderAvatar?.ifEmpty { null } ?: "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
+            AsyncImage(
+                model = userAvatarUrl,
+                contentDescription = "Avatar",
+                modifier = Modifier
+                    .padding(start = 8.dp, top = 2.dp)
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), CircleShape),
+                contentScale = ContentScale.Crop
+            )
         }
     }
 }
@@ -3030,6 +3042,8 @@ fun ImageGroupBubble(
     val bubbleColor = if (isOutgoing) Color(0xFF95EC69) else Color.White
     val contentColor = Color.Black
     
+    val displayName = group.messages.first().senderName ?: group.messages.first().sender
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -3038,33 +3052,21 @@ fun ImageGroupBubble(
                 onClick = onClickGroup,
                 onLongClick = onLongClickGroup
             ),
-        horizontalArrangement = Arrangement.End,
+        horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
-        // Name and Avatar on the LEFT of the grid
-        val displayName = group.messages.first().senderName ?: group.messages.first().sender
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(3.dp),
-            modifier = Modifier.padding(top = 2.dp, end = 4.dp)
-        ) {
-            val userAvatarUrl = "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
+        // Left Side Avatar for Incoming Group Messages
+        if (!isOutgoing) {
+            val userAvatarUrl = group.messages.first().senderAvatar?.ifEmpty { null } ?: "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
             AsyncImage(
                 model = userAvatarUrl,
                 contentDescription = "Avatar",
                 modifier = Modifier
-                    .size(16.dp)
+                    .padding(end = 8.dp, top = 2.dp)
+                    .size(44.dp)
                     .clip(CircleShape)
-                    .border(0.5.dp, Color.LightGray, CircleShape),
+                    .border(1.dp, Color.LightGray, CircleShape),
                 contentScale = ContentScale.Crop
-            )
-            Text(
-                text = displayName,
-                style = MaterialTheme.typography.labelSmall,
-                color = getUserColor(displayName),
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 64.dp)
             )
         }
 
@@ -3169,6 +3171,21 @@ fun ImageGroupBubble(
                     color = Color.Gray
                 )
             }
+        }
+
+        // Right Side Avatar for Outgoing Group Messages
+        if (isOutgoing) {
+            val userAvatarUrl = group.messages.first().senderAvatar?.ifEmpty { null } ?: "https://api.dicebear.com/7.x/bottts/png?seed=${displayName}"
+            AsyncImage(
+                model = userAvatarUrl,
+                contentDescription = "Avatar",
+                modifier = Modifier
+                    .padding(start = 8.dp, top = 2.dp)
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), CircleShape),
+                contentScale = ContentScale.Crop
+            )
         }
     }
 }
