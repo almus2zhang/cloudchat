@@ -1619,6 +1619,7 @@ class ChatRepository(private val context: Context) {
         val targetUrls = listOf(diaryUrl, fallbackDiaryUrl)
         val result = mutableListOf<DiaryFileItem>()
         val seenNames = mutableSetOf<String>()
+        val cleanBaseUrl = config.diaryBaseUrl.trim().trimEnd('/')
 
         val client = NetworkUtils.getUnsafeOkHttpClient().build()
         val credential = Credentials.basic(config.webDavUser, config.webDavPass)
@@ -1680,16 +1681,32 @@ class ChatRepository(private val context: Context) {
                                         val cleanHref = href.trimEnd('/')
                                         val cleanTarget = url.trimEnd('/')
 
-                                        if (!isCollection && href.isNotEmpty() && !cleanHref.endsWith("/diary") && cleanHref != cleanTarget) {
-                                            val fileName = java.net.URLDecoder.decode(cleanHref.substringAfterLast('/'), "UTF-8")
-                                            if (fileName.isNotEmpty() && seenNames.add(fileName)) {
-                                                val diaryBaseUrl = config.diaryBaseUrl.trim()
-                                                val webUrl = if (diaryBaseUrl.isNotEmpty()) {
-                                                    "${diaryBaseUrl.trimEnd('/')}/${java.net.URLEncoder.encode(fileName, "UTF-8")}"
+                                        if (href.isNotEmpty() && !cleanHref.endsWith("/diary") && cleanHref != cleanTarget) {
+                                            val itemName = java.net.URLDecoder.decode(cleanHref.substringAfterLast('/'), "UTF-8")
+                                            if (itemName.isNotEmpty() && seenNames.add(itemName)) {
+                                                val webUrl = if (isCollection) {
+                                                    if (cleanBaseUrl.isNotEmpty()) {
+                                                        if (cleanBaseUrl.endsWith("/diary")) {
+                                                            "$cleanBaseUrl/${java.net.URLEncoder.encode(itemName, "UTF-8")}/index.html"
+                                                        } else {
+                                                            "$cleanBaseUrl/diary/${java.net.URLEncoder.encode(itemName, "UTF-8")}/index.html"
+                                                        }
+                                                    } else {
+                                                        "$cleanTarget/${java.net.URLEncoder.encode(itemName, "UTF-8")}/index.html"
+                                                    }
                                                 } else {
-                                                    if (href.startsWith("http")) href else "$baseUrl${if (href.startsWith("/")) "" else "/"}$href"
+                                                    if (cleanBaseUrl.isNotEmpty()) {
+                                                        if (cleanBaseUrl.endsWith("/diary")) {
+                                                            "$cleanBaseUrl/${java.net.URLEncoder.encode(itemName, "UTF-8")}"
+                                                        } else {
+                                                            "$cleanBaseUrl/diary/${java.net.URLEncoder.encode(itemName, "UTF-8")}"
+                                                        }
+                                                    } else {
+                                                        if (href.startsWith("http")) href else "$baseUrl${if (href.startsWith("/")) "" else "/"}$href"
+                                                    }
                                                 }
-                                                result.add(DiaryFileItem(fileName, webUrl, currentSize, currentLastModified))
+                                                val displayName = if (isCollection) "$itemName/index.html" else itemName
+                                                result.add(DiaryFileItem(displayName, webUrl, currentSize, currentLastModified))
                                             }
                                         }
                                     }
