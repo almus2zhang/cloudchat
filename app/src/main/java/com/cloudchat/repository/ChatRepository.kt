@@ -96,6 +96,12 @@ class ChatRepository(private val context: Context) {
 
     private val _isServerConnected = MutableStateFlow(true)
 
+    // Sync state observables for UI animated indicators
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing = _isSyncing.asStateFlow()
+    private val _mediaSyncProgress = MutableStateFlow(0f) // 0.0 ~ 1.0
+    val mediaSyncProgress = _mediaSyncProgress.asStateFlow()
+
     /** 文件已成功上传后，待删除的源文件 URI（图库需经用户授权确认才可删）。 */
     val sourceReadyToDelete = MutableSharedFlow<String>(extraBufferCapacity = 32)
     val isServerConnected = _isServerConnected.asStateFlow()
@@ -1253,7 +1259,8 @@ class ChatRepository(private val context: Context) {
 
     suspend fun refreshHistoryFromCloud() = withContext(Dispatchers.IO) {
         if (!isRefreshingFromCloud.compareAndSet(false, true)) return@withContext
-        val provider = storageProvider ?: run { isRefreshingFromCloud.set(false); return@withContext }
+        _isSyncing.value = true
+        val provider = storageProvider ?: run { _isSyncing.value = false; isRefreshingFromCloud.set(false); return@withContext }
         val config = currentConfig ?: run { isRefreshingFromCloud.set(false); return@withContext }
         try {
             var indexJson = provider.downloadText("chat_index.json")
@@ -1306,6 +1313,7 @@ class ChatRepository(private val context: Context) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
             _isServerConnected.value = provider.isReachable()
         } finally {
+            _isSyncing.value = false
             isRefreshingFromCloud.set(false)
         }
     }
@@ -1571,8 +1579,10 @@ class ChatRepository(private val context: Context) {
         }
         
         var current = 0
+        _mediaSyncProgress.value = 0f
         allMediaMsgs.forEach { msg ->
             current++
+            _mediaSyncProgress.value = current.toFloat() / total.toFloat()
             onProgress(current, total)
             
             val fileName = msg.content

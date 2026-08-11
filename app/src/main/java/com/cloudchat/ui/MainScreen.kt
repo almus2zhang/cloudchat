@@ -39,6 +39,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -114,6 +116,8 @@ fun MainScreen(
     val activeDownloadIds by chatRepository.activeDownloadIds.collectAsState()
     val syncInterval by chatRepository.syncInterval.collectAsState()
     val isServerConnected by chatRepository.isServerConnected.collectAsState()
+    val isSyncing by chatRepository.isSyncing.collectAsState()
+    val mediaSyncProgress by chatRepository.mediaSyncProgress.collectAsState()
     val autoDownloadLimit = currentConfig?.autoDownloadLimit ?: (5 * 1024 * 1024L)
     
     var inputText by remember { mutableStateOf("") }
@@ -555,7 +559,7 @@ fun MainScreen(
     val searchFocusRequester = remember { FocusRequester() }
 
     // Inject search and sync icons into TopAppBar
-    LaunchedEffect(isSearchActive, searchQuery, syncInterval, isServerConnected, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId) {
+    LaunchedEffect(isSearchActive, searchQuery, syncInterval, isServerConnected, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId, isSyncing, isMediaSyncing, mediaSyncProgress) {
         setTopBarActions {
             if (isSearchActive) {
                 // Auto-focus when search is activated
@@ -601,18 +605,44 @@ fun MainScreen(
             } else {
                 val isFast = syncInterval == 1000L
                 
-                // Manual Refresh Button
+                // Manual Refresh Button with spinning + progress ring when syncing
                 IconButton(modifier = Modifier.size(40.dp), onClick = {
                     scope.launch { chatRepository.refreshHistoryFromCloud() }
                 }) {
-                    Icon(
-                        imageVector = Icons.Default.Sync,
-                        contentDescription = "立即刷新",
-                        tint = if (isServerConnected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.error
-                    )
+                    Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        if (isSyncing) {
+                            // Indeterminate circular progress ring
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(28.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                            )
+                        }
+                        // Animated rotation for the icon when syncing
+                        val infiniteTransition = rememberInfiniteTransition(label = "syncSpin")
+                        val syncRotation by infiniteTransition.animateFloat(
+                            initialValue = 0f,
+                            targetValue = if (isSyncing) 360f else 0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(1000, easing = LinearEasing),
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "syncRotation"
+                        )
+                        Icon(
+                            imageVector = Icons.Default.Sync,
+                            contentDescription = "立即刷新",
+                            tint = if (isSyncing) MaterialTheme.colorScheme.primary
+                                   else if (isServerConnected) MaterialTheme.colorScheme.onSurface 
+                                   else MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(22.dp).then(
+                                if (isSyncing) Modifier.graphicsLayer { rotationZ = syncRotation } else Modifier
+                            )
+                        )
+                    }
                 }
 
-                // Sync All Media Files Button
+                // Sync All Media Files Button with spinning + percentage ring
                 IconButton(modifier = Modifier.size(40.dp), onClick = {
                     if (isMediaSyncing) return@IconButton
                     isMediaSyncing = true
@@ -622,11 +652,35 @@ fun MainScreen(
                         }
                     }
                 }) {
-                    Icon(
-                        imageVector = Icons.Default.CloudSync,
-                        contentDescription = "同步所有文件",
-                        tint = if (isMediaSyncing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                    )
+                    Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
+                        if (isMediaSyncing) {
+                            // Determinate circular progress with percentage
+                            androidx.compose.material3.CircularProgressIndicator(
+                                progress = mediaSyncProgress.coerceIn(0f, 1f),
+                                modifier = Modifier.size(28.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        val infiniteTransition2 = rememberInfiniteTransition(label = "mediaSyncSpin")
+                        val mediaRotation by infiniteTransition2.animateFloat(
+                            initialValue = 0f,
+                            targetValue = if (isMediaSyncing) 360f else 0f,
+                            animationSpec = infiniteRepeatable(
+                                animation = tween(1200, easing = LinearEasing),
+                                repeatMode = RepeatMode.Restart
+                            ),
+                            label = "mediaRotation"
+                        )
+                        Icon(
+                            imageVector = Icons.Default.CloudSync,
+                            contentDescription = "同步所有文件",
+                            tint = if (isMediaSyncing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(22.dp).then(
+                                if (isMediaSyncing) Modifier.graphicsLayer { rotationZ = mediaRotation } else Modifier
+                            )
+                        )
+                    }
                 }
 
                 // Sync Interval Toggle (Bolt icon colored by mode)
