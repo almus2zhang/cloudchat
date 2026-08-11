@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
 import okhttp3.Credentials
 import java.io.File
@@ -1596,4 +1597,124 @@ class ChatRepository(private val context: Context) {
             }
         }
     }
+
+    suspend fun listDiaryFiles(): List<DiaryFileItem> = withContext(Dispatchers.IO) {
+        val config = currentConfig ?: SettingsRepository(context).currentConfig.firstOrNull() ?: return@withContext emptyList()
+        if (config.type != com.cloudchat.model.StorageType.WEBDAV || config.webDavUrl.isBlank()) {
+            return@withContext emptyList()
+        }
+
+        val baseUrl = config.webDavUrl.trimEnd('/')
+        val root = config.serverPath.trim('/')
+        val userDirClean = config.saveDir.trim('/')
+
+        val parts = mutableListOf<String>()
+        if (root.isNotEmpty()) parts.add(root)
+        if (userDirClean.isNotEmpty()) parts.add(userDirClean)
+        parts.add("diary")
+
+        val diaryUrl = "$baseUrl/${parts.joinToString("/")}"
+        val fallbackDiaryUrl = "$baseUrl/${if (root.isNotEmpty()) "$root/" else ""}diary"
+
+        val targetUrls = listOf(diaryUrl, fallbackDiaryUrl)
+        val result = mutableListOf<DiaryFileItem>()
+        val seenNames = mutableSetOf<String>()
+
+        val client = NetworkUtils.getUnsafeOkHttpClient().build()
+        val credential = Credentials.basic(config.webDavUser, config.webDavPass)
+
+        for (url in targetUrls) {
+            try {
+                val request = okhttp3.Request.Builder()
+                    .url(url)
+                    .method("PROPFIND", null)
+                    .header("Authorization", credential)
+                    .header("Depth", "1")
+                    .build()
+
+                val response = client.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val xmlText = response.body?.string() ?: ""
+                    response.close()
+
+                    if (xmlText.isNotEmpty()) {
+                        val factory = org.xmlpull.v1.XmlPullParserFactory.newInstance()
+                        factory.isNamespaceAware = true
+                        val parser = factory.newPullParser()
+                        parser.setInput(java.io.StringReader(xmlText))
+
+                        var eventType = parser.eventType
+                        var currentHref: String? = null
+                        var currentSize: Long = 0L
+                        var currentLastModified: Long = 0L
+                        var isCollection = false
+
+                        while (eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                            val tag = parser.name
+                            when (eventType) {
+                                org.xmlpull.v1.XmlPullParser.START_TAG -> {
+                                    if (tag.equals("response", ignoreCase = true)) {
+                                        currentHref = null
+                                        currentSize = 0L
+                                        currentLastModified = 0L
+                                        isCollection = false
+                                    } else if (tag.equals("href", ignoreCase = true)) {
+                                        currentHref = parser.nextText()
+                                    } else if (tag.equals("collection", ignoreCase = true)) {
+                                        isCollection = true
+                                    } else if (tag.equals("getcontentlength", ignoreCase = true)) {
+                                        currentSize = parser.nextText().toLongOrNull() ?: 0L
+                                    } else if (tag.equals("getlastmodified", ignoreCase = true)) {
+                                        val dateStr = parser.nextText()
+                                        try {
+                                            val format = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.US)
+                                            currentLastModified = format.parse(dateStr)?.time ?: 0L
+                                        } catch (e: Exception) {
+                                            currentLastModified = System.currentTimeMillis()
+                                        }
+                                    }
+                                }
+                                org.xmlpull.v1.XmlPullParser.END_TAG -> {
+                                    if (tag.equals("response", ignoreCase = true)) {
+                                        val href = currentHref ?: ""
+                                        val cleanHref = href.trimEnd('/')
+                                        val cleanTarget = url.trimEnd('/')
+
+                                        if (!isCollection && href.isNotEmpty() && !cleanHref.endsWith("/diary") && cleanHref != cleanTarget) {
+                                            val fileName = java.net.URLDecoder.decode(cleanHref.substringAfterLast('/'), "UTF-8")
+                                            if (fileName.isNotEmpty() && seenNames.add(fileName)) {
+                                                val diaryBaseUrl = config.diaryBaseUrl.trim()
+                                                val webUrl = if (diaryBaseUrl.isNotEmpty()) {
+                                                    "${diaryBaseUrl.trimEnd('/')}/${java.net.URLEncoder.encode(fileName, "UTF-8")}"
+                                                } else {
+                                                    if (href.startsWith("http")) href else "$baseUrl${if (href.startsWith("/")) "" else "/"}$href"
+                                                }
+                                                result.add(DiaryFileItem(fileName, webUrl, currentSize, currentLastModified))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            eventType = parser.next()
+                        }
+                    }
+                } else {
+                    response.close()
+                }
+                if (result.isNotEmpty()) break
+            } catch (e: Exception) {
+                Log.w("ChatRepository", "PROPFIND error for diary files: $url", e)
+            }
+        }
+
+        result.sortByDescending { it.lastModified }
+        result
+    }
 }
+
+data class DiaryFileItem(
+    val name: String,
+    val webUrl: String,
+    val size: Long,
+    val lastModified: Long
+)

@@ -246,6 +246,16 @@ fun MainScreen(
     }
 
     var activeCategory by remember { mutableStateOf("all") } // "all" or "diary"
+    var diaryFiles by remember { mutableStateOf<List<com.cloudchat.repository.DiaryFileItem>>(emptyList()) }
+    var isLoadingDiaryFiles by remember { mutableStateOf(false) }
+
+    LaunchedEffect(activeCategory) {
+        if (activeCategory == "diary") {
+            isLoadingDiaryFiles = true
+            diaryFiles = chatRepository.listDiaryFiles()
+            isLoadingDiaryFiles = false
+        }
+    }
 
     LaunchedEffect(currentFolderId, activeCategory, messages) {
         if (currentFolderId != null) {
@@ -866,6 +876,114 @@ fun MainScreen(
                 }
             } else {
                 Modifier
+            }
+
+            if (activeCategory == "diary") {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Book,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "WebDAV 网页日记列表 (${diaryFiles.size})",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            IconButton(onClick = {
+                                scope.launch {
+                                    isLoadingDiaryFiles = true
+                                    diaryFiles = chatRepository.listDiaryFiles()
+                                    isLoadingDiaryFiles = false
+                                }
+                            }) {
+                                Icon(Icons.Default.Refresh, contentDescription = "刷新", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+
+                        if (isLoadingDiaryFiles) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("正在加载 WebDAV 日记...", style = MaterialTheme.typography.bodySmall)
+                            }
+                        } else if (diaryFiles.isEmpty()) {
+                            Text(
+                                text = "WebDAV `diary` 目录下暂无 HTML 日记文件",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                                diaryFiles.take(10).forEach { item ->
+                                    Card(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp)
+                                            .clickable {
+                                                try {
+                                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(item.webUrl))
+                                                    context.startActivity(intent)
+                                                } catch (e: Exception) {
+                                                    android.widget.Toast.makeText(context, "无法打开链接: ${item.webUrl}", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = item.name,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1
+                                                )
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Text(
+                                                    text = item.webUrl,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    maxLines = 1
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Icon(
+                                                imageVector = Icons.Default.OpenInNew,
+                                                contentDescription = "打开",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             LazyColumn(

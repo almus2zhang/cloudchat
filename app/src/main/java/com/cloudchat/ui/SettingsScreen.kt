@@ -350,6 +350,14 @@ fun SettingsScreen(onBack: () -> Unit) {
                             label = { Text("WebDAV Fallback URL (Optional)") },
                             modifier = Modifier.fillMaxWidth()
                         )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextField(
+                            value = config.diaryBaseUrl,
+                            onValueChange = { editingConfig = config.copy(diaryBaseUrl = it) },
+                            label = { Text("日记对外访问根 URL (Diary Base URL)") },
+                            placeholder = { Text("例如: https://diary.example.com") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
 
                     if (config.type == StorageType.WEBDAV) {
