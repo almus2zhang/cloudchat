@@ -499,9 +499,10 @@ class ChatRepository(private val context: Context) {
                     
                     val indexChanged = remoteIndexTime > 0L && remoteIndexTime != lastKnownCloudTime
                     val shardChanged = remoteShardTime > 0L && remoteShardTime != lastKnownCurrentShardTime
+                    val timestampCheckFailed = remoteIndexTime <= 0L && remoteShardTime <= 0L
                     
-                    if (indexChanged || shardChanged) {
-                        Log.d("ChatRepository", "Cloud change detected (index: $remoteIndexTime, shard: $remoteShardTime), refreshing...")
+                    if (indexChanged || shardChanged || timestampCheckFailed) {
+                        Log.d("ChatRepository", "Cloud change check (index: $remoteIndexTime, shard: $remoteShardTime, fallback: $timestampCheckFailed), refreshing...")
                         refreshHistoryFromCloud()
                         if (remoteIndexTime > 0L) lastKnownCloudTime = remoteIndexTime
                         if (remoteShardTime > 0L) lastKnownCurrentShardTime = remoteShardTime
