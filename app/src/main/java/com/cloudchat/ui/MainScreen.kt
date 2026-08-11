@@ -328,7 +328,6 @@ fun MainScreen(
         } else if (isPrivacyMode) {
             isPrivacyMode = false
             viewOnlyPrivacyItems = false
-            android.widget.Toast.makeText(context, "已退出隐私模式", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -341,7 +340,6 @@ fun MainScreen(
                 if (System.currentTimeMillis() - lastPrivacyActivity > 5 * 60 * 1000) {
                     isPrivacyMode = false
                     viewOnlyPrivacyItems = false
-                    android.widget.Toast.makeText(context, "隐私模式已因无操作自动退出", android.widget.Toast.LENGTH_SHORT).show()
                     break
                 }
             }
@@ -1061,7 +1059,7 @@ fun MainScreen(
                                             val pin = inputText.substring(2, inputText.length - 2)
                                             if (pin == privacyPin) {
                                                 isPrivacyMode = !isPrivacyMode
-                                                android.widget.Toast.makeText(context, if (isPrivacyMode) "已进入隐私空间" else "已退出隐私空间", android.widget.Toast.LENGTH_SHORT).show()
+                                                viewOnlyPrivacyItems = isPrivacyMode
                                             }
                                             inputText = ""
                                         }
@@ -1324,6 +1322,23 @@ fun MainScreen(
                         Icon(Icons.Default.Share, contentDescription = "Share")
                     }
 
+                    // 移入隐私空间（仅在普通模式下显示）
+                    if (!isPrivacyMode) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                chatRepository.toggleHideMessages(selectedIds)
+                                selectedIds = emptySet()
+                                android.widget.Toast.makeText(context, "已移入隐私空间", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        }) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "移入隐私空间",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
                     // 移出隐私空间（仅在隐私模式下显示）
                     if (isPrivacyMode) {
                         IconButton(onClick = {
@@ -1334,44 +1349,15 @@ fun MainScreen(
                             }
                         }) {
                             Icon(
-                                imageVector = Icons.Default.VisibilityOff,
+                                imageVector = Icons.Default.LockOpen,
                                 contentDescription = "移出隐私空间",
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
 
-                    // Delete: long press -> silently move to privacy space; short press -> confirm deletion
-                    Box(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onPress = { _ ->
-                                        var longPressHandled = false
-                                        try {
-                                            withTimeout(900L) {
-                                                tryAwaitRelease()
-                                            }
-                                        } catch (e: TimeoutCancellationException) {
-                                            longPressHandled = true
-                                            // Long press: silently move selected messages into privacy space (no dialog)
-                                            scope.launch {
-                                                chatRepository.toggleHideMessages(selectedIds)
-                                                selectedIds = emptySet()
-                                            }
-                                        }
-                                        if (!longPressHandled) {
-                                            // Short press: confirm deletion
-                                            showDeleteMessagesConfirmDialog = true
-                                        }
-                                    }
-                                )
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
+                    // 删除消息（点击确认删除）
+                    IconButton(onClick = { showDeleteMessagesConfirmDialog = true }) {
                         Icon(
                             imageVector = Icons.Default.Delete,
                             contentDescription = "Delete",

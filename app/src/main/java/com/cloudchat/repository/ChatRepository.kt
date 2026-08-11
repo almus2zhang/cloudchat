@@ -1333,7 +1333,7 @@ class ChatRepository(private val context: Context) {
         _messages.update { list ->
             list.map {
                 if (messageIds.contains(it.id)) {
-                    it.copy(isHidden = !it.isHidden)
+                    it.copy(isHidden = !it.isHidden, lastModified = System.currentTimeMillis())
                 } else it
             }
         }
