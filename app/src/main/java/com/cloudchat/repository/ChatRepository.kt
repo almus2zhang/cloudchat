@@ -1770,6 +1770,19 @@ class ChatRepository(private val context: Context) {
         result.sortByDescending { it.lastModified }
         result
     }
+
+    suspend fun deleteDiaryFile(fileName: String): Boolean = withContext(Dispatchers.IO) {
+        val provider = storageProvider ?: return@withContext false
+        val cleanName = fileName.removeSuffix("/index.html")
+        val diaryPath = "diary/$cleanName"
+        try {
+            provider.deleteFile(diaryPath)
+            true
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Failed to delete diary file: $fileName", e)
+            false
+        }
+    }
 }
 
 data class DiaryFileItem(

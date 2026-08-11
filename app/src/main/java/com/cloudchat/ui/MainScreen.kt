@@ -1025,12 +1025,36 @@ fun MainScreen(
                                                 )
                                             }
                                             Spacer(modifier = Modifier.width(8.dp))
-                                            Icon(
-                                                imageVector = Icons.Default.OpenInNew,
-                                                contentDescription = "打开",
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Icon(
+                                                    imageVector = Icons.Default.OpenInNew,
+                                                    contentDescription = "打开",
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                IconButton(
+                                                    onClick = {
+                                                        scope.launch {
+                                                            val ok = chatRepository.deleteDiaryFile(item.name)
+                                                            if (ok) {
+                                                                diaryFiles = chatRepository.listDiaryFiles()
+                                                                android.widget.Toast.makeText(context, "已删除日记页面", android.widget.Toast.LENGTH_SHORT).show()
+                                                            } else {
+                                                                android.widget.Toast.makeText(context, "删除失败", android.widget.Toast.LENGTH_SHORT).show()
+                                                            }
+                                                        }
+                                                    },
+                                                    modifier = Modifier.size(24.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Delete,
+                                                        contentDescription = "删除",
+                                                        tint = MaterialTheme.colorScheme.error,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
+                                            }
                                         }
                                     }
                                 }
