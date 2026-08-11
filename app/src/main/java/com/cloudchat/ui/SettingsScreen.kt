@@ -424,6 +424,32 @@ fun SettingsScreen(onBack: () -> Unit) {
                 )
                 Text("Files larger than this will only show thumbnails.", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
 
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("消息展示模板 (Message Template)", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    val templates = listOf("default" to "默认模板", "diary" to "日记模板")
+                    templates.forEach { (id, label) ->
+                        val isSelected = config.messageTemplate == id
+                        OutlinedButton(
+                            onClick = { editingConfig = config.copy(messageTemplate = id) },
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(
+                                width = if (isSelected) 2.dp else 1.dp,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                            )
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+                Text("切换后主界面和文件夹均使用新模板展示", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+
                 Spacer(modifier = Modifier.height(24.dp))
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -986,6 +986,41 @@ fun MainScreen(
                 }
             }
 
+            val isDiaryTemplate = currentConfig?.messageTemplate == "diary"
+
+            // For diary mode: precompute date group headers
+            val diaryDateGroups = if (isDiaryTemplate) {
+                remember(chatUiItems) {
+                    val dayFmt = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+                    val headerFmt = SimpleDateFormat("M月d日 EEE", Locale.CHINESE)
+                    val grouped = linkedMapOf<String, MutableList<String>>() // date -> list of uiItem ids
+                    chatUiItems.forEach { item ->
+                        val ts = when (item) {
+                            is ChatUiItem.SingleMessage -> item.message.timestamp
+                            is ChatUiItem.ImageGroup -> item.messages.firstOrNull()?.timestamp ?: 0L
+                        }
+                        if (ts > 0) {
+                            val key = dayFmt.format(Date(ts))
+                            grouped.getOrPut(key) { mutableListOf() }.add(item.id)
+                        }
+                    }
+                    // Map from uiItem id -> header label (only for the first item of each day)
+                    val headerMap = mutableMapOf<String, String>()
+                    grouped.forEach { (dateKey, ids) ->
+                        val count = ids.size
+                        val ts = chatUiItems.firstOrNull { it.id == ids.first() }?.let { item ->
+                            when (item) {
+                                is ChatUiItem.SingleMessage -> item.message.timestamp
+                                is ChatUiItem.ImageGroup -> item.messages.firstOrNull()?.timestamp ?: 0L
+                            }
+                        } ?: 0L
+                        val label = if (ts > 0) "${headerFmt.format(Date(ts))} · ${count}条" else "$dateKey · ${count}条"
+                        headerMap[ids.first()] = label
+                    }
+                    headerMap
+                }
+            } else emptyMap()
+
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -996,50 +1031,85 @@ fun MainScreen(
                 contentPadding = PaddingValues(8.dp)
             ) {
                 items(chatUiItems.asReversed(), key = { it.id }) { uiItem ->
+                    // Diary template: show date group header before first item of each day
+                    if (isDiaryTemplate) {
+                        val headerLabel = diaryDateGroups[uiItem.id]
+                        if (headerLabel != null) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(modifier = Modifier.weight(1f).height(0.5.dp).background(Color(0xFFCCCCCC)))
+                                Text(
+                                    text = headerLabel,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                    color = Color(0xFF999999),
+                                    modifier = Modifier.padding(horizontal = 10.dp)
+                                )
+                                Box(modifier = Modifier.weight(1f).height(0.5.dp).background(Color(0xFFCCCCCC)))
+                            }
+                        }
+                    }
+
                     when (uiItem) {
                         is ChatUiItem.SingleMessage -> {
                             val message = uiItem.message
                             val progress = uploadProgress[message.id] ?: downloadProgress[message.id]
                             val isDownloading = activeDownloadIds.contains(message.id)
-                            
-                            ChatBubble(
-                                message = message, 
-                                progress = progress,
-                                chatRepository = chatRepository,
-                                isSelected = selectedIds.contains(message.id),
-                                autoDownloadLimit = autoDownloadLimit,
-                                downloadProgress = downloadProgress,
-                                isDownloading = isDownloading,
-                                playingMessageId = playingMessageId,
-                                onPlayAudio = { playAudioMessage(it) },
-                                onMediaClick = { clickedMsg ->
-                                    if (selectedIds.isNotEmpty()) {
-                                        selectedIds = if (selectedIds.contains(clickedMsg.id)) {
-                                            selectedIds - clickedMsg.id
-                                        } else {
-                                            selectedIds + clickedMsg.id
-                                        }
+
+                            val onMediaClickHandler: (ChatMessage) -> Unit = { clickedMsg ->
+                                if (selectedIds.isNotEmpty()) {
+                                    selectedIds = if (selectedIds.contains(clickedMsg.id)) {
+                                        selectedIds - clickedMsg.id
                                     } else {
-                                        if (clickedMsg.type == MessageType.IMAGE || clickedMsg.type == MessageType.VIDEO) {
-                                            val index = mediaMessages.indexOfFirst { it.id == clickedMsg.id }
-                                            if (index != -1) {
-                                                mediaPagerIndex = index
-                                            }
-                                        } else if (clickedMsg.type == MessageType.AUDIO) {
-                                            playAudioMessage(clickedMsg)
-                                        } else if (clickedMsg.type == MessageType.FOLDER) {
-                                            currentFolderId = clickedMsg.id
-                                        } else if (clickedMsg.type == MessageType.FILE) {
-                                            openFileWithDefaultApp(context, chatRepository, clickedMsg)
-                                        }
+                                        selectedIds + clickedMsg.id
                                     }
-                                },
-                                onLongClick = {
-                                    if (selectedIds.isEmpty()) {
-                                        selectedIds = setOf(message.id)
+                                } else {
+                                    if (clickedMsg.type == MessageType.IMAGE || clickedMsg.type == MessageType.VIDEO) {
+                                        val index = mediaMessages.indexOfFirst { it.id == clickedMsg.id }
+                                        if (index != -1) mediaPagerIndex = index
+                                    } else if (clickedMsg.type == MessageType.AUDIO) {
+                                        playAudioMessage(clickedMsg)
+                                    } else if (clickedMsg.type == MessageType.FOLDER) {
+                                        currentFolderId = clickedMsg.id
+                                    } else if (clickedMsg.type == MessageType.FILE) {
+                                        openFileWithDefaultApp(context, chatRepository, clickedMsg)
                                     }
                                 }
-                            )
+                            }
+                            val onLongClickHandler: () -> Unit = {
+                                if (selectedIds.isEmpty()) selectedIds = setOf(message.id)
+                            }
+
+                            if (isDiaryTemplate) {
+                                DiaryBubble(
+                                    message = message,
+                                    progress = progress,
+                                    chatRepository = chatRepository,
+                                    isSelected = selectedIds.contains(message.id),
+                                    autoDownloadLimit = autoDownloadLimit,
+                                    downloadProgress = downloadProgress,
+                                    isDownloading = isDownloading,
+                                    playingMessageId = playingMessageId,
+                                    onPlayAudio = { playAudioMessage(it) },
+                                    onMediaClick = onMediaClickHandler,
+                                    onLongClick = onLongClickHandler
+                                )
+                            } else {
+                                ChatBubble(
+                                    message = message,
+                                    progress = progress,
+                                    chatRepository = chatRepository,
+                                    isSelected = selectedIds.contains(message.id),
+                                    autoDownloadLimit = autoDownloadLimit,
+                                    downloadProgress = downloadProgress,
+                                    isDownloading = isDownloading,
+                                    playingMessageId = playingMessageId,
+                                    onPlayAudio = { playAudioMessage(it) },
+                                    onMediaClick = onMediaClickHandler,
+                                    onLongClick = onLongClickHandler
+                                )
+                            }
                         }
                         is ChatUiItem.ImageGroup -> {
                             ImageGroupBubble(
@@ -1055,31 +1125,27 @@ fun MainScreen(
                                 },
                                 onMediaClick = { clickedMsg ->
                                     val index = mediaMessages.indexOfFirst { it.id == clickedMsg.id }
-                                    if (index != -1) {
-                                        mediaPagerIndex = index
-                                    }
+                                    if (index != -1) mediaPagerIndex = index
                                 },
                                 onLongClick = { clickedMsg ->
-                                    if (selectedIds.isEmpty()) {
-                                        selectedIds = setOf(clickedMsg.id)
-                                    }
+                                    if (selectedIds.isEmpty()) selectedIds = setOf(clickedMsg.id)
                                 },
                                 onClickGroup = {
                                     if (selectedIds.isNotEmpty()) {
                                         val groupIds = uiItem.messages.map { it.id }.toSet()
-                                        if (selectedIds.containsAll(groupIds)) {
-                                            selectedIds = selectedIds - groupIds
+                                        selectedIds = if (selectedIds.containsAll(groupIds)) {
+                                            selectedIds - groupIds
                                         } else {
-                                            selectedIds = selectedIds + groupIds
+                                            selectedIds + groupIds
                                         }
                                     }
                                 },
                                 onLongClickGroup = {
                                     val groupIds = uiItem.messages.map { it.id }.toSet()
-                                    if (selectedIds.containsAll(groupIds)) {
-                                        selectedIds = selectedIds - groupIds
+                                    selectedIds = if (selectedIds.containsAll(groupIds)) {
+                                        selectedIds - groupIds
                                     } else {
-                                        selectedIds = selectedIds + groupIds
+                                        selectedIds + groupIds
                                     }
                                 }
                             )
@@ -1087,6 +1153,7 @@ fun MainScreen(
                     }
                 }
             }
+
 
             Column(modifier = Modifier.navigationBarsPadding().background(MaterialTheme.colorScheme.surface)) {
                 Row(
@@ -2259,6 +2326,176 @@ fun rememberAvatarUrl(
         resolvedUrl = path
     }
     return resolvedUrl ?: fallback
+}
+
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun DiaryBubble(
+    message: ChatMessage,
+    progress: Int?,
+    chatRepository: ChatRepository,
+    isSelected: Boolean,
+    autoDownloadLimit: Long,
+    downloadProgress: Map<String, Int>,
+    isDownloading: Boolean,
+    playingMessageId: String?,
+    onPlayAudio: (ChatMessage) -> Unit,
+    onMediaClick: (ChatMessage) -> Unit,
+    onLongClick: () -> Unit
+) {
+    val localUriStr = chatRepository.getTransientUri(message.id, message.content)
+    val isCached = localUriStr != null && (localUriStr.startsWith("file") || localUriStr.startsWith("content"))
+    val displayName = message.senderName ?: message.sender
+
+    val userAvatarUrl = rememberAvatarUrl(
+        rawAvatar = message.senderAvatar,
+        senderName = displayName,
+        isOutgoing = message.isOutgoing,
+        chatRepository = chatRepository
+    )
+
+    val timeStr = remember(message.timestamp) {
+        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(message.timestamp))
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
+            .combinedClickable(onClick = { onMediaClick(message) }, onLongClick = onLongClick)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        // Left column: time + avatar + name
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.width(56.dp)
+        ) {
+            Text(
+                text = timeStr,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = Color(0xFF999999)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            AsyncImage(
+                model = userAvatarUrl,
+                contentDescription = "Avatar",
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = displayName,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                color = Color(0xFF888888),
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        // Right column: content
+        Column(modifier = Modifier.weight(1f)) {
+            when (message.type) {
+                MessageType.TEXT -> {
+                    Text(
+                        text = message.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color(0xFF222222),
+                        fontSize = 15.sp
+                    )
+                    if (!message.locationAddress.isNullOrBlank()) {
+                        Text(text = message.locationAddress, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp))
+                    }
+                }
+                MessageType.IMAGE -> {
+                    val localFile = remember(message.id) { chatRepository.getLocalFile(message.id, message.content) }
+                    val displayUri = remember(message.id) {
+                        chatRepository.getTransientUri(message.id, message.content)
+                            ?: if (localFile.exists()) "file://${localFile.absolutePath}"
+                            else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
+                    }
+                    Box(modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFFF5F5F5)), contentAlignment = Alignment.Center) {
+                        AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp), contentScale = ContentScale.FillWidth)
+                        if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
+                    }
+                    if (!message.caption.isNullOrBlank()) {
+                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp))
+                    }
+                }
+                MessageType.VIDEO -> {
+                    val localFile = remember(message.id) { chatRepository.getLocalFile(message.id, message.content) }
+                    val displayUri = remember(message.id) {
+                        chatRepository.getTransientUri(message.id, message.content)
+                            ?: if (localFile.exists()) "file://${localFile.absolutePath}"
+                            else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
+                    }
+                    Box(modifier = Modifier.clip(RoundedCornerShape(10.dp)).aspectRatio(16 / 9f).background(Color.Black), contentAlignment = Alignment.Center) {
+                        AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = 0.8f)
+                        if (progress != null && progress in 0..100) {
+                            Box(modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.55f), CircleShape), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(progress = progress / 100f, modifier = Modifier.size(40.dp), color = Color.White, strokeWidth = 3.dp)
+                            }
+                        } else if (!isCached) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(36.dp))
+                        }
+                        if (message.videoDuration > 0) {
+                            Text(text = formatDuration(message.videoDuration), color = Color.White, modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp).background(Color.Black.copy(alpha = 0.5f), MaterialTheme.shapes.small).padding(horizontal = 4.dp, vertical = 2.dp), fontSize = 10.sp)
+                        }
+                        if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
+                    }
+                    if (!message.caption.isNullOrBlank()) {
+                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp))
+                    }
+                }
+                MessageType.AUDIO -> {
+                    val isPlaying = playingMessageId == message.id
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF4CAF50)),
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.clickable { onPlayAudio(message) }
+                    ) {
+                        Row(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(text = "${message.videoDuration}s", color = Color.White, fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(imageVector = if (isPlaying) Icons.Default.VolumeUp else Icons.Default.VolumeMute, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                        }
+                    }
+                    if (!message.caption.isNullOrBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(text = message.caption, style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444))
+                    }
+                }
+                MessageType.FOLDER -> {
+                    FolderBubble(message = message, isSelected = isSelected, onSelectToggle = { onMediaClick(message) }, onLongClick = onLongClick)
+                }
+                else -> {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.InsertDriveFile, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Column {
+                            Text(text = message.content, fontWeight = FontWeight.Medium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontSize = 14.sp)
+                            if (message.fileSize > 0) Text(text = formatFileSize(message.fileSize), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Thin divider between diary entries
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 68.dp, end = 12.dp)
+            .height(0.5.dp)
+            .background(Color(0xFFEEEEEE))
+    )
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
