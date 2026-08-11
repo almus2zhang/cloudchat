@@ -2343,24 +2343,57 @@ fun DiaryBubble(
             .background(if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
             .combinedClickable(onClick = { onMediaClick(message) }, onLongClick = onLongClick)
             .padding(horizontal = 12.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
-        // Left column: message content
+        // Left column: Avatar (ALWAYS ON THE LEFT IN DIARY VIEW)
+        AsyncImage(
+            model = userAvatarUrl,
+            contentDescription = "Avatar",
+            modifier = Modifier
+                .padding(end = 8.dp, top = 2.dp)
+                .size(44.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
+            contentScale = ContentScale.Crop
+        )
+
+        Spacer(modifier = Modifier.width(4.dp))
+
+        // Right column: Name + Time + Content (LEFT ALIGNED)
         Column(
             modifier = Modifier.weight(1f),
-            horizontalAlignment = Alignment.End
+            horizontalAlignment = Alignment.Start
         ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = displayName,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = timeStr,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                    color = Color(0xFF999999)
+                )
+            }
+            Spacer(modifier = Modifier.height(3.dp))
             when (message.type) {
                 MessageType.TEXT -> {
-                    Text(
-                        text = message.content,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF222222),
-                        fontSize = 15.sp,
-                        textAlign = TextAlign.End
-                    )
+                    SelectionContainer {
+                        Text(
+                            text = message.content,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFF222222),
+                            fontSize = 15.sp,
+                            textAlign = TextAlign.Start
+                        )
+                    }
                     if (!message.locationAddress.isNullOrBlank()) {
-                        Text(text = message.locationAddress, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.End)
+                        Text(text = message.locationAddress, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.Start)
                     }
                 }
                 MessageType.IMAGE -> {
@@ -2370,12 +2403,12 @@ fun DiaryBubble(
                             ?: if (localFile.exists()) "file://${localFile.absolutePath}"
                             else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
                     }
-                    Box(modifier = Modifier.widthIn(max = 180.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFFF5F5F5)), contentAlignment = Alignment.Center) {
-                        AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.widthIn(max = 180.dp).heightIn(max = 220.dp), contentScale = ContentScale.Fit)
+                    Box(modifier = Modifier.widthIn(max = 200.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFFF5F5F5)), contentAlignment = Alignment.Center) {
+                        AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.widthIn(max = 200.dp).heightIn(max = 240.dp), contentScale = ContentScale.Fit)
                         if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
                     }
                     if (!message.caption.isNullOrBlank()) {
-                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.End)
+                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.Start)
                     }
                 }
                 MessageType.VIDEO -> {
@@ -2385,7 +2418,7 @@ fun DiaryBubble(
                             ?: if (localFile.exists()) "file://${localFile.absolutePath}"
                             else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
                     }
-                    Box(modifier = Modifier.widthIn(max = 200.dp).clip(RoundedCornerShape(10.dp)).aspectRatio(16 / 9f).background(Color.Black), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.widthIn(max = 200.dp).clip(RoundedCornerShape(8.dp)).aspectRatio(16 / 9f).background(Color.Black), contentAlignment = Alignment.Center) {
                         AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = 0.8f)
                         if (progress != null && progress in 0..100) {
                             Box(modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.55f), CircleShape), contentAlignment = Alignment.Center) {
@@ -2400,7 +2433,7 @@ fun DiaryBubble(
                         if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
                     }
                     if (!message.caption.isNullOrBlank()) {
-                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.End)
+                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.Start)
                     }
                 }
                 MessageType.AUDIO -> {
@@ -2411,14 +2444,14 @@ fun DiaryBubble(
                         modifier = Modifier.clickable { onPlayAudio(message) }
                     ) {
                         Row(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = "${message.videoDuration}s", color = Color.White, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                            Spacer(modifier = Modifier.width(8.dp))
                             Icon(imageVector = if (isPlaying) Icons.Default.VolumeUp else Icons.Default.VolumeMute, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = "${message.videoDuration}s", color = Color.White, fontWeight = FontWeight.Medium, fontSize = 14.sp)
                         }
                     }
                     if (!message.caption.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = message.caption, style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444), textAlign = TextAlign.End)
+                        Text(text = message.caption, style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444), textAlign = TextAlign.Start)
                     }
                 }
                 MessageType.FILE -> {
@@ -2445,7 +2478,7 @@ fun DiaryBubble(
                         }
                     }
                     if (!message.caption.isNullOrBlank()) {
-                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.End)
+                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.Start)
                     }
                 }
                 MessageType.FOLDER -> {
@@ -2457,43 +2490,9 @@ fun DiaryBubble(
                     )
                 }
                 else -> {
-                    Text(text = message.content, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF222222), textAlign = TextAlign.End)
+                    Text(text = message.content, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF222222), textAlign = TextAlign.Start)
                 }
             }
-        }
-
-        Spacer(modifier = Modifier.width(10.dp))
-
-        // Right column: avatar + name + time (ALWAYS ON THE RIGHT IN DEFAULT VIEW)
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.width(56.dp)
-        ) {
-            Text(
-                text = timeStr,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                color = Color(0xFF999999)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            AsyncImage(
-                model = userAvatarUrl,
-                contentDescription = "Avatar",
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
-                contentScale = ContentScale.Crop
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = displayName,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                color = Color(0xFF888888),
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
         }
     }
 }
@@ -2541,20 +2540,9 @@ fun ChatBubble(
                 onLongClick = onLongClick
             )
             .padding(horizontal = 8.dp),
-        horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start,
+        horizontalArrangement = Arrangement.End,
         verticalAlignment = Alignment.Top
     ) {
-        // Left Side Avatar (ALWAYS ON THE LEFT IN DIARY VIEW FOR ALL MESSAGES)
-        AsyncImage(
-            model = userAvatarUrl,
-            contentDescription = "Avatar",
-            modifier = Modifier
-                .padding(end = 8.dp, top = 2.dp)
-                .size(44.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
-            contentScale = ContentScale.Crop
-        )
 
         if (isOutgoing && message.status == MessageStatus.FAILED) {
             Box(
@@ -2910,19 +2898,17 @@ fun ChatBubble(
             }
         }
 
-        // Right Side Avatar for Outgoing Messages (44dp - ~9x area)
-        if (isOutgoing) {
-            AsyncImage(
-                model = userAvatarUrl,
-                contentDescription = "Avatar",
-                modifier = Modifier
-                    .padding(start = 8.dp, top = 2.dp)
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), CircleShape),
-                contentScale = ContentScale.Crop
-            )
-        }
+        // Right Side Avatar for ALL Messages in Default View
+        AsyncImage(
+            model = userAvatarUrl,
+            contentDescription = "Avatar",
+            modifier = Modifier
+                .padding(start = 8.dp, top = 2.dp)
+                .size(44.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
+            contentScale = ContentScale.Crop
+        )
     }
 }
 
