@@ -1112,10 +1112,12 @@ class ChatRepository(private val context: Context) {
                     
                     val localShardMsgs = shardsData[shardName] ?: emptyList()
                     localShardMsgs.forEach { localMsg ->
-                        val cloudMsg = cloudMap[localMsg.id]
-                        if (cloudMsg == null || localMsg.lastModified > cloudMsg.lastModified || localMsg.status != MessageStatus.SUCCESS) {
-                            cloudMap[localMsg.id] = localMsg
-                            shardChanged = true
+                        if (localMsg.status == MessageStatus.SUCCESS) {
+                            val cloudMsg = cloudMap[localMsg.id]
+                            if (cloudMsg == null || localMsg.lastModified > cloudMsg.lastModified) {
+                                cloudMap[localMsg.id] = localMsg
+                                shardChanged = true
+                            }
                         }
                     }
                     
@@ -1371,8 +1373,13 @@ class ChatRepository(private val context: Context) {
                     try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
                     indexJson = gson.toJson(shards.keys.toList())
                 } else {
-                    provider.uploadText("[]", "chat_index.json")
-                    indexJson = "[]"
+                    // Server has no history files: Server is source of truth, retain only local FAILED messages
+                    _messages.update { current -> current.filter { it.status == MessageStatus.FAILED } }
+                    saveLocalHistory(config.id)
+                    _isServerConnected.value = true
+                    _isSyncing.value = false
+                    isRefreshingFromCloud.set(false)
+                    return@withContext
                 }
             }
             

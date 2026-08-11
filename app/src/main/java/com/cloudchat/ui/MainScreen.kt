@@ -642,47 +642,6 @@ fun MainScreen(
                     }
                 }
 
-                // Sync All Media Files Button with spinning + percentage ring
-                IconButton(modifier = Modifier.size(40.dp), onClick = {
-                    if (isMediaSyncing) return@IconButton
-                    isMediaSyncing = true
-                    scope.launch {
-                        chatRepository.syncAllMediaFiles { current, total ->
-                            if (current >= total || total == 0) isMediaSyncing = false
-                        }
-                    }
-                }) {
-                    Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
-                        if (isMediaSyncing) {
-                            // Determinate circular progress with percentage
-                            androidx.compose.material3.CircularProgressIndicator(
-                                progress = mediaSyncProgress.coerceIn(0f, 1f),
-                                modifier = Modifier.size(28.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        val infiniteTransition2 = rememberInfiniteTransition(label = "mediaSyncSpin")
-                        val mediaRotation by infiniteTransition2.animateFloat(
-                            initialValue = 0f,
-                            targetValue = if (isMediaSyncing) 360f else 0f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1200, easing = LinearEasing),
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "mediaRotation"
-                        )
-                        Icon(
-                            imageVector = Icons.Default.CloudSync,
-                            contentDescription = "同步所有文件",
-                            tint = if (isMediaSyncing) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(22.dp).then(
-                                if (isMediaSyncing) Modifier.graphicsLayer { rotationZ = mediaRotation } else Modifier
-                            )
-                        )
-                    }
-                }
-
                 // Sync Interval Toggle (Bolt icon colored by mode)
                 IconButton(modifier = Modifier.size(40.dp), onClick = {
                     chatRepository.setSyncInterval(if (isFast) 5000L else 1000L)
