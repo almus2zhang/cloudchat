@@ -2461,6 +2461,40 @@ fun DiaryBubble(
                 }
             }
         }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        // Right column: avatar + name + time (ALWAYS ON THE RIGHT IN DEFAULT VIEW)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.width(56.dp)
+        ) {
+            Text(
+                text = timeStr,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                color = Color(0xFF999999)
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            AsyncImage(
+                model = userAvatarUrl,
+                contentDescription = "Avatar",
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
+                contentScale = ContentScale.Crop
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = displayName,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                color = Color(0xFF888888),
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
     }
 }
 
@@ -2517,8 +2551,8 @@ fun ChatBubble(
             modifier = Modifier
                 .padding(end = 8.dp, top = 2.dp)
                 .size(44.dp)
-                .clip(CircleShape)
-                .border(1.dp, Color.LightGray, CircleShape),
+                .clip(RoundedCornerShape(4.dp))
+                .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
             contentScale = ContentScale.Crop
         )
 
@@ -3546,8 +3580,8 @@ fun ImageGroupBubble(
                 modifier = Modifier
                     .padding(end = 8.dp, top = 2.dp)
                     .size(44.dp)
-                    .clip(CircleShape)
-                    .border(1.dp, Color.LightGray, CircleShape),
+                    .clip(RoundedCornerShape(4.dp))
+                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
                 contentScale = ContentScale.Crop
             )
         }
@@ -3855,8 +3889,8 @@ fun ImageGroupBubble(
                 modifier = Modifier
                     .padding(start = 8.dp, top = 2.dp)
                     .size(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(8.dp)),
+                    .clip(RoundedCornerShape(4.dp))
+                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
                 contentScale = ContentScale.Crop
             )
         }
