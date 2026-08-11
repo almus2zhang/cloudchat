@@ -2529,13 +2529,21 @@ fun DiaryBubble(
                                 }
                             }
                         } else if (message.status == MessageStatus.FAILED) {
+                            val scope = rememberCoroutineScope()
+                            val context = LocalContext.current
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.Center)
-                                    .background(Color.Red.copy(alpha = 0.75f), CircleShape)
+                                    .background(Color.Red.copy(alpha = 0.85f), CircleShape)
+                                    .clickable {
+                                        scope.launch {
+                                            android.widget.Toast.makeText(context, "正在检测服务器并重新发送...", android.widget.Toast.LENGTH_SHORT).show()
+                                            chatRepository.resendMessage(message.id)
+                                        }
+                                    }
                                     .padding(6.dp)
                             ) {
-                                Icon(Icons.Default.ErrorOutline, contentDescription = "上传失败", tint = Color.White, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.Refresh, contentDescription = "点击重新发送", tint = Color.White, modifier = Modifier.size(20.dp))
                             }
                         }
 
@@ -2684,7 +2692,7 @@ fun ChatBubble(
                     .align(Alignment.CenterVertically)
                     .clickable {
                         scope.launch {
-                            chatRepository.retryMessage(message.id)
+                            chatRepository.resendMessage(message.id)
                         }
                     }
             ) {

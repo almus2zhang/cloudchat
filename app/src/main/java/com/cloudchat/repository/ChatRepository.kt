@@ -849,6 +849,69 @@ class ChatRepository(private val context: Context) {
         syncHistory()
     }
 
+    suspend fun resendMessage(messageId: String) {
+        val msg = _messages.value.find { it.id == messageId } ?: return
+        val provider = storageProvider ?: return
+        
+        updateMessageStatus(messageId, MessageStatus.SENDING)
+
+        withContext(Dispatchers.IO) {
+            uploadMutex.withLock {
+                val currentJob = coroutineContext[kotlinx.coroutines.Job]
+                if (currentJob != null) {
+                    activeUploadJobs[messageId] = currentJob
+                }
+                try {
+                    val fileName = msg.content
+                    if (msg.type == com.cloudchat.model.MessageType.TEXT || fileName.isBlank()) {
+                        updateMessageStatus(messageId, MessageStatus.SUCCESS)
+                    } else {
+                        val targetFile = getLocalFile(msg.id, fileName)
+                        val expectedSize = if (targetFile.exists() && targetFile.length() > 0L) targetFile.length() else msg.fileSize
+                        val remoteSize = try { provider.getFileSize(fileName) } catch (e: Exception) { -1L }
+
+                        if (expectedSize > 0L && remoteSize == expectedSize) {
+                            Log.d("ChatRepository", "Resend: File $fileName already exists on server ($remoteSize bytes), marking SUCCESS")
+                            updateMessageStatus(messageId, MessageStatus.SUCCESS)
+                            _uploadProgress.update { it - messageId }
+                        } else {
+                            val uploadStream = if (targetFile.exists() && targetFile.length() > 0L) {
+                                targetFile.inputStream()
+                            } else {
+                                val uriStr = transientLocalUris[messageId]
+                                if (uriStr != null) context.contentResolver.openInputStream(Uri.parse(uriStr)) else null
+                            }
+
+                            if (uploadStream == null) {
+                                throw IllegalStateException("No valid input stream available for resend")
+                            }
+
+                            uploadStream.use { stream ->
+                                val contentType = when (msg.type) {
+                                    com.cloudchat.model.MessageType.IMAGE -> "image/jpeg"
+                                    com.cloudchat.model.MessageType.VIDEO -> "video/mp4"
+                                    else -> "application/octet-stream"
+                                }
+                                val length = if (targetFile.exists()) targetFile.length() else msg.fileSize
+                                provider.uploadFile(stream, fileName, contentType, length) { progress ->
+                                    _uploadProgress.update { it + (messageId to progress) }
+                                }
+                            }
+                            updateMessageStatus(messageId, MessageStatus.SUCCESS)
+                            _uploadProgress.update { it - messageId }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("ChatRepository", "Resend message failed for $messageId", e)
+                    _uploadProgress.update { it - messageId }
+                    updateMessageStatus(messageId, MessageStatus.FAILED)
+                } finally {
+                    activeUploadJobs.remove(messageId)
+                }
+            }
+        }
+    }
+
     private fun sanitizeMessage(msg: ChatMessage?): ChatMessage? {
         if (msg == null) return null
         if (msg.id.isBlank() && msg.content.isBlank() && msg.remoteUrl.isNullOrBlank()) return null
