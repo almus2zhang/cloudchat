@@ -1370,37 +1370,22 @@ class ChatRepository(private val context: Context) {
 
     suspend fun groupSelectedMessages(messageIds: Set<String>, newGroupId: String) {
         _messages.update { list ->
-            // Only IMAGE/VIDEO participate in grid aggregation; other types are filtered out.
-            val mediaSelected = list.filter {
-                messageIds.contains(it.id) &&
-                    (it.type == com.cloudchat.model.MessageType.IMAGE ||
-                        it.type == com.cloudchat.model.MessageType.VIDEO)
-            }
-            val mediaSelectedIds = mediaSelected.map { it.id }.toSet()
+            val selected = list.filter { messageIds.contains(it.id) }
+            val selectedIds = selected.map { it.id }.toSet()
 
-            if (mediaSelectedIds.isEmpty()) return@update list
+            if (selectedIds.isEmpty()) return@update list
 
-            // Existing grids that any selected media already belongs to.
-            val existingGroupIds = mediaSelected
+            val existingGroupIds = selected
                 .mapNotNull { it.groupId?.takeIf { g -> g.isNotBlank() } }
                 .toSet()
 
-            // All members of those existing grids must join the merge.
             val membersOfExistingGroups = list
-                .filter {
-                    (it.type == com.cloudchat.model.MessageType.IMAGE ||
-                        it.type == com.cloudchat.model.MessageType.VIDEO) &&
-                        !it.groupId.isNullOrEmpty() && existingGroupIds.contains(it.groupId)
-                }
+                .filter { !it.groupId.isNullOrEmpty() && existingGroupIds.contains(it.groupId) }
                 .map { it.id }
                 .toSet()
 
-            val allTargetIds = mediaSelectedIds union membersOfExistingGroups
+            val allTargetIds = selectedIds union membersOfExistingGroups
 
-            // Resulting group id:
-            // - exactly one existing grid involved -> keep it (loose media enter that grid)
-            // - several grids involved -> merge all of them into one new grid
-            // - none involved -> brand new grid
             val targetGroupId = if (existingGroupIds.size == 1) {
                 existingGroupIds.first()
             } else {

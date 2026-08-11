@@ -1116,6 +1116,10 @@ fun MainScreen(
                                 group = uiItem,
                                 chatRepository = chatRepository,
                                 selectedIds = selectedIds,
+                                downloadProgress = downloadProgress,
+                                playingMessageId = playingMessageId,
+                                onPlayAudio = { playAudioMessage(it) },
+                                onFileClick = { openFileWithDefaultApp(context, chatRepository, it) },
                                 onSelectToggle = { clickedMsg ->
                                     selectedIds = if (selectedIds.contains(clickedMsg.id)) {
                                         selectedIds - clickedMsg.id
@@ -1494,56 +1498,12 @@ fun MainScreen(
                         }
                     }
 
-                    // 5. Combine / Merge (Images/Videos -> Grid, Other messages -> One item)
+                    // 5. Combine / Merge (Assign groupId to all items so they group together and can be split)
                     if (selectedIds.size >= 2) {
                         IconButton(onClick = {
                             val newGroupId = "group_${System.currentTimeMillis()}"
                             scope.launch {
-                                val selectedMsgs = selectedIds.mapNotNull { id -> messages.find { it.id == id } }
-                                    .sortedBy { it.timestamp }
-
-                                val mediaMsgs = selectedMsgs.filter { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
-                                val nonMediaMsgs = selectedMsgs.filter { it.type != MessageType.IMAGE && it.type != MessageType.VIDEO }
-
-                                // 1. Grid group for IMAGE / VIDEO
-                                if (mediaMsgs.size >= 2) {
-                                    val mediaIds = mediaMsgs.map { it.id }.toSet()
-                                    chatRepository.groupSelectedMessages(mediaIds, newGroupId)
-                                }
-
-                                // 2. Combine all non-media messages into one text message (preserving first sender)
-                                if (nonMediaMsgs.size >= 2) {
-                                    val firstMsg = nonMediaMsgs.first()
-                                    val lines = nonMediaMsgs.map { msg ->
-                                        when {
-                                            !msg.locationAddress.isNullOrBlank() -> {
-                                                "${msg.content} ${msg.locationAddress}".trim()
-                                            }
-                                            msg.type == MessageType.TEXT -> msg.content
-                                            msg.type == MessageType.AUDIO -> {
-                                                val dur = if (msg.videoDuration > 0) "${msg.videoDuration}\"" else ""
-                                                val cap = msg.caption?.let { " $it" } ?: ""
-                                                "[语音] $dur$cap".trim()
-                                            }
-                                            msg.type == MessageType.FILE -> {
-                                                val cap = msg.caption?.let { " $it" } ?: ""
-                                                "[文件] ${msg.content}$cap".trim()
-                                            }
-                                            msg.type == MessageType.FOLDER -> "[文件夹] ${msg.content}"
-                                            else -> msg.content
-                                        }
-                                    }
-                                    val mergedContent = lines.joinToString("\n")
-                                    val nonMediaIds = nonMediaMsgs.map { it.id }
-
-                                    chatRepository.deleteMessages(nonMediaIds)
-                                    chatRepository.sendCombinedMessage(
-                                        content = mergedContent,
-                                        firstMsg = firstMsg,
-                                        folderId = currentFolderId
-                                    )
-                                }
-
+                                chatRepository.groupSelectedMessages(selectedIds, newGroupId)
                                 selectedIds = emptySet()
                             }
                         }) {
@@ -3550,6 +3510,10 @@ fun ImageGroupBubble(
     group: ChatUiItem.ImageGroup,
     chatRepository: ChatRepository,
     selectedIds: Set<String>,
+    downloadProgress: Map<String, Int> = emptyMap(),
+    playingMessageId: String? = null,
+    onPlayAudio: (com.cloudchat.model.ChatMessage) -> Unit = {},
+    onFileClick: (com.cloudchat.model.ChatMessage) -> Unit = {},
     onSelectToggle: (com.cloudchat.model.ChatMessage) -> Unit,
     onMediaClick: (com.cloudchat.model.ChatMessage) -> Unit,
     onLongClick: (com.cloudchat.model.ChatMessage) -> Unit,
@@ -3564,8 +3528,8 @@ fun ImageGroupBubble(
         4 -> 2
         else -> 3
     }
-    val bubbleColor = if (isOutgoing) Color(0xFF95EC69) else Color.White
     val contentColor = Color.Black
+    val isAllMedia = group.messages.all { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
     
     val displayName = group.messages.first().senderName ?: group.messages.first().sender
     val userAvatarUrl = rememberAvatarUrl(
@@ -3602,75 +3566,266 @@ fun ImageGroupBubble(
 
         Column(
             horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
-            modifier = Modifier.widthIn(max = 280.dp)
+            modifier = Modifier.widthIn(max = 300.dp)
         ) {
             Card(
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isAllMedia) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    else if (isOutgoing) Color(0xFF95EC69) else Color.White
+                ),
                 shape = MaterialTheme.shapes.medium,
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                modifier = Modifier.padding(2.dp)
+                elevation = CardDefaults.cardElevation(defaultElevation = if (isAllMedia) 0.dp else 1.dp),
+                modifier = Modifier
+                    .padding(2.dp)
+                    .then(
+                        if (!isAllMedia) Modifier.border(
+                            0.5.dp,
+                            if (isOutgoing) Color(0xFF7BCD54) else Color(0xFFE0E0E0),
+                            MaterialTheme.shapes.medium
+                        ) else Modifier
+                    )
             ) {
-                Column(modifier = Modifier.padding(4.dp)) {
-                    val rows = (count + cols - 1) / cols
-                    for (r in 0 until rows) {
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            for (c in 0 until cols) {
-                                val idx = r * cols + c
-                                if (idx < count) {
-                                    val message = group.messages[idx]
-                                    val localFile = remember(message.id) {
-                                        chatRepository.getLocalFile(message.id, message.content)
-                                    }
-                                    val displayUri = remember(localFile) {
-                                        chatRepository.getTransientUri(message.id, message.content)
-                                            ?: if (localFile.exists()) "file://${localFile.absolutePath}"
-                                            else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
-                                    }
-                                    
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .aspectRatio(1f)
-                                            .padding(2.dp)
-                                            .clip(MaterialTheme.shapes.small)
-                                            .background(Color.LightGray)
-                                            .combinedClickable(
-                                                onClick = {
-                                                    if (selectedIds.isNotEmpty()) {
-                                                        onSelectToggle(message)
-                                                    } else {
-                                                        onMediaClick(message)
+                if (isAllMedia) {
+                    Column(modifier = Modifier.padding(4.dp)) {
+                        val rows = (count + cols - 1) / cols
+                        for (r in 0 until rows) {
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                for (c in 0 until cols) {
+                                    val idx = r * cols + c
+                                    if (idx < count) {
+                                        val message = group.messages[idx]
+                                        val localFile = remember(message.id) {
+                                            chatRepository.getLocalFile(message.id, message.content)
+                                        }
+                                        val displayUri = remember(localFile) {
+                                            chatRepository.getTransientUri(message.id, message.content)
+                                                ?: if (localFile.exists()) "file://${localFile.absolutePath}"
+                                                else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
+                                        }
+                                        
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .aspectRatio(1f)
+                                                .padding(2.dp)
+                                                .clip(MaterialTheme.shapes.small)
+                                                .background(Color.LightGray)
+                                                .combinedClickable(
+                                                    onClick = {
+                                                        if (selectedIds.isNotEmpty()) {
+                                                            onSelectToggle(message)
+                                                        } else {
+                                                            onMediaClick(message)
+                                                        }
+                                                    },
+                                                    onLongClick = {
+                                                        onLongClick(message)
                                                     }
-                                                },
-                                                onLongClick = {
-                                                    onLongClick(message)
-                                                }
+                                                )
+                                        ) {
+                                            coil.compose.AsyncImage(
+                                                model = displayUri,
+                                                contentDescription = null,
+                                                modifier = Modifier.fillMaxSize(),
+                                                contentScale = androidx.compose.ui.layout.ContentScale.Crop
                                             )
-                                    ) {
-                                        coil.compose.AsyncImage(
-                                            model = displayUri,
-                                            contentDescription = null,
-                                            modifier = Modifier.fillMaxSize(),
-                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-                                        )
-                                        if (selectedIds.contains(message.id)) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxSize()
-                                                    .background(Color.Black.copy(alpha = 0.4f)),
-                                                contentAlignment = Alignment.Center
-                                            ) {
+                                            if (selectedIds.contains(message.id)) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .background(Color.Black.copy(alpha = 0.4f)),
+                                                    contentAlignment = Alignment.Center
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.CheckCircle,
+                                                        contentDescription = "Selected",
+                                                        tint = Color(0xFF81C784),
+                                                        modifier = Modifier.size(24.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Spacer(modifier = Modifier.weight(1f).padding(2.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Composite Group Bubble (Text, Audio, File, etc.)
+                    Column(
+                        modifier = Modifier
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .fillMaxWidth()
+                    ) {
+                        group.messages.forEachIndexed { index, message ->
+                            if (index > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 6.dp)
+                                        .height(0.5.dp)
+                                        .background(Color(0xFFCCCCCC))
+                                )
+                            }
+
+                            val isItemSelected = selectedIds.contains(message.id)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(if (isItemSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else Color.Transparent)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (selectedIds.isNotEmpty()) {
+                                                onSelectToggle(message)
+                                            } else {
+                                                when (message.type) {
+                                                    MessageType.IMAGE, MessageType.VIDEO -> onMediaClick(message)
+                                                    MessageType.AUDIO -> onPlayAudio(message)
+                                                    MessageType.FILE -> onFileClick(message)
+                                                    else -> {}
+                                                }
+                                            }
+                                        },
+                                        onLongClick = { onLongClick(message) }
+                                    )
+                                    .padding(vertical = 2.dp)
+                            ) {
+                                when (message.type) {
+                                    MessageType.TEXT -> {
+                                        androidx.compose.foundation.text.selection.SelectionContainer {
+                                            Text(
+                                                text = message.content,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = Color(0xFF222222),
+                                                fontSize = 14.sp
+                                            )
+                                        }
+                                        if (!message.locationAddress.isNullOrBlank()) {
+                                            Text(
+                                                text = message.locationAddress,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color.Gray,
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    MessageType.AUDIO -> {
+                                        val isPlaying = playingMessageId == message.id
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(16.dp))
+                                                .background(Color(0xFF4CAF50))
+                                                .clickable { onPlayAudio(message) }
+                                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isPlaying) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "${message.videoDuration}s",
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Medium,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                        if (!message.caption.isNullOrBlank()) {
+                                            Text(
+                                                text = message.caption,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = Color.Gray,
+                                                modifier = Modifier.padding(top = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    MessageType.FILE -> {
+                                        val progress = downloadProgress[message.id]
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { onFileClick(message) }
+                                                .padding(vertical = 2.dp)
+                                        ) {
+                                            Icon(
+                                                Icons.Default.InsertDriveFile,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(24.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = message.content,
+                                                    fontWeight = FontWeight.Medium,
+                                                    maxLines = 1,
+                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                    fontSize = 13.sp
+                                                )
+                                                if (message.fileSize > 0) {
+                                                    Text(
+                                                        text = formatFileSize(message.fileSize),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = Color.Gray
+                                                    )
+                                                }
+                                                if (progress != null && progress in 0..99) {
+                                                    LinearProgressIndicator(
+                                                        progress = progress / 100f,
+                                                        modifier = Modifier.fillMaxWidth().height(3.dp).padding(top = 2.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    MessageType.IMAGE, MessageType.VIDEO -> {
+                                        val localFile = remember(message.id) { chatRepository.getLocalFile(message.id, message.content) }
+                                        val displayUri = remember(localFile) {
+                                            chatRepository.getTransientUri(message.id, message.content)
+                                                ?: if (localFile.exists()) "file://${localFile.absolutePath}"
+                                                else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .heightIn(max = 180.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color.Black.copy(alpha = 0.05f))
+                                        ) {
+                                            coil.compose.AsyncImage(
+                                                model = displayUri,
+                                                contentDescription = null,
+                                                modifier = Modifier.fillMaxWidth(),
+                                                contentScale = androidx.compose.ui.layout.ContentScale.FillWidth
+                                            )
+                                            if (message.type == MessageType.VIDEO) {
                                                 Icon(
-                                                    imageVector = Icons.Default.CheckCircle,
-                                                    contentDescription = "Selected",
-                                                    tint = Color(0xFF81C784),
-                                                    modifier = Modifier.size(24.dp)
+                                                    Icons.Default.PlayArrow,
+                                                    contentDescription = "Play",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(32.dp).align(Alignment.Center)
                                                 )
                                             }
                                         }
                                     }
-                                } else {
-                                    Spacer(modifier = Modifier.weight(1f).padding(2.dp))
+                                    MessageType.FOLDER -> {
+                                        FolderBubble(
+                                            message = message,
+                                            isSelected = isItemSelected,
+                                            onSelectToggle = { onSelectToggle(message) },
+                                            onLongClick = { onLongClick(message) }
+                                        )
+                                    }
+                                    else -> {
+                                        Text(text = message.content, style = MaterialTheme.typography.bodyMedium)
+                                    }
                                 }
                             }
                         }
