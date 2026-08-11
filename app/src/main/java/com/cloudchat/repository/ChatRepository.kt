@@ -784,6 +784,28 @@ class ChatRepository(private val context: Context) {
         }
     }
 
+    suspend fun sendCombinedMessage(
+        content: String,
+        firstMsg: ChatMessage,
+        folderId: String? = null
+    ) {
+        val config = currentConfig ?: return
+        val newMessage = ChatMessage(
+            sender = firstMsg.sender,
+            senderName = firstMsg.senderName ?: firstMsg.sender,
+            senderAvatar = firstMsg.senderAvatar,
+            content = content,
+            type = com.cloudchat.model.MessageType.TEXT,
+            isOutgoing = firstMsg.isOutgoing,
+            status = MessageStatus.SUCCESS,
+            folderId = folderId,
+            lastModified = System.currentTimeMillis()
+        )
+        _messages.update { it + newMessage }
+        saveLocalHistory(config.id)
+        syncHistory()
+    }
+
     private fun updateMessageStatus(messageId: String, status: MessageStatus) {
         _messages.update { list ->
             list.map { if (it.id == messageId) it.copy(status = status) else it }
@@ -1387,7 +1409,7 @@ class ChatRepository(private val context: Context) {
 
             list.map {
                 if (allTargetIds.contains(it.id)) {
-                    it.copy(groupId = targetGroupId)
+                    it.copy(groupId = targetGroupId, lastModified = System.currentTimeMillis())
                 } else it
             }
         }
@@ -1435,7 +1457,7 @@ class ChatRepository(private val context: Context) {
             }
 
             list.map {
-                if (reassign.containsKey(it.id)) it.copy(groupId = reassign[it.id]) else it
+                if (reassign.containsKey(it.id)) it.copy(groupId = reassign[it.id], lastModified = System.currentTimeMillis()) else it
             }
         }
         syncHistory()

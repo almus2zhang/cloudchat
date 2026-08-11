@@ -1494,36 +1494,54 @@ fun MainScreen(
                         }
                     }
 
-                    // 5. Combine / Merge (Text & Grid)
+                    // 5. Combine / Merge (Images/Videos -> Grid, Other messages -> One item)
                     if (selectedIds.size >= 2) {
                         IconButton(onClick = {
                             val newGroupId = "group_${System.currentTimeMillis()}"
                             scope.launch {
-                                val selectedTextMsgs = selectedIds.mapNotNull { id -> messages.find { it.id == id } }.filter { it.type == MessageType.TEXT }
-                                val textIds = selectedTextMsgs.map { it.id }.toSet()
-                                val nonTextIds = selectedIds - textIds
+                                val selectedMsgs = selectedIds.mapNotNull { id -> messages.find { it.id == id } }
+                                    .sortedBy { it.timestamp }
 
-                                // Merge texts
-                                if (selectedTextMsgs.size >= 2) {
-                                    val mergedText = selectedTextMsgs.sortedBy { it.timestamp }.joinToString("\n") { it.content }
-                                    chatRepository.deleteMessages(textIds.toList())
-                                    chatRepository.sendMessage(
-                                        content = mergedText,
-                                        type = MessageType.TEXT,
-                                        inputStream = null,
-                                        fileName = null,
-                                        localUri = null,
-                                        locationAddress = null,
-                                        folderId = currentFolderId,
-                                        deleteSourceFile = false
-                                    )
+                                val mediaMsgs = selectedMsgs.filter { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
+                                val nonMediaMsgs = selectedMsgs.filter { it.type != MessageType.IMAGE && it.type != MessageType.VIDEO }
+
+                                // 1. Grid group for IMAGE / VIDEO
+                                if (mediaMsgs.size >= 2) {
+                                    val mediaIds = mediaMsgs.map { it.id }.toSet()
+                                    chatRepository.groupSelectedMessages(mediaIds, newGroupId)
                                 }
 
-                                // Group images (and other types)
-                                if (nonTextIds.size >= 2) {
-                                    chatRepository.groupSelectedMessages(nonTextIds, newGroupId)
-                                } else if (nonTextIds.size == 1 && selectedTextMsgs.isEmpty()) {
-                                    // Normally not reachable because total size >= 2
+                                // 2. Combine all non-media messages into one text message (preserving first sender)
+                                if (nonMediaMsgs.size >= 2) {
+                                    val firstMsg = nonMediaMsgs.first()
+                                    val lines = nonMediaMsgs.map { msg ->
+                                        when {
+                                            !msg.locationAddress.isNullOrBlank() -> {
+                                                "${msg.content} ${msg.locationAddress}".trim()
+                                            }
+                                            msg.type == MessageType.TEXT -> msg.content
+                                            msg.type == MessageType.AUDIO -> {
+                                                val dur = if (msg.videoDuration > 0) "${msg.videoDuration}\"" else ""
+                                                val cap = msg.caption?.let { " $it" } ?: ""
+                                                "[语音] $dur$cap".trim()
+                                            }
+                                            msg.type == MessageType.FILE -> {
+                                                val cap = msg.caption?.let { " $it" } ?: ""
+                                                "[文件] ${msg.content}$cap".trim()
+                                            }
+                                            msg.type == MessageType.FOLDER -> "[文件夹] ${msg.content}"
+                                            else -> msg.content
+                                        }
+                                    }
+                                    val mergedContent = lines.joinToString("\n")
+                                    val nonMediaIds = nonMediaMsgs.map { it.id }
+
+                                    chatRepository.deleteMessages(nonMediaIds)
+                                    chatRepository.sendCombinedMessage(
+                                        content = mergedContent,
+                                        firstMsg = firstMsg,
+                                        folderId = currentFolderId
+                                    )
                                 }
 
                                 selectedIds = emptySet()
