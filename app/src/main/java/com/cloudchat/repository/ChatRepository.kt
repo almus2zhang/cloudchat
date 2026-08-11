@@ -484,7 +484,7 @@ class ChatRepository(private val context: Context) {
         startSyncLoop()
     }
 
-    private var lastKnownCurrentShardTime = 0L
+    private val isRefreshingFromCloud = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private fun startSyncLoop() {
         syncJob?.cancel()
@@ -492,20 +492,8 @@ class ChatRepository(private val context: Context) {
             while (isActive) {
                 delay(_syncInterval.value)
                 try {
-                    val provider = storageProvider ?: continue
-                    val currentShardName = getMonthShardName(System.currentTimeMillis())
-                    val remoteIndexTime = provider.getLastModified("chat_index.json")
-                    val remoteShardTime = provider.getLastModified(currentShardName)
-                    
-                    val indexChanged = remoteIndexTime > 0L && remoteIndexTime != lastKnownCloudTime
-                    val shardChanged = remoteShardTime > 0L && remoteShardTime != lastKnownCurrentShardTime
-                    val timestampCheckFailed = remoteIndexTime <= 0L && remoteShardTime <= 0L
-                    
-                    if (indexChanged || shardChanged || timestampCheckFailed) {
-                        Log.d("ChatRepository", "Cloud change check (index: $remoteIndexTime, shard: $remoteShardTime, fallback: $timestampCheckFailed), refreshing...")
+                    if (storageProvider != null && currentConfig != null) {
                         refreshHistoryFromCloud()
-                        if (remoteIndexTime > 0L) lastKnownCloudTime = remoteIndexTime
-                        if (remoteShardTime > 0L) lastKnownCurrentShardTime = remoteShardTime
                     }
                 } catch (e: Exception) {
                     Log.e("ChatRepository", "Sync loop error", e)
@@ -1235,8 +1223,9 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun refreshHistoryFromCloud() = withContext(Dispatchers.IO) {
-        val provider = storageProvider ?: return@withContext
-        val config = currentConfig ?: return@withContext
+        if (!isRefreshingFromCloud.compareAndSet(false, true)) return@withContext
+        val provider = storageProvider ?: run { isRefreshingFromCloud.set(false); return@withContext }
+        val config = currentConfig ?: run { isRefreshingFromCloud.set(false); return@withContext }
         try {
             var indexJson = provider.downloadText("chat_index.json")
             if (indexJson == null) {
@@ -1283,13 +1272,12 @@ class ChatRepository(private val context: Context) {
             }
 
             saveLocalHistory(config.id)
-            lastKnownCloudTime = provider.getLastModified("chat_index.json")
-            val currentShardName = getMonthShardName(System.currentTimeMillis())
-            lastKnownCurrentShardTime = provider.getLastModified(currentShardName)
             _isServerConnected.value = true
         } catch (e: Exception) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
             _isServerConnected.value = provider.isReachable()
+        } finally {
+            isRefreshingFromCloud.set(false)
         }
     }
 

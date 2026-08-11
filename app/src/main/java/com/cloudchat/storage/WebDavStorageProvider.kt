@@ -389,52 +389,16 @@ class WebDavStorageProvider(
     }
 
     override suspend fun getLastModified(fileName: String): Long = withContext(Dispatchers.IO) {
-        runWithRetry { currentBaseUrl ->
-            val url = "$currentBaseUrl${java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")}"
-            
-            // 1. WebDAV PROPFIND request (Depth: 0) to get official getlastmodified property
-            val propRequestBody = """<?xml version="1.0" encoding="utf-8" ?>
-                <d:propfind xmlns:d="DAV:">
-                    <d:prop>
-                        <d:getlastmodified/>
-                    </d:prop>
-                </d:propfind>""".trimIndent().toRequestBody("application/xml; charset=utf-8".toMediaType())
-
-            val propRequest = Request.Builder()
-                .url(url)
-                .addHeader("Authorization", auth)
-                .addHeader("Depth", "0")
-                .method("PROPFIND", propRequestBody)
-                .build()
-
-            try {
-                client.newCall(propRequest).execute().use { response ->
-                    if (response.isSuccessful || response.code == 207) {
-                        val bodyStr = response.body?.string() ?: ""
-                        val match = Regex("""<(?:\w+:)?getlastmodified[^>]*>([^<]+)</(?:\w+:)?getlastmodified>""", RegexOption.IGNORE_CASE).find(bodyStr)
-                        if (match != null) {
-                            val dateStr = match.groupValues[1].trim()
-                            val sdf = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.US)
-                            val parsedTime = try { sdf.parse(dateStr)?.time } catch (e: Exception) { null }
-                            if (parsedTime != null && parsedTime > 0L) {
-                                return@runWithRetry parsedTime
-                            }
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                // Ignore PROPFIND errors and fallback to HEAD
-            }
-
-            // 2. Fallback: HTTP HEAD request Last-Modified header
-            val headRequest = Request.Builder()
-                .url(url)
-                .addHeader("Authorization", auth)
-                .head()
-                .build()
-            
-            try {
-                client.newCall(headRequest).execute().use { response ->
+        try {
+            runWithRetry { currentBaseUrl ->
+                val url = "$currentBaseUrl${java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")}"
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", auth)
+                    .head()
+                    .build()
+                
+                client.newCall(request).execute().use { response ->
                     if (response.isSuccessful) {
                         val lastModified = response.header("Last-Modified")
                         if (lastModified != null) {
@@ -443,10 +407,9 @@ class WebDavStorageProvider(
                         }
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("WebDavStorage", "Failed to get last modified for $fileName", e)
+                -1L
             }
-
+        } catch (e: Exception) {
             -1L
         }
     }
