@@ -3580,8 +3580,7 @@ fun ImageGroupBubble(
         ) {
             Card(
                 colors = CardDefaults.cardColors(
-                    containerColor = if (isAllMedia) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                    else if (isOutgoing) Color(0xFF95EC69) else Color.White
+                    containerColor = if (isAllMedia) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) else Color.White
                 ),
                 shape = RoundedCornerShape(14.dp),
                 elevation = CardDefaults.cardElevation(defaultElevation = if (isAllMedia) 0.dp else 1.dp),
@@ -3591,7 +3590,7 @@ fun ImageGroupBubble(
                     .then(
                         if (!isAllMedia) Modifier.border(
                             0.5.dp,
-                            if (isOutgoing) Color(0xFF7BCD54) else Color(0xFFE2E2E2),
+                            Color(0xFFE2E2E2),
                             RoundedCornerShape(14.dp)
                         ) else Modifier
                     )
