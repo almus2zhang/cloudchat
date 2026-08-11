@@ -101,6 +101,7 @@ class MainActivity : ComponentActivity() {
                 var isTopBarVisible by remember { mutableStateOf(true) }
                 var topBarActions by remember { mutableStateOf<@Composable RowScope.() -> Unit>({}) }
                 var topBarTitle by remember { mutableStateOf("CloudChat") }
+                var topBarTitleComposable by remember { mutableStateOf<(@Composable () -> Unit)?>(null) }
                 var onTopBarBackClick by remember { mutableStateOf<(() -> Unit)?>(null) }
                 
                 // Wait for storage to load the appMode
@@ -124,12 +125,18 @@ class MainActivity : ComponentActivity() {
                     topBar = {
                         if (isTopBarVisible && appMode != com.cloudchat.model.AppMode.NOT_SET) {
                             TopAppBar(
-                                title = { Text(topBarTitle, style = MaterialTheme.typography.titleLarge) },
+                                title = {
+                                    if (topBarTitleComposable != null) {
+                                        topBarTitleComposable?.invoke()
+                                    } else if (topBarTitle.isNotEmpty()) {
+                                        Text(topBarTitle, style = MaterialTheme.typography.titleLarge)
+                                    }
+                                },
                                 navigationIcon = {
                                     if (onTopBarBackClick != null) {
-                                    IconButton(modifier = Modifier.size(40.dp), onClick = { onTopBarBackClick?.invoke() }) {
-                                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
-                                    }
+                                        IconButton(modifier = Modifier.size(40.dp), onClick = { onTopBarBackClick?.invoke() }) {
+                                            Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
+                                        }
                                     }
                                 },
                                 colors = TopAppBarDefaults.topAppBarColors(
@@ -194,6 +201,7 @@ class MainActivity : ComponentActivity() {
                                             topBarActions = actions
                                         },
                                         setTopBarTitle = { topBarTitle = it },
+                                        setTopBarTitleComposable = { topBarTitleComposable = it },
                                         setTopBarNavigationIcon = { onTopBarBackClick = it }
                                     )
                                 }

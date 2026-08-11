@@ -100,6 +100,7 @@ fun MainScreen(
     onSharedDataHandled: () -> Unit,
     setTopBarActions: (@Composable RowScope.() -> Unit) -> Unit,
     setTopBarTitle: (String) -> Unit,
+    setTopBarTitleComposable: (((@Composable () -> Unit)?) -> Unit) = {},
     setTopBarNavigationIcon: ((() -> Unit)?) -> Unit
 ) {
     val context = LocalContext.current
@@ -244,22 +245,78 @@ fun MainScreen(
         }
     }
 
-    LaunchedEffect(currentFolderId, messages) {
+    var activeCategory by remember { mutableStateOf("all") } // "all" or "diary"
+
+    LaunchedEffect(currentFolderId, activeCategory, messages) {
         if (currentFolderId != null) {
-            val folderMsg = messages.find { it.id == currentFolderId }
-            setTopBarTitle(folderMsg?.content ?: "文件夹")
+            setTopBarTitle("")
+            setTopBarTitleComposable(null)
             setTopBarNavigationIcon {
                 currentFolderId = null
             }
         } else {
-            setTopBarTitle("CloudChat")
             setTopBarNavigationIcon(null)
+            setTopBarTitle(if (activeCategory == "diary") "日记" else "CloudChat")
+            setTopBarTitleComposable {
+                var showTitleDropdown by remember { mutableStateOf(false) }
+                Box {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showTitleDropdown = true }.padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = if (activeCategory == "diary") "日记" else "CloudChat",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Icon(
+                            imageVector = Icons.Default.ArrowDropDown,
+                            contentDescription = "切换分类",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = showTitleDropdown,
+                        onDismissRequest = { showTitleDropdown = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("CloudChat", fontWeight = if (activeCategory == "all") FontWeight.Bold else FontWeight.Normal)
+                                }
+                            },
+                            onClick = {
+                                activeCategory = "all"
+                                showTitleDropdown = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Book, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("日记", fontWeight = if (activeCategory == "diary") FontWeight.Bold else FontWeight.Normal)
+                                }
+                            },
+                            onClick = {
+                                activeCategory = "diary"
+                                showTitleDropdown = false
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 
     DisposableEffect(Unit) {
         onDispose {
             setTopBarTitle("CloudChat")
+            setTopBarTitleComposable(null)
             setTopBarNavigationIcon(null)
         }
     }
@@ -604,7 +661,7 @@ fun MainScreen(
         }
     }
 
-    val displayedMessages = remember(messages, searchQuery, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId) {
+    val displayedMessages = remember(messages, searchQuery, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId, activeCategory) {
         val filtered = messages.filter {
             if (it.isDeleted) return@filter false
             val matchesPrivacy = if (isPrivacyMode) {
@@ -615,10 +672,17 @@ fun MainScreen(
             if (!matchesPrivacy) return@filter false
 
             if (currentFolderId != null) {
-                it.folderId == currentFolderId
+                if (it.folderId != currentFolderId) return@filter false
             } else {
-                it.folderId.isNullOrEmpty()
+                if (!it.folderId.isNullOrEmpty()) return@filter false
             }
+
+            if (activeCategory == "diary") {
+                val isDiary = it.categories?.any { c -> c.equals("diary", ignoreCase = true) || c == "日记" } == true
+                if (!isDiary) return@filter false
+            }
+
+            true
         }
         if (searchQuery.isBlank()) filtered
         else filtered.filter { 
