@@ -484,6 +484,8 @@ class ChatRepository(private val context: Context) {
         startSyncLoop()
     }
 
+    private var lastKnownCurrentShardTime = 0L
+
     private fun startSyncLoop() {
         syncJob?.cancel()
         syncJob = kotlinx.coroutines.MainScope().launch {
@@ -491,11 +493,18 @@ class ChatRepository(private val context: Context) {
                 delay(_syncInterval.value)
                 try {
                     val provider = storageProvider ?: continue
-                    val remoteTime = provider.getLastModified("chat_index.json")
-                    if (remoteTime > lastKnownCloudTime) {
-                        Log.d("ChatRepository", "Cloud change detected, refreshing...")
+                    val currentShardName = getMonthShardName(System.currentTimeMillis())
+                    val remoteIndexTime = provider.getLastModified("chat_index.json")
+                    val remoteShardTime = provider.getLastModified(currentShardName)
+                    
+                    val indexChanged = remoteIndexTime > 0L && remoteIndexTime != lastKnownCloudTime
+                    val shardChanged = remoteShardTime > 0L && remoteShardTime != lastKnownCurrentShardTime
+                    
+                    if (indexChanged || shardChanged) {
+                        Log.d("ChatRepository", "Cloud change detected (index: $remoteIndexTime, shard: $remoteShardTime), refreshing...")
                         refreshHistoryFromCloud()
-                        lastKnownCloudTime = remoteTime
+                        if (remoteIndexTime > 0L) lastKnownCloudTime = remoteIndexTime
+                        if (remoteShardTime > 0L) lastKnownCurrentShardTime = remoteShardTime
                     }
                 } catch (e: Exception) {
                     Log.e("ChatRepository", "Sync loop error", e)
@@ -1274,6 +1283,8 @@ class ChatRepository(private val context: Context) {
 
             saveLocalHistory(config.id)
             lastKnownCloudTime = provider.getLastModified("chat_index.json")
+            val currentShardName = getMonthShardName(System.currentTimeMillis())
+            lastKnownCurrentShardTime = provider.getLastModified(currentShardName)
             _isServerConnected.value = true
         } catch (e: Exception) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
