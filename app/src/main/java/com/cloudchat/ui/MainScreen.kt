@@ -2399,8 +2399,8 @@ fun DiaryBubble(
                             ?: if (localFile.exists()) "file://${localFile.absolutePath}"
                             else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
                     }
-                    Box(modifier = Modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFFF5F5F5)), contentAlignment = Alignment.Center) {
-                        AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.fillMaxWidth().heightIn(max = 300.dp), contentScale = ContentScale.FillWidth)
+                    Box(modifier = Modifier.widthIn(max = 180.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFFF5F5F5)), contentAlignment = Alignment.Center) {
+                        AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.widthIn(max = 180.dp).heightIn(max = 220.dp), contentScale = ContentScale.Fit)
                         if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
                     }
                     if (!message.caption.isNullOrBlank()) {
@@ -2605,6 +2605,7 @@ fun ChatBubble(
 
                     Box(
                         modifier = Modifier
+                            .widthIn(max = 200.dp)
                             .clip(MaterialTheme.shapes.medium)
                             .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
@@ -2613,9 +2614,9 @@ fun ChatBubble(
                             model = displayUri,
                             contentDescription = null,
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 400.dp),
-                            contentScale = ContentScale.FillWidth
+                                .widthIn(max = 200.dp)
+                                .heightIn(max = 240.dp),
+                            contentScale = ContentScale.Fit
                         )
                         
 
