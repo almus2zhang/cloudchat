@@ -201,7 +201,8 @@ class ChatRepository(private val context: Context) {
 
     suspend fun uploadCustomAvatar(config: ServerConfig, imageUri: Uri): String? = withContext(Dispatchers.IO) {
         try {
-            val avatarFileName = getSafeAvatarFileName(config.username)
+            val cleanKey = config.username.trim().ifEmpty { "user" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+            val avatarFileName = "avatar_${cleanKey}_${System.currentTimeMillis()}.jpg"
 
             val inputStream = context.contentResolver.openInputStream(imageUri) ?: return@withContext null
             val originalBitmap = BitmapFactory.decodeStream(inputStream)
@@ -239,6 +240,20 @@ class ChatRepository(private val context: Context) {
             Log.e("ChatRepository", "Failed to upload avatar", e)
             null
         }
+    }
+
+    suspend fun updateProfileAvatar(newAvatarUrl: String) = withContext(Dispatchers.IO) {
+        val config = currentConfig ?: return@withContext
+        val updatedMsgs = _messages.value.map { msg ->
+            if (msg.isOutgoing || msg.senderAvatar == config.avatarUrl) {
+                msg.copy(senderAvatar = newAvatarUrl)
+            } else {
+                msg
+            }
+        }
+        _messages.value = updatedMsgs
+        saveLocalHistory(config.id)
+        syncHistory()
     }
 
     suspend fun downloadFileToCache(messageId: String, fileName: String, remoteUrl: String): File? {
