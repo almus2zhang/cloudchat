@@ -755,23 +755,8 @@ fun MainScreen(
         }
     }
 
-    val mediaMessages = remember(messages, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId) {
-        messages.filter { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
-            .filter { msg ->
-                // Hide privacy-space content unless explicitly viewing privacy space
-                val matchesPrivacy = if (isPrivacyMode) {
-                    if (viewOnlyPrivacyItems) msg.isHidden == true else true
-                } else {
-                    msg.isHidden != true
-                }
-                if (!matchesPrivacy) return@filter false
-                // When inside a folder, only show media that belongs to that folder
-                if (currentFolderId != null) {
-                    msg.folderId == currentFolderId
-                } else {
-                    msg.folderId.isNullOrEmpty()
-                }
-            }
+    val mediaMessages = remember(displayedMessages) {
+        displayedMessages.filter { (it.type == MessageType.IMAGE || it.type == MessageType.VIDEO) && !it.isDeleted }
     }
 
 
@@ -856,7 +841,22 @@ fun MainScreen(
             }
         }
     }) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        if (selectedIds.isNotEmpty()) {
+                            selectedIds = emptySet()
+                        }
+                        if (isTextSelected) {
+                            textSelectionClearKey++
+                            isTextSelected = false
+                        }
+                        keyboardController?.hide()
+                    }
+                }
+        ) {
 
             // Folder header: show the folder name/annotation while browsing inside it
             if (currentFolderId != null) {
@@ -1736,23 +1736,25 @@ fun MainScreen(
                             showImagePicker = false
                             scope.launch {
                                 selectedItems.forEach { item ->
-                                    try {
-                                        val name = getFileName(context, item.uri)
-                                        val stream = context.contentResolver.openInputStream(item.uri)
-                                        val type = determineMessageType(context, item.uri, name)
-                                        val address = if (attachLocationEnabled) fetchAddressQuickly(context) else null
-                                        chatRepository.sendMessage(
-                                            content = name, 
-                                            type = type, 
-                                            inputStream = stream, 
-                                            fileName = name,
-                                            localUri = item.uri.toString(),
-                                            locationAddress = address,
-                                            folderId = currentFolderId,
-                                            deleteSourceFile = isMove
-                                        )
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("MainScreen", "Failed to open file", e)
+                                    launch {
+                                        try {
+                                            val name = getFileName(context, item.uri)
+                                            val stream = context.contentResolver.openInputStream(item.uri)
+                                            val type = determineMessageType(context, item.uri, name)
+                                            val address = if (attachLocationEnabled) fetchAddressQuickly(context) else null
+                                            chatRepository.sendMessage(
+                                                content = name, 
+                                                type = type, 
+                                                inputStream = stream, 
+                                                fileName = name,
+                                                localUri = item.uri.toString(),
+                                                locationAddress = address,
+                                                folderId = currentFolderId,
+                                                deleteSourceFile = isMove
+                                            )
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("MainScreen", "Failed to open file", e)
+                                        }
                                     }
                                 }
                             }
@@ -1766,6 +1768,7 @@ fun MainScreen(
         }
 
         MainScreenDialogs(
+            chatRepository = chatRepository,
             showPackFolderDialog = showPackFolderDialog,
             onPackFolderDismiss = { showPackFolderDialog = false },
             folderAnnotation = folderAnnotation,
@@ -2457,8 +2460,61 @@ fun DiaryBubble(
                             ?: if (localFile.exists()) "file://${localFile.absolutePath}"
                             else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
                     }
+                    val isUploading = message.status == MessageStatus.SENDING || progress != null
                     Box(modifier = Modifier.widthIn(max = 200.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFFF5F5F5)), contentAlignment = Alignment.Center) {
                         AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.widthIn(max = 200.dp).heightIn(max = 240.dp), contentScale = ContentScale.Fit)
+                        
+                        if (isUploading) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Black.copy(alpha = 0.4f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .background(Color.Black.copy(alpha = 0.65f), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    if (progress != null && progress in 0..100) {
+                                        CircularProgressIndicator(
+                                            progress = progress / 100f,
+                                            modifier = Modifier.size(40.dp),
+                                            color = Color.White,
+                                            strokeWidth = 3.dp
+                                        )
+                                    } else {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(40.dp),
+                                            color = Color.White,
+                                            strokeWidth = 3.dp
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { chatRepository.cancelUpload(message.id) },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Close,
+                                            contentDescription = "取消上传",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        } else if (message.status == MessageStatus.FAILED) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.Center)
+                                    .background(Color.Red.copy(alpha = 0.75f), CircleShape)
+                                    .padding(6.dp)
+                            ) {
+                                Icon(Icons.Default.ErrorOutline, contentDescription = "上传失败", tint = Color.White, modifier = Modifier.size(20.dp))
+                            }
+                        }
+
                         if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
                     }
                     if (!message.caption.isNullOrBlank()) {
@@ -3516,6 +3572,57 @@ suspend fun fetchAddressQuickly(context: android.content.Context): String? = wit
     }
 }
 
+fun getImageCaptureTime(context: android.content.Context, chatRepository: ChatRepository, message: com.cloudchat.model.ChatMessage): String {
+    val localFile = chatRepository.getLocalFile(message.id, message.content)
+    if (localFile.exists()) {
+        try {
+            val exifInterface = androidx.exifinterface.media.ExifInterface(localFile)
+            val dateStr = exifInterface.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME_ORIGINAL)
+                ?: exifInterface.getAttribute(androidx.exifinterface.media.ExifInterface.TAG_DATETIME)
+            if (!dateStr.isNullOrBlank()) {
+                return dateStr
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MainScreen", "Failed to read EXIF date: ${e.message}")
+        }
+    }
+    val ts = if (message.timestamp > 0) message.timestamp else System.currentTimeMillis()
+    val sdf = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+    return sdf.format(java.util.Date(ts))
+}
+
+suspend fun getImageAddress(context: android.content.Context, chatRepository: ChatRepository, message: com.cloudchat.model.ChatMessage): String? = withContext(Dispatchers.IO) {
+    if (!message.locationAddress.isNullOrBlank()) {
+        return@withContext message.locationAddress
+    }
+    val localFile = chatRepository.getLocalFile(message.id, message.content)
+    if (localFile.exists()) {
+        try {
+            val exifInterface = androidx.exifinterface.media.ExifInterface(localFile)
+            val latLong = FloatArray(2)
+            if (exifInterface.getLatLong(latLong)) {
+                val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+                @Suppress("DEPRECATION")
+                val addresses = geocoder.getFromLocation(latLong[0].toDouble(), latLong[1].toDouble(), 1)
+                if (!addresses.isNullOrEmpty()) {
+                    val addr = addresses[0]
+                    val sb = StringBuilder()
+                    addr.adminArea?.let { sb.append(it) }
+                    addr.locality?.let { if (!sb.contains(it)) sb.append(it) }
+                    addr.subLocality?.let { sb.append(it) }
+                    addr.thoroughfare?.let { sb.append(it) }
+                    addr.subThoroughfare?.let { sb.append(it) }
+                    if (sb.isNotEmpty()) return@withContext sb.toString()
+                }
+                return@withContext "Lat: ${latLong[0]}, Lon: ${latLong[1]}"
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MainScreen", "Failed to read EXIF GPS: ${e.message}")
+        }
+    }
+    fetchAddressQuickly(context)
+}
+
 sealed interface ChatUiItem {
     val id: String
     val timestamp: Long
@@ -3941,6 +4048,7 @@ fun ImageGroupBubble(
 
 @Composable
 fun MainScreenDialogs(
+    chatRepository: ChatRepository,
     showPackFolderDialog: Boolean,
     onPackFolderDismiss: () -> Unit,
     folderAnnotation: String,
@@ -3970,6 +4078,7 @@ fun MainScreenDialogs(
     onDeleteConfirmDismiss: () -> Unit,
     onDeleteConfirmConfirm: () -> Unit
 ) {
+    val context = LocalContext.current
     if (showPackFolderDialog) {
         AlertDialog(
             onDismissRequest = onPackFolderDismiss,
@@ -4051,16 +4160,43 @@ fun MainScreenDialogs(
 
     if (showEditCaptionDialog && editingTargetMessage != null) {
         var captionValue by remember { mutableStateOf(editingTargetMessage.caption ?: "") }
+        val scope = rememberCoroutineScope()
         AlertDialog(
             onDismissRequest = onEditCaptionDismiss,
             title = { Text("修改文件注释") },
             text = {
-                OutlinedTextField(
-                    value = captionValue,
-                    onValueChange = { captionValue = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    maxLines = 4
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = captionValue,
+                        onValueChange = { captionValue = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        maxLines = 4,
+                        label = { Text("注释内容") }
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        AssistChip(
+                            onClick = {
+                                scope.launch {
+                                    val addr = getImageAddress(context, chatRepository, editingTargetMessage)
+                                    if (!addr.isNullOrBlank()) {
+                                        captionValue = if (captionValue.isBlank()) addr else "$captionValue $addr"
+                                    }
+                                }
+                            },
+                            label = { Text("📌 提取地址", fontSize = 12.sp) }
+                        )
+                        AssistChip(
+                            onClick = {
+                                val timeStr = getImageCaptureTime(context, chatRepository, editingTargetMessage)
+                                captionValue = if (captionValue.isBlank()) timeStr else "$captionValue $timeStr"
+                            },
+                            label = { Text("⏰ 提取时间", fontSize = 12.sp) }
+                        )
+                    }
+                }
             },
             confirmButton = {
                 Button(onClick = { onEditCaptionConfirm(captionValue) }) {

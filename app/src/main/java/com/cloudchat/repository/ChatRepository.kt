@@ -122,6 +122,18 @@ class ChatRepository(private val context: Context) {
     // Track cancelled downloads
     private val cancelledDownloads = mutableSetOf<String>()
 
+    // Track active upload jobs to support cancellation
+    private val activeUploadJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+
+    fun cancelUpload(messageId: String) {
+        activeUploadJobs[messageId]?.cancel()
+        activeUploadJobs.remove(messageId)
+        _uploadProgress.update { it - messageId }
+        scope.launch {
+            updateMessageStatus(messageId, com.cloudchat.model.MessageStatus.FAILED)
+        }
+    }
+
     private fun getLocalHistoryFile(accountId: String): File {
         val dir = File(context.filesDir, "history")
         if (!dir.exists()) dir.mkdirs()
@@ -602,6 +614,10 @@ class ChatRepository(private val context: Context) {
         }
 
         withContext(Dispatchers.IO) {
+            val currentJob = coroutineContext[kotlinx.coroutines.Job]
+            if (currentJob != null) {
+                activeUploadJobs[newMessage.id] = currentJob
+            }
             try {
                 if (localUri != null && fileName != null) {
                     try {
@@ -787,6 +803,8 @@ class ChatRepository(private val context: Context) {
                 Log.e("ChatRepository", "Cloud upload failed for message ${newMessage.id}", e)
                 _uploadProgress.update { it - newMessage.id }
                 updateMessageStatus(newMessage.id, MessageStatus.FAILED)
+            } finally {
+                activeUploadJobs.remove(newMessage.id)
             }
         }
     }
@@ -1458,10 +1476,11 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun editTextMessage(messageId: String, newContent: String) {
+        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.map {
                 if (it.id == messageId) {
-                    it.copy(content = newContent, isEdited = true)
+                    it.copy(content = newContent, isEdited = true, lastModified = now)
                 } else it
             }
         }
@@ -1469,10 +1488,11 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun updateMessageCaption(messageId: String, newCaption: String?) {
+        val now = System.currentTimeMillis()
         _messages.update { list ->
             list.map {
                 if (it.id == messageId) {
-                    it.copy(caption = newCaption?.ifBlank { null })
+                    it.copy(caption = newCaption?.ifBlank { null }, lastModified = now)
                 } else it
             }
         }
