@@ -30,6 +30,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.Credentials
 import java.io.File
 import java.io.InputStream
@@ -124,6 +126,7 @@ class ChatRepository(private val context: Context) {
 
     // Track active upload jobs to support cancellation
     private val activeUploadJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    private val uploadMutex = kotlinx.coroutines.sync.Mutex()
 
     fun cancelUpload(messageId: String) {
         activeUploadJobs[messageId]?.cancel()
@@ -614,10 +617,11 @@ class ChatRepository(private val context: Context) {
         }
 
         withContext(Dispatchers.IO) {
-            val currentJob = coroutineContext[kotlinx.coroutines.Job]
-            if (currentJob != null) {
-                activeUploadJobs[newMessage.id] = currentJob
-            }
+            uploadMutex.withLock {
+                val currentJob = coroutineContext[kotlinx.coroutines.Job]
+                if (currentJob != null) {
+                    activeUploadJobs[newMessage.id] = currentJob
+                }
             try {
                 if (localUri != null && fileName != null) {
                     try {
@@ -806,6 +810,7 @@ class ChatRepository(private val context: Context) {
             } finally {
                 activeUploadJobs.remove(newMessage.id)
             }
+          }
         }
     }
 
@@ -832,8 +837,14 @@ class ChatRepository(private val context: Context) {
     }
 
     private fun updateMessageStatus(messageId: String, status: MessageStatus) {
+        val now = System.currentTimeMillis()
         _messages.update { list ->
-            list.map { if (it.id == messageId) it.copy(status = status) else it }
+            list.map { if (it.id == messageId) it.copy(status = status, lastModified = now) else it }
+        }
+        currentConfig?.id?.let { id ->
+            scope.launch {
+                saveLocalHistory(id)
+            }
         }
         syncHistory()
     }

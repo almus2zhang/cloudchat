@@ -2484,7 +2484,7 @@ fun DiaryBubble(
                             ?: if (localFile.exists()) "file://${localFile.absolutePath}"
                             else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
                     }
-                    val isUploading = message.status == MessageStatus.SENDING || progress != null
+                    val isUploading = message.status == MessageStatus.SENDING && message.status != MessageStatus.SUCCESS && message.status != MessageStatus.FAILED
                     Box(modifier = Modifier.widthIn(max = 200.dp).clip(RoundedCornerShape(8.dp)).background(Color(0xFFF5F5F5)), contentAlignment = Alignment.Center) {
                         AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.widthIn(max = 200.dp).heightIn(max = 240.dp), contentScale = ContentScale.Fit)
                         
