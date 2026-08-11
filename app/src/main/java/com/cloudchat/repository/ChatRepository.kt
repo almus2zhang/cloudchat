@@ -774,8 +774,9 @@ class ChatRepository(private val context: Context) {
                         sourceReadyToDelete.tryEmit(localUri)
                     }
                 } else {
-                    provider.uploadText(content, "msg_${System.currentTimeMillis()}.txt")
+                    updateMessageStatus(newMessage.id, MessageStatus.SUCCESS)
                 }
+                syncHistory()
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Cloud upload failed for message ${newMessage.id}", e)
                 _uploadProgress.update { it - newMessage.id }
