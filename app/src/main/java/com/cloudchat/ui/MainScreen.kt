@@ -1322,23 +1322,6 @@ fun MainScreen(
                         Icon(Icons.Default.Share, contentDescription = "Share")
                     }
 
-                    // 移入隐私空间（仅在普通模式下显示）
-                    if (!isPrivacyMode) {
-                        IconButton(onClick = {
-                            scope.launch {
-                                chatRepository.toggleHideMessages(selectedIds)
-                                selectedIds = emptySet()
-                                android.widget.Toast.makeText(context, "已移入隐私空间", android.widget.Toast.LENGTH_SHORT).show()
-                            }
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.Lock,
-                                contentDescription = "移入隐私空间",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
                     // 移出隐私空间（仅在隐私模式下显示）
                     if (isPrivacyMode) {
                         IconButton(onClick = {
@@ -1356,8 +1339,38 @@ fun MainScreen(
                         }
                     }
 
-                    // 删除消息（点击确认删除）
-                    IconButton(onClick = { showDeleteMessagesConfirmDialog = true }) {
+                    // 删除图标：短按确认删除；长按移入隐私空间
+                    Box(
+                        modifier = Modifier
+                            .minimumInteractiveComponentSize()
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .pointerInput(Unit) {
+                                detectTapGestures(
+                                    onPress = { _ ->
+                                        var longPressHandled = false
+                                        try {
+                                            withTimeout(800L) {
+                                                tryAwaitRelease()
+                                            }
+                                        } catch (e: TimeoutCancellationException) {
+                                            longPressHandled = true
+                                            // 长按：移入隐私空间
+                                            scope.launch {
+                                                chatRepository.toggleHideMessages(selectedIds)
+                                                selectedIds = emptySet()
+                                                android.widget.Toast.makeText(context, "已移入隐私空间", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                        if (!longPressHandled) {
+                                            // 短按：确认删除
+                                            showDeleteMessagesConfirmDialog = true
+                                        }
+                                    }
+                                )
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
                         Icon(
                             imageVector = Icons.Default.Delete,
                             contentDescription = "Delete",
@@ -3490,17 +3503,30 @@ fun CalendarDialog(
     val today = Calendar.getInstance()
     var year by remember { mutableStateOf(today.get(Calendar.YEAR)) }
     var month by remember { mutableStateOf(today.get(Calendar.MONTH)) } // 0..11
+    var viewMode by remember { mutableStateOf("DAY") } // "DAY", "MONTH", "YEAR"
+    var showYearDropdown by remember { mutableStateOf(false) }
+    var showMonthDropdown by remember { mutableStateOf(false) }
 
-    val datesWithMessages = remember(messages) {
-        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
-        val map = mutableMapOf<String, Int>()
+    val (datesWithMessages, yearsWithMessages, monthsWithMessages) = remember(messages) {
+        val sdfDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val sdfMonth = SimpleDateFormat("yyyy-MM", Locale.getDefault())
+        val sdfYear = SimpleDateFormat("yyyy", Locale.getDefault())
+        val datesMap = mutableMapOf<String, Int>()
+        val yearsSet = mutableSetOf<Int>()
+        val monthsSet = mutableSetOf<String>()
+
         messages.forEach { msg ->
             if (msg.timestamp > 0) {
-                val dStr = sdf.format(Date(msg.timestamp))
-                map[dStr] = (map[dStr] ?: 0) + 1
+                val dateObj = Date(msg.timestamp)
+                val dStr = sdfDate.format(dateObj)
+                val mStr = sdfMonth.format(dateObj)
+                val yInt = sdfYear.format(dateObj).toIntOrNull() ?: 0
+                datesMap[dStr] = (datesMap[dStr] ?: 0) + 1
+                if (yInt > 0) yearsSet.add(yInt)
+                monthsSet.add(mStr)
             }
         }
-        map
+        Triple(datesMap, yearsSet, monthsSet)
     }
 
     val monthCalendar = remember(year, month) {
@@ -3514,6 +3540,18 @@ fun CalendarDialog(
     val firstDayOfWeek = monthCalendar.get(Calendar.DAY_OF_WEEK) - 1 // 0=Sun
     val daysInMonth = monthCalendar.getActualMaximum(Calendar.DAY_OF_MONTH)
     val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
+
+    // Generate years range (from 2010 or earliest message year up to today+2)
+    val startYear = remember(yearsWithMessages) {
+        val minYearInMsgs = if (yearsWithMessages.isNotEmpty()) yearsWithMessages.minOrNull() ?: 2015 else 2015
+        minOf(2010, minYearInMsgs)
+    }
+    val availableYears = remember(year, startYear) {
+        val maxYear = maxOf(today.get(Calendar.YEAR) + 2, year + 2)
+        (maxYear downTo startYear).toList()
+    }
+
+    val monthNames = listOf("1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月")
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -3544,6 +3582,7 @@ fun CalendarDialog(
                         val now = Calendar.getInstance()
                         year = now.get(Calendar.YEAR)
                         month = now.get(Calendar.MONTH)
+                        viewMode = "DAY"
                     },
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                 ) {
@@ -3553,122 +3592,365 @@ fun CalendarDialog(
         },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
-                // Month/Year Switcher Header
+                // Header Year/Month Bar
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = {
-                        if (month == 0) {
-                            month = 11
-                            year--
-                        } else {
-                            month--
+                    if (viewMode == "DAY") {
+                        IconButton(onClick = {
+                            if (month == 0) {
+                                month = 11
+                                year--
+                            } else {
+                                month--
+                            }
+                        }) {
+                            Icon(Icons.Default.ChevronLeft, contentDescription = "上个月")
                         }
-                    }) {
-                        Icon(Icons.Default.ChevronLeft, contentDescription = "上个月")
+                    } else {
+                        Spacer(modifier = Modifier.width(48.dp))
                     }
 
-                    Text(
-                        text = "${year}年 ${month + 1}月",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Year Dropdown / Toggle Button
+                        Box {
+                            TextButton(
+                                onClick = { showYearDropdown = true },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                val hasMsgs = yearsWithMessages.contains(year)
+                                Text(
+                                    text = "${year}年${if (hasMsgs) " •" else ""}",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showYearDropdown,
+                                onDismissRequest = { showYearDropdown = false },
+                                modifier = Modifier.heightIn(max = 280.dp)
+                            ) {
+                                availableYears.forEach { y ->
+                                    val hasMsgs = yearsWithMessages.contains(y)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(text = "${y}年", fontWeight = if (y == year) FontWeight.Bold else FontWeight.Normal)
+                                                if (hasMsgs) {
+                                                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            year = y
+                                            showYearDropdown = false
+                                            viewMode = "DAY"
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        // Month Dropdown / Toggle Button
+                        Box {
+                            TextButton(
+                                onClick = { showMonthDropdown = true },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                val mKey = String.format(Locale.getDefault(), "%04d-%02d", year, month + 1)
+                                val hasMsgs = monthsWithMessages.contains(mKey)
+                                Text(
+                                    text = "${month + 1}月${if (hasMsgs) " •" else ""}",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showMonthDropdown,
+                                onDismissRequest = { showMonthDropdown = false }
+                            ) {
+                                monthNames.forEachIndexed { idx, name ->
+                                    val mKey = String.format(Locale.getDefault(), "%04d-%02d", year, idx + 1)
+                                    val hasMsgs = monthsWithMessages.contains(mKey)
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(text = name, fontWeight = if (idx == month) FontWeight.Bold else FontWeight.Normal)
+                                                if (hasMsgs) {
+                                                    Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            month = idx
+                                            showMonthDropdown = false
+                                            viewMode = "DAY"
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (viewMode == "DAY") {
+                        IconButton(onClick = {
+                            if (month == 11) {
+                                month = 0
+                                year++
+                            } else {
+                                month++
+                            }
+                        }) {
+                            Icon(Icons.Default.ChevronRight, contentDescription = "下个月")
+                        }
+                    } else {
+                        Spacer(modifier = Modifier.width(48.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                // View Mode Tabs: Day / Month / Year
+                TabRow(
+                    selectedTabIndex = when (viewMode) {
+                        "MONTH" -> 1
+                        "YEAR" -> 2
+                        else -> 0
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Tab(
+                        selected = viewMode == "DAY",
+                        onClick = { viewMode = "DAY" },
+                        text = { Text("日视图", fontSize = 12.sp) }
                     )
-
-                    IconButton(onClick = {
-                        if (month == 11) {
-                            month = 0
-                            year++
-                        } else {
-                            month++
+                    Tab(
+                        selected = viewMode == "MONTH",
+                        onClick = { viewMode = "MONTH" },
+                        text = {
+                            val mKey = String.format(Locale.getDefault(), "%04d-%02d", year, month + 1)
+                            Text("月视图${if (monthsWithMessages.contains(mKey)) " •" else ""}", fontSize = 12.sp)
                         }
-                    }) {
-                        Icon(Icons.Default.ChevronRight, contentDescription = "下个月")
-                    }
+                    )
+                    Tab(
+                        selected = viewMode == "YEAR",
+                        onClick = { viewMode = "YEAR" },
+                        text = {
+                            Text("年视图${if (yearsWithMessages.contains(year)) " •" else ""}", fontSize = 12.sp)
+                        }
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Days of week header
-                val weekDays = listOf("日", "一", "二", "三", "四", "五", "六")
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    weekDays.forEachIndexed { idx, day ->
-                        Text(
-                            text = day,
-                            modifier = Modifier.weight(1f),
-                            textAlign = TextAlign.Center,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when (idx) {
-                                0 -> Color(0xFFE53935)
-                                6 -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.onSurfaceVariant
-                            }
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                // Days Grid
-                val totalCells = firstDayOfWeek + daysInMonth
-                val totalRows = (totalCells + 6) / 7
-
-                Column {
-                    for (row in 0 until totalRows) {
+                when (viewMode) {
+                    "DAY" -> {
+                        // Days of week header
+                        val weekDays = listOf("日", "一", "二", "三", "四", "五", "六")
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            for (col in 0 until 7) {
-                                val cellIndex = row * 7 + col
-                                val dayNum = cellIndex - firstDayOfWeek + 1
+                            weekDays.forEachIndexed { idx, day ->
+                                Text(
+                                    text = day,
+                                    modifier = Modifier.weight(1f),
+                                    textAlign = TextAlign.Center,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (idx) {
+                                        0 -> Color(0xFFE53935)
+                                        6 -> MaterialTheme.colorScheme.primary
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
+                            }
+                        }
 
-                                if (dayNum in 1..daysInMonth) {
-                                    val dateStr = String.format(Locale.getDefault(), "%04d-%02d-%02d", year, month + 1, dayNum)
-                                    val msgCount = datesWithMessages[dateStr] ?: 0
-                                    val hasMessages = msgCount > 0
-                                    val isToday = dateStr == todayStr
+                        Spacer(modifier = Modifier.height(6.dp))
 
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .height(38.dp)
-                                            .padding(1.dp)
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(
-                                                if (isToday) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
-                                                else Color.Transparent
-                                            )
-                                            .clickable(enabled = hasMessages) {
-                                                onSelectDate(dateStr)
-                                                onDismissRequest()
-                                            },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Column(
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = Arrangement.Center
-                                        ) {
-                                            Text(
-                                                text = "$dayNum",
-                                                fontSize = 12.sp,
-                                                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
-                                                color = if (hasMessages) MaterialTheme.colorScheme.onSurface
-                                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
-                                            )
-                                            if (hasMessages) {
-                                                Spacer(modifier = Modifier.height(2.dp))
-                                                Box(
-                                                    modifier = Modifier
-                                                        .size(5.dp)
-                                                        .clip(CircleShape)
-                                                        .background(MaterialTheme.colorScheme.primary)
+                        // Days Grid
+                        val totalCells = firstDayOfWeek + daysInMonth
+                        val totalRows = (totalCells + 6) / 7
+
+                        Column {
+                            for (row in 0 until totalRows) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    for (col in 0 until 7) {
+                                        val cellIndex = row * 7 + col
+                                        val dayNum = cellIndex - firstDayOfWeek + 1
+
+                                        if (dayNum in 1..daysInMonth) {
+                                            val dateStr = String.format(Locale.getDefault(), "%04d-%02d-%02d", year, month + 1, dayNum)
+                                            val msgCount = datesWithMessages[dateStr] ?: 0
+                                            val hasMessages = msgCount > 0
+                                            val isToday = dateStr == todayStr
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(38.dp)
+                                                    .padding(1.dp)
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .background(
+                                                        if (isToday) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                                                        else Color.Transparent
+                                                    )
+                                                    .clickable(enabled = hasMessages) {
+                                                        onSelectDate(dateStr)
+                                                        onDismissRequest()
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Column(
+                                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                                    verticalArrangement = Arrangement.Center
+                                                ) {
+                                                    Text(
+                                                        text = "$dayNum",
+                                                        fontSize = 12.sp,
+                                                        fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                                                        color = if (hasMessages) MaterialTheme.colorScheme.onSurface
+                                                        else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                                    )
+                                                    if (hasMessages) {
+                                                        Spacer(modifier = Modifier.height(2.dp))
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(5.dp)
+                                                                .clip(CircleShape)
+                                                                .background(MaterialTheme.colorScheme.primary)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    "MONTH" -> {
+                        // 3 Column Month Grid with Indicator Dots
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            for (r in 0..3) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    for (c in 0..2) {
+                                        val mIdx = r * 3 + c
+                                        val mKey = String.format(Locale.getDefault(), "%04d-%02d", year, mIdx + 1)
+                                        val hasMsgs = monthsWithMessages.contains(mKey)
+                                        val isCurrent = mIdx == month
+
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(54.dp)
+                                                .padding(3.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .background(
+                                                    if (isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
                                                 )
+                                                .clickable {
+                                                    month = mIdx
+                                                    viewMode = "DAY"
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                Text(
+                                                    text = monthNames[mIdx],
+                                                    fontSize = 13.sp,
+                                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                if (hasMsgs) {
+                                                    Spacer(modifier = Modifier.height(3.dp))
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(5.dp)
+                                                            .clip(CircleShape)
+                                                            .background(MaterialTheme.colorScheme.primary)
+                                                    )
+                                                }
                                             }
                                         }
                                     }
-                                } else {
-                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+
+                    "YEAR" -> {
+                        // 3 Column Year Grid with Indicator Dots
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 240.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            val rows = (availableYears.size + 2) / 3
+                            for (r in 0 until rows) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    for (c in 0..2) {
+                                        val yIdx = r * 3 + c
+                                        if (yIdx < availableYears.size) {
+                                            val yVal = availableYears[yIdx]
+                                            val hasMsgs = yearsWithMessages.contains(yVal)
+                                            val isCurrent = yVal == year
+
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .height(48.dp)
+                                                    .padding(3.dp)
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .background(
+                                                        if (isCurrent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
+                                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                                    )
+                                                    .clickable {
+                                                        year = yVal
+                                                        viewMode = "DAY"
+                                                    },
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                    Text(
+                                                        text = "${yVal}年",
+                                                        fontSize = 13.sp,
+                                                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    if (hasMsgs) {
+                                                        Spacer(modifier = Modifier.height(3.dp))
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(5.dp)
+                                                                .clip(CircleShape)
+                                                                .background(MaterialTheme.colorScheme.primary)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
+                                    }
                                 }
                             }
                         }
