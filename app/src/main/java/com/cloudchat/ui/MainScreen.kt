@@ -2559,16 +2559,17 @@ fun ChatBubble(
         }
 
         Column(
-            horizontalAlignment = Alignment.Start,
+            horizontalAlignment = Alignment.End,
             modifier = Modifier.weight(1f)
         ) {
             Text(
                 text = displayName,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                 color = nameColor,
                 maxLines = 1,
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                modifier = Modifier.padding(bottom = 2.dp)
+                textAlign = TextAlign.End,
+                modifier = Modifier.padding(bottom = 2.dp, end = 2.dp)
             )
             when (message.type) {
                 MessageType.TEXT -> {
@@ -2862,6 +2863,7 @@ fun ChatBubble(
             // Status and Time
             Row(
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
                 modifier = Modifier.padding(top = 2.dp)
             ) {
                 if (message.status == MessageStatus.SENDING) {
