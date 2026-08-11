@@ -57,6 +57,7 @@ fun SettingsScreen(onBack: () -> Unit) {
     val coroutineScope = rememberCoroutineScope()
 
     var editingConfig by remember { mutableStateOf<ServerConfig?>(null) }
+    val repo = remember { com.cloudchat.repository.ChatRepository(context) }
 
     var pendingAvatarUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -240,7 +241,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Text("个人头像设置 (Avatar)", style = MaterialTheme.typography.titleMedium)
 
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    val avatarSrc = config.avatarUrl.ifEmpty { "https://api.dicebear.com/7.x/bottts/svg?seed=${config.username.ifEmpty { "User" }}" }
+                    val avatarSrc = rememberSettingsAvatarUrl(config.avatarUrl, config.username, repo)
                     AsyncImage(
                         model = avatarSrc,
                         contentDescription = "Avatar",
@@ -460,6 +461,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                                     }
                                 }
                                 settingsRepository.saveAccount(finalConfig)
+                                repo.updateProfileAvatar(finalConfig.avatarUrl)
                                 pendingAvatarUri = null
                                 editingConfig = null
                                 onBack() // Auto close after save
@@ -589,4 +591,18 @@ fun AccountItem(
             }
         }
     }
+}
+
+@Composable
+fun rememberSettingsAvatarUrl(rawAvatar: String?, username: String, repo: com.cloudchat.repository.ChatRepository): String {
+    val fallback = "https://api.dicebear.com/7.x/bottts/png?seed=${Uri.encode(username.ifEmpty { "User" })}"
+    val avatarName = rawAvatar?.ifEmpty { null } ?: return fallback
+    if (avatarName.startsWith("http://") || avatarName.startsWith("https://") || avatarName.startsWith("file://") || avatarName.startsWith("data:") || avatarName.startsWith("content://")) {
+        return avatarName
+    }
+    var resolvedUrl by remember(avatarName) { mutableStateOf<String?>(null) }
+    LaunchedEffect(avatarName) {
+        resolvedUrl = repo.resolveAvatarPath(avatarName)
+    }
+    return resolvedUrl ?: fallback
 }
