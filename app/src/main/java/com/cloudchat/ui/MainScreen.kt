@@ -1355,11 +1355,10 @@ fun MainScreen(
                                             }
                                         } catch (e: TimeoutCancellationException) {
                                             longPressHandled = true
-                                            // 长按：移入隐私空间
+                                            // 长按：移入隐私空间（无任何提示）
                                             scope.launch {
                                                 chatRepository.toggleHideMessages(selectedIds)
                                                 selectedIds = emptySet()
-                                                android.widget.Toast.makeText(context, "已移入隐私空间", android.widget.Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                         if (!longPressHandled) {
