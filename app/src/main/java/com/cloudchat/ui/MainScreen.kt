@@ -58,6 +58,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeout
+import java.util.Calendar
+import java.util.Date
+import java.text.SimpleDateFormat
+import java.util.Locale
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.TimeoutCancellationException
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -140,6 +147,7 @@ fun MainScreen(
     var editingTargetMessage by remember { mutableStateOf<com.cloudchat.model.ChatMessage?>(null) }
     var isMediaSyncing by remember { mutableStateOf(false) }
     var showImagePicker by remember { mutableStateOf(false) }
+    var showCalendarDialog by remember { mutableStateOf(false) }
     // --- Selection and Haptic States ---
     var textSelectionClearKey by remember { mutableStateOf(0) }
     var isTextSelected by remember { mutableStateOf(false) }
@@ -571,6 +579,10 @@ fun MainScreen(
                     Icon(Icons.Default.Search, contentDescription = "Search")
                 }
 
+                IconButton(modifier = Modifier.size(40.dp), onClick = { showCalendarDialog = true }) {
+                    Icon(Icons.Default.DateRange, contentDescription = "日历视图")
+                }
+
                 // Rename current folder (only visible when inside a folder)
                 if (currentFolderId != null) {
                     IconButton(modifier = Modifier.size(40.dp), onClick = {
@@ -752,6 +764,33 @@ fun MainScreen(
 
             val chatUiItems = remember(displayedMessages) {
                 groupMessages(displayedMessages)
+            }
+
+            if (showCalendarDialog) {
+                CalendarDialog(
+                    onDismissRequest = { showCalendarDialog = false },
+                    messages = displayedMessages,
+                    onSelectDate = { selectedDateStr ->
+                        val targetMsg = displayedMessages.find { msg ->
+                            if (msg.timestamp <= 0) false
+                            else SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(msg.timestamp)) == selectedDateStr
+                        }
+                        if (targetMsg != null) {
+                            val targetIndexInUiItems = chatUiItems.indexOfFirst { uiItem ->
+                                when (uiItem) {
+                                    is ChatUiItem.SingleMessage -> uiItem.message.id == targetMsg.id
+                                    is ChatUiItem.ImageGroup -> uiItem.messages.any { m -> m.id == targetMsg.id }
+                                }
+                            }
+                            if (targetIndexInUiItems != -1) {
+                                val reversedIndex = (chatUiItems.size - 1 - targetIndexInUiItems).coerceAtLeast(0)
+                                scope.launch {
+                                    listState.animateScrollToItem(reversedIndex)
+                                }
+                            }
+                        }
+                    }
+                )
             }
 
             val dragModifier = if (currentFolderId != null) {
@@ -3454,5 +3493,203 @@ fun MainScreenDialogs(
             }
         )
     }
+}
+
+@Composable
+fun CalendarDialog(
+    onDismissRequest: () -> Unit,
+    messages: List<ChatMessage>,
+    onSelectDate: (String) -> Unit
+) {
+    val today = Calendar.getInstance()
+    var year by remember { mutableStateOf(today.get(Calendar.YEAR)) }
+    var month by remember { mutableStateOf(today.get(Calendar.MONTH)) } // 0..11
+
+    val datesWithMessages = remember(messages) {
+        val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
+        val map = mutableMapOf<String, Int>()
+        messages.forEach { msg ->
+            if (msg.timestamp > 0) {
+                val dStr = sdf.format(Date(msg.timestamp))
+                map[dStr] = (map[dStr] ?: 0) + 1
+            }
+        }
+        map
+    }
+
+    val monthCalendar = remember(year, month) {
+        val cal = Calendar.getInstance()
+        cal.set(Calendar.YEAR, year)
+        cal.set(Calendar.MONTH, month)
+        cal.set(Calendar.DAY_OF_MONTH, 1)
+        cal
+    }
+
+    val firstDayOfWeek = monthCalendar.get(Calendar.DAY_OF_WEEK) - 1 // 0=Sun
+    val daysInMonth = monthCalendar.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val todayStr = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
+
+    AlertDialog(
+        onDismissRequest = onDismissRequest,
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismissRequest) {
+                Text("关闭")
+            }
+        },
+        title = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.DateRange,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("日历跳转", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+                TextButton(
+                    onClick = {
+                        val now = Calendar.getInstance()
+                        year = now.get(Calendar.YEAR)
+                        month = now.get(Calendar.MONTH)
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text("今", fontSize = 13.sp)
+                }
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Month/Year Switcher Header
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = {
+                        if (month == 0) {
+                            month = 11
+                            year--
+                        } else {
+                            month--
+                        }
+                    }) {
+                        Icon(Icons.Default.ChevronLeft, contentDescription = "上个月")
+                    }
+
+                    Text(
+                        text = "${year}年 ${month + 1}月",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    IconButton(onClick = {
+                        if (month == 11) {
+                            month = 0
+                            year++
+                        } else {
+                            month++
+                        }
+                    }) {
+                        Icon(Icons.Default.ChevronRight, contentDescription = "下个月")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Days of week header
+                val weekDays = listOf("日", "一", "二", "三", "四", "五", "六")
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    weekDays.forEachIndexed { idx, day ->
+                        Text(
+                            text = day,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Center,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = when (idx) {
+                                0 -> Color(0xFFE53935)
+                                6 -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Days Grid
+                val totalCells = firstDayOfWeek + daysInMonth
+                val totalRows = (totalCells + 6) / 7
+
+                Column {
+                    for (row in 0 until totalRows) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            for (col in 0 until 7) {
+                                val cellIndex = row * 7 + col
+                                val dayNum = cellIndex - firstDayOfWeek + 1
+
+                                if (dayNum in 1..daysInMonth) {
+                                    val dateStr = String.format(Locale.getDefault(), "%04d-%02d-%02d", year, month + 1, dayNum)
+                                    val msgCount = datesWithMessages[dateStr] ?: 0
+                                    val hasMessages = msgCount > 0
+                                    val isToday = dateStr == todayStr
+
+                                    Box(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(38.dp)
+                                            .padding(1.dp)
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(
+                                                if (isToday) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                                                else Color.Transparent
+                                            )
+                                            .clickable(enabled = hasMessages) {
+                                                onSelectDate(dateStr)
+                                                onDismissRequest()
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Column(
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.Center
+                                        ) {
+                                            Text(
+                                                text = "$dayNum",
+                                                fontSize = 12.sp,
+                                                fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (hasMessages) MaterialTheme.colorScheme.onSurface
+                                                else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f)
+                                            )
+                                            if (hasMessages) {
+                                                Spacer(modifier = Modifier.height(2.dp))
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(5.dp)
+                                                        .clip(CircleShape)
+                                                        .background(MaterialTheme.colorScheme.primary)
+                                                )
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    )
 }
 
