@@ -3580,18 +3580,18 @@ fun ImageGroupBubble(
         ) {
             Card(
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    containerColor = if (isAllMedia) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f) else Color.White
                 ),
-                shape = MaterialTheme.shapes.medium,
-                elevation = CardDefaults.cardElevation(defaultElevation = if (isAllMedia) 0.dp else 0.5.dp),
+                shape = RoundedCornerShape(14.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = if (isAllMedia) 0.dp else 1.dp),
                 modifier = Modifier
                     .widthIn(max = 252.dp)
                     .padding(2.dp)
                     .then(
                         if (!isAllMedia) Modifier.border(
                             0.5.dp,
-                            Color(0xFFE0E0E0),
-                            MaterialTheme.shapes.medium
+                            Color(0xFFE2E2E2),
+                            RoundedCornerShape(14.dp)
                         ) else Modifier
                     )
             ) {
@@ -3666,7 +3666,7 @@ fun ImageGroupBubble(
                     // Composite Group Bubble (Text, Audio, File, etc.)
                     Column(
                         modifier = Modifier
-                            .padding(horizontal = 8.dp, vertical = 6.dp)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
                             .fillMaxWidth()
                     ) {
                         group.messages.forEachIndexed { index, message ->
@@ -3674,9 +3674,9 @@ fun ImageGroupBubble(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 4.dp)
+                                        .padding(vertical = 8.dp)
                                         .height(0.5.dp)
-                                        .background(Color(0xFFCCCCCC))
+                                        .background(Color(0xFFE5E5E5))
                                 )
                             }
 
@@ -3701,7 +3701,7 @@ fun ImageGroupBubble(
                                         },
                                         onLongClick = { onLongClick(message) }
                                     )
-                                    .padding(vertical = 1.dp)
+                                    .padding(vertical = 2.dp)
                             ) {
                                 when (message.type) {
                                     MessageType.TEXT -> {
@@ -3710,7 +3710,8 @@ fun ImageGroupBubble(
                                                 text = message.content,
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = Color(0xFF222222),
-                                                fontSize = 13.5.sp
+                                                fontSize = 14.5.sp,
+                                                lineHeight = 20.sp
                                             )
                                         }
                                         if (!message.locationAddress.isNullOrBlank()) {
@@ -3718,7 +3719,7 @@ fun ImageGroupBubble(
                                                 text = message.locationAddress,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = Color.Gray,
-                                                modifier = Modifier.padding(top = 1.dp)
+                                                modifier = Modifier.padding(top = 2.dp)
                                             )
                                         }
                                     }
@@ -3727,23 +3728,23 @@ fun ImageGroupBubble(
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             modifier = Modifier
-                                                .clip(RoundedCornerShape(16.dp))
-                                                .background(Color(0xFF4CAF50))
+                                                .clip(RoundedCornerShape(20.dp))
+                                                .background(Color(0xFF07C160))
                                                 .clickable { onPlayAudio(message) }
-                                                .padding(horizontal = 10.dp, vertical = 4.dp)
+                                                .padding(horizontal = 14.dp, vertical = 6.dp)
                                         ) {
                                             Icon(
                                                 imageVector = if (isPlaying) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
                                                 contentDescription = null,
                                                 tint = Color.White,
-                                                modifier = Modifier.size(15.dp)
+                                                modifier = Modifier.size(16.dp)
                                             )
-                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
                                             Text(
                                                 text = "${message.videoDuration}s",
                                                 color = Color.White,
                                                 fontWeight = FontWeight.Medium,
-                                                fontSize = 12.5.sp
+                                                fontSize = 13.sp
                                             )
                                         }
                                         if (!message.caption.isNullOrBlank()) {
