@@ -1116,6 +1116,7 @@ fun MainScreen(
                                 group = uiItem,
                                 chatRepository = chatRepository,
                                 selectedIds = selectedIds,
+                                template = currentConfig?.messageTemplate ?: "default",
                                 downloadProgress = downloadProgress,
                                 playingMessageId = playingMessageId,
                                 onPlayAudio = { playAudioMessage(it) },
@@ -2344,52 +2345,22 @@ fun DiaryBubble(
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.Top
     ) {
-        // Left column: time + avatar + name
+        // Left column: message content
         Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.width(56.dp)
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.End
         ) {
-            Text(
-                text = timeStr,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                color = Color(0xFF999999)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            AsyncImage(
-                model = userAvatarUrl,
-                contentDescription = "Avatar",
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Crop
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = displayName,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                color = Color(0xFF888888),
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        Spacer(modifier = Modifier.width(10.dp))
-
-        // Right column: content
-        Column(modifier = Modifier.weight(1f)) {
             when (message.type) {
                 MessageType.TEXT -> {
                     Text(
                         text = message.content,
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color(0xFF222222),
-                        fontSize = 15.sp
+                        fontSize = 15.sp,
+                        textAlign = TextAlign.End
                     )
                     if (!message.locationAddress.isNullOrBlank()) {
-                        Text(text = message.locationAddress, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp))
+                        Text(text = message.locationAddress, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.End)
                     }
                 }
                 MessageType.IMAGE -> {
@@ -2404,7 +2375,7 @@ fun DiaryBubble(
                         if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
                     }
                     if (!message.caption.isNullOrBlank()) {
-                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp))
+                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.End)
                     }
                 }
                 MessageType.VIDEO -> {
@@ -2414,7 +2385,7 @@ fun DiaryBubble(
                             ?: if (localFile.exists()) "file://${localFile.absolutePath}"
                             else chatRepository.resolveUrl(message.thumbnailUrl) ?: chatRepository.resolveUrl(message.remoteUrl)
                     }
-                    Box(modifier = Modifier.clip(RoundedCornerShape(10.dp)).aspectRatio(16 / 9f).background(Color.Black), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.widthIn(max = 200.dp).clip(RoundedCornerShape(10.dp)).aspectRatio(16 / 9f).background(Color.Black), contentAlignment = Alignment.Center) {
                         AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = 0.8f)
                         if (progress != null && progress in 0..100) {
                             Box(modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.55f), CircleShape), contentAlignment = Alignment.Center) {
@@ -2429,7 +2400,7 @@ fun DiaryBubble(
                         if (message.fileSize > 0) Box(modifier = Modifier.align(Alignment.TopStart)) { FileSizeBadge(message.fileSize) }
                     }
                     if (!message.caption.isNullOrBlank()) {
-                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp))
+                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.End)
                     }
                 }
                 MessageType.AUDIO -> {
@@ -2447,33 +2418,50 @@ fun DiaryBubble(
                     }
                     if (!message.caption.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = message.caption, style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444))
+                        Text(text = message.caption, style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444), textAlign = TextAlign.End)
+                    }
+                }
+                MessageType.FILE -> {
+                    val fileProgress = downloadProgress[message.id]
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.widthIn(max = 220.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.InsertDriveFile, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = message.content, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                    if (message.fileSize > 0) {
+                                        Text(text = formatFileSize(message.fileSize), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                                    }
+                                }
+                            }
+                            if (fileProgress != null && fileProgress in 0..99) {
+                                LinearProgressIndicator(progress = fileProgress / 100f, modifier = Modifier.fillMaxWidth().height(4.dp).padding(top = 6.dp))
+                            }
+                        }
+                    }
+                    if (!message.caption.isNullOrBlank()) {
+                        Text(text = message.caption, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.End)
                     }
                 }
                 MessageType.FOLDER -> {
-                    FolderBubble(message = message, isSelected = isSelected, onSelectToggle = { onMediaClick(message) }, onLongClick = onLongClick)
+                    FolderBubble(
+                        message = message,
+                        isSelected = isSelected,
+                        onSelectToggle = { onMediaClick(message) },
+                        onLongClick = onLongClick
+                    )
                 }
                 else -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.InsertDriveFile, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Column {
-                            Text(text = message.content, fontWeight = FontWeight.Medium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, fontSize = 14.sp)
-                            if (message.fileSize > 0) Text(text = formatFileSize(message.fileSize), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                        }
-                    }
+                    Text(text = message.content, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF222222), textAlign = TextAlign.End)
                 }
             }
         }
     }
-    // Thin divider between diary entries
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 68.dp, end = 12.dp)
-            .height(0.5.dp)
-            .background(Color(0xFFEEEEEE))
-    )
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -2522,22 +2510,19 @@ fun ChatBubble(
         horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
-        // Left Side Avatar for Incoming Messages (44dp - ~9x area)
-        if (!isOutgoing) {
-            AsyncImage(
-                model = userAvatarUrl,
-                contentDescription = "Avatar",
-                modifier = Modifier
-                    .padding(end = 8.dp, top = 2.dp)
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .border(1.dp, Color.LightGray, CircleShape),
-                contentScale = ContentScale.Crop
-            )
-        }
+        // Left Side Avatar (ALWAYS ON THE LEFT IN DIARY VIEW FOR ALL MESSAGES)
+        AsyncImage(
+            model = userAvatarUrl,
+            contentDescription = "Avatar",
+            modifier = Modifier
+                .padding(end = 8.dp, top = 2.dp)
+                .size(44.dp)
+                .clip(CircleShape)
+                .border(1.dp, Color.LightGray, CircleShape),
+            contentScale = ContentScale.Crop
+        )
 
         if (isOutgoing && message.status == MessageStatus.FAILED) {
-            // Retry icon for failed outgoing messages (left of the bubble)
             Box(
                 Modifier
                     .align(Alignment.CenterVertically)
@@ -2552,8 +2537,8 @@ fun ChatBubble(
         }
 
         Column(
-            horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
-            modifier = Modifier.widthIn(max = 280.dp)
+            horizontalAlignment = Alignment.Start,
+            modifier = Modifier.weight(1f)
         ) {
             Text(
                 text = displayName,
@@ -3511,6 +3496,7 @@ fun ImageGroupBubble(
     group: ChatUiItem.ImageGroup,
     chatRepository: ChatRepository,
     selectedIds: Set<String>,
+    template: String = "default",
     downloadProgress: Map<String, Int> = emptyMap(),
     playingMessageId: String? = null,
     onPlayAudio: (com.cloudchat.model.ChatMessage) -> Unit = {},
@@ -3531,6 +3517,7 @@ fun ImageGroupBubble(
     }
     val contentColor = Color.Black
     val isAllMedia = group.messages.all { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
+    val isDefaultTemplate = template == "default"
     
     val displayName = group.messages.first().senderName ?: group.messages.first().sender
     val userAvatarUrl = rememberAvatarUrl(
@@ -3543,16 +3530,16 @@ fun ImageGroupBubble(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp)
+            .padding(horizontal = 12.dp, vertical = 4.dp)
             .combinedClickable(
                 onClick = onClickGroup,
                 onLongClick = onLongClickGroup
             ),
-        horizontalArrangement = if (isOutgoing) Arrangement.End else Arrangement.Start,
+        horizontalArrangement = if (isDefaultTemplate) Arrangement.End else Arrangement.Start,
         verticalAlignment = Alignment.Top
     ) {
-        // Left Side Avatar for Incoming Group Messages
-        if (!isOutgoing) {
+        // Left Side Avatar for Diary Template
+        if (!isDefaultTemplate) {
             AsyncImage(
                 model = userAvatarUrl,
                 contentDescription = "Avatar",
@@ -3566,8 +3553,8 @@ fun ImageGroupBubble(
         }
 
         Column(
-            horizontalAlignment = if (isOutgoing) Alignment.End else Alignment.Start,
-            modifier = Modifier.widthIn(max = 300.dp)
+            horizontalAlignment = if (isDefaultTemplate) Alignment.End else Alignment.Start,
+            modifier = Modifier.widthIn(max = 252.dp)
         ) {
             Card(
                 colors = CardDefaults.cardColors(
@@ -3577,6 +3564,7 @@ fun ImageGroupBubble(
                 shape = MaterialTheme.shapes.medium,
                 elevation = CardDefaults.cardElevation(defaultElevation = if (isAllMedia) 0.dp else 1.dp),
                 modifier = Modifier
+                    .widthIn(max = 252.dp)
                     .padding(2.dp)
                     .then(
                         if (!isAllMedia) Modifier.border(
@@ -3657,7 +3645,7 @@ fun ImageGroupBubble(
                     // Composite Group Bubble (Text, Audio, File, etc.)
                     Column(
                         modifier = Modifier
-                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .padding(horizontal = 8.dp, vertical = 6.dp)
                             .fillMaxWidth()
                     ) {
                         group.messages.forEachIndexed { index, message ->
@@ -3665,7 +3653,7 @@ fun ImageGroupBubble(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(vertical = 6.dp)
+                                        .padding(vertical = 4.dp)
                                         .height(0.5.dp)
                                         .background(Color(0xFFCCCCCC))
                                 )
@@ -3692,7 +3680,7 @@ fun ImageGroupBubble(
                                         },
                                         onLongClick = { onLongClick(message) }
                                     )
-                                    .padding(vertical = 2.dp)
+                                    .padding(vertical = 1.dp)
                             ) {
                                 when (message.type) {
                                     MessageType.TEXT -> {
@@ -3701,7 +3689,7 @@ fun ImageGroupBubble(
                                                 text = message.content,
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = Color(0xFF222222),
-                                                fontSize = 14.sp
+                                                fontSize = 13.5.sp
                                             )
                                         }
                                         if (!message.locationAddress.isNullOrBlank()) {
@@ -3709,7 +3697,7 @@ fun ImageGroupBubble(
                                                 text = message.locationAddress,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = Color.Gray,
-                                                modifier = Modifier.padding(top = 2.dp)
+                                                modifier = Modifier.padding(top = 1.dp)
                                             )
                                         }
                                     }
@@ -3721,20 +3709,20 @@ fun ImageGroupBubble(
                                                 .clip(RoundedCornerShape(16.dp))
                                                 .background(Color(0xFF4CAF50))
                                                 .clickable { onPlayAudio(message) }
-                                                .padding(horizontal = 12.dp, vertical = 6.dp)
+                                                .padding(horizontal = 10.dp, vertical = 4.dp)
                                         ) {
                                             Icon(
                                                 imageVector = if (isPlaying) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
                                                 contentDescription = null,
                                                 tint = Color.White,
-                                                modifier = Modifier.size(16.dp)
+                                                modifier = Modifier.size(15.dp)
                                             )
-                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
                                             Text(
                                                 text = "${message.videoDuration}s",
                                                 color = Color.White,
                                                 fontWeight = FontWeight.Medium,
-                                                fontSize = 13.sp
+                                                fontSize = 12.5.sp
                                             )
                                         }
                                         if (!message.caption.isNullOrBlank()) {
@@ -3742,7 +3730,7 @@ fun ImageGroupBubble(
                                                 text = message.caption,
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = Color.Gray,
-                                                modifier = Modifier.padding(top = 2.dp)
+                                                modifier = Modifier.padding(top = 1.dp)
                                             )
                                         }
                                     }
@@ -3753,22 +3741,22 @@ fun ImageGroupBubble(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .clickable { onFileClick(message) }
-                                                .padding(vertical = 2.dp)
+                                                .padding(vertical = 1.dp)
                                         ) {
                                             Icon(
                                                 Icons.Default.InsertDriveFile,
                                                 contentDescription = null,
                                                 tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(24.dp)
+                                                modifier = Modifier.size(22.dp)
                                             )
-                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(
                                                     text = message.content,
                                                     fontWeight = FontWeight.Medium,
                                                     maxLines = 1,
                                                     overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                                    fontSize = 13.sp
+                                                    fontSize = 12.5.sp
                                                 )
                                                 if (message.fileSize > 0) {
                                                     Text(
@@ -3796,8 +3784,8 @@ fun ImageGroupBubble(
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .heightIn(max = 180.dp)
-                                                .clip(RoundedCornerShape(8.dp))
+                                                .heightIn(max = 160.dp)
+                                                .clip(RoundedCornerShape(6.dp))
                                                 .background(Color.Black.copy(alpha = 0.05f))
                                         ) {
                                             coil.compose.AsyncImage(
@@ -3811,7 +3799,7 @@ fun ImageGroupBubble(
                                                     Icons.Default.PlayArrow,
                                                     contentDescription = "Play",
                                                     tint = Color.White,
-                                                    modifier = Modifier.size(32.dp).align(Alignment.Center)
+                                                    modifier = Modifier.size(28.dp).align(Alignment.Center)
                                                 )
                                             }
                                         }
@@ -3825,7 +3813,7 @@ fun ImageGroupBubble(
                                         )
                                     }
                                     else -> {
-                                        Text(text = message.content, style = MaterialTheme.typography.bodyMedium)
+                                        Text(text = message.content, style = MaterialTheme.typography.bodyMedium, fontSize = 13.5.sp)
                                     }
                                 }
                             }
@@ -3859,16 +3847,16 @@ fun ImageGroupBubble(
             }
         }
 
-        // Right Side Avatar for Outgoing Group Messages
-        if (isOutgoing) {
+        // Right Side Avatar for Default Template
+        if (isDefaultTemplate) {
             AsyncImage(
                 model = userAvatarUrl,
                 contentDescription = "Avatar",
                 modifier = Modifier
                     .padding(start = 8.dp, top = 2.dp)
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f), CircleShape),
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(8.dp)),
                 contentScale = ContentScale.Crop
             )
         }
