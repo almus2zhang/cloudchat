@@ -243,17 +243,7 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun updateProfileAvatar(newAvatarUrl: String) = withContext(Dispatchers.IO) {
-        val config = currentConfig ?: return@withContext
-        val updatedMsgs = _messages.value.map { msg ->
-            if (msg.isOutgoing || msg.senderAvatar == config.avatarUrl) {
-                msg.copy(senderAvatar = newAvatarUrl)
-            } else {
-                msg
-            }
-        }
-        _messages.value = updatedMsgs
-        saveLocalHistory(config.id)
-        syncHistory()
+        // Profile avatar changes only apply to new messages created going forward. Historical messages retain their original avatar.
     }
 
     suspend fun downloadFileToCache(messageId: String, fileName: String, remoteUrl: String): File? {
