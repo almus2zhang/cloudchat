@@ -634,6 +634,34 @@ class WebDavStorageProvider(
         }
     }
 
+    override suspend fun copyRemoteFile(srcPath: String, destPath: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            runWithRetry { currentBaseUrl ->
+                val srcEncoded = encodePath(srcPath)
+                val destEncoded = encodePath(destPath)
+                val srcUrl = "$currentBaseUrl$srcEncoded"
+                val destUrl = "$currentBaseUrl$destEncoded"
+                val request = Request.Builder()
+                    .url(srcUrl)
+                    .addHeader("Authorization", auth)
+                    .method("COPY", null)
+                    .addHeader("Destination", destUrl)
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        true
+                    } else {
+                        Log.w("WebDavStorage", "COPY failed ${response.code} for $srcPath -> $destPath")
+                        throw Exception("COPY failed: ${response.code}")
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("WebDavStorage", "copyRemoteFile failed for $srcPath", e)
+            false
+        }
+    }
+
     // 递归删除目录内容（先删子项，再删目录）
     private suspend fun recursiveDelete(currentBaseUrl: String, dirPath: String) {
         val encoded = encodePath(dirPath)

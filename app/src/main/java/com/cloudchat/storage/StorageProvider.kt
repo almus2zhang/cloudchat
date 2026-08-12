@@ -45,4 +45,6 @@ interface StorageProvider {
     suspend fun uploadFileToPath(inputStream: InputStream, filePath: String, contentType: String): Boolean = false
     /** 删除整个目录（含其中所有文件），返回是否成功 */
     suspend fun deleteDirectory(dirPath: String): Boolean = false
+    /** 远程复制文件（WebDAV COPY），从 srcPath 到 destPath，返回是否成功 */
+    suspend fun copyRemoteFile(srcPath: String, destPath: String): Boolean = false
 }

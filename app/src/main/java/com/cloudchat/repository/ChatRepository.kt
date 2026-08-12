@@ -2105,6 +2105,7 @@ class ChatRepository(private val context: Context) {
         author: String,
         templateId: String,
         password: String,
+        coverUri: android.net.Uri?,
         messages: List<ChatMessage>,
         onProgress: ((Int, String) -> Unit)? = null
     ): String? = withContext(Dispatchers.IO) {
@@ -2143,6 +2144,7 @@ class ChatRepository(private val context: Context) {
             val cleanName = DiaryGenerator.cleanFileName(fileName)
             val localFile = getLocalFile(msg.id, fileName)
             var uploaded = false
+            // 优先从本地缓存上传
             if (localFile.exists() && localFile.length() > 0) {
                 val contentType = when (msg.type) {
                     com.cloudchat.model.MessageType.IMAGE -> "image/jpeg"
@@ -2151,16 +2153,20 @@ class ChatRepository(private val context: Context) {
                 }
                 uploaded = provider.uploadFileToPath(localFile.inputStream(), "$targetAssetsDir/$cleanName", contentType)
             }
+            // 本地缓存不存在：尝试 WebDAV 远程 COPY（服务器根目录 -> diary assets）
+            if (!uploaded && fileName.isNotBlank()) {
+                uploaded = provider.copyRemoteFile(fileName, "$targetAssetsDir/$cleanName")
+            }
             if (uploaded) {
                 mediaUrlMap[msg.id] = "assets/$cleanName"
             } else {
-                // 上传失败：尝试用原始 content 作为远程引用
+                // 都失败：尝试用原始 content 作为远程引用
                 mediaUrlMap[msg.id] = msg.remoteUrl ?: msg.content
             }
             processed++
             if (totalMedia > 0) {
                 val pct = 20 + (processed * 40 / totalMedia)
-                onProgress?.invoke(pct, "正在上传媒体资源 [ $processed / $totalMedia ]...")
+                onProgress?.invoke(pct, "正在准备媒体资源 [ $processed / $totalMedia ]...")
             }
         }
 
@@ -2173,34 +2179,67 @@ class ChatRepository(private val context: Context) {
                     !it.startsWith("data:") && !it.startsWith("file://") && !it.startsWith("content://") }
             .distinct()
         for (avatarName in distinctAvatars) {
-            // 头像文件在 WebDAV 根目录，下载到本地临时文件再上传到 assets
-            val tempAvatar = File(context.cacheDir, "avatar_tmp_${System.currentTimeMillis()}_$avatarName")
+            val ext = avatarName.substringAfterLast('.', "png")
+            val cleanAvatar = "avatar_${avatarName.hashCode().toUInt()}.$ext"
             var uploadedAvatar = false
-            try {
-                provider.downloadFile(avatarName, tempAvatar)
-                if (tempAvatar.exists() && tempAvatar.length() > 0) {
-                    val ext = avatarName.substringAfterLast('.', "png")
-                    val cleanAvatar = "avatar_${avatarName.hashCode().toUInt()}.$ext"
-                    val contentType = when (ext.lowercase()) {
-                        "jpg", "jpeg" -> "image/jpeg"
-                        "png" -> "image/png"
-                        "gif" -> "image/gif"
-                        "webp" -> "image/webp"
-                        else -> "image/jpeg"
+            // 优先 WebDAV 远程 COPY（头像在根目录，直接复制到 assets）
+            uploadedAvatar = provider.copyRemoteFile(avatarName, "$targetAssetsDir/$cleanAvatar")
+            // COPY 失败则回退：下载到本地再上传
+            if (!uploadedAvatar) {
+                val tempAvatar = File(context.cacheDir, "avatar_tmp_${System.currentTimeMillis()}_$avatarName")
+                try {
+                    provider.downloadFile(avatarName, tempAvatar)
+                    if (tempAvatar.exists() && tempAvatar.length() > 0) {
+                        val contentType = when (ext.lowercase()) {
+                            "jpg", "jpeg" -> "image/jpeg"
+                            "png" -> "image/png"
+                            "gif" -> "image/gif"
+                            "webp" -> "image/webp"
+                            else -> "image/jpeg"
+                        }
+                        uploadedAvatar = provider.uploadFileToPath(tempAvatar.inputStream(), "$targetAssetsDir/$cleanAvatar", contentType)
                     }
-                    uploadedAvatar = provider.uploadFileToPath(tempAvatar.inputStream(), "$targetAssetsDir/$cleanAvatar", contentType)
-                    if (uploadedAvatar) {
-                        avatarUrlMap[avatarName] = "assets/$cleanAvatar"
-                    }
+                } catch (e: Exception) {
+                    Log.w("ChatRepository", "Failed to upload avatar $avatarName", e)
+                } finally {
+                    tempAvatar.delete()
                 }
-            } catch (e: Exception) {
-                Log.w("ChatRepository", "Failed to upload avatar $avatarName", e)
-            } finally {
-                tempAvatar.delete()
+            }
+            if (uploadedAvatar) {
+                avatarUrlMap[avatarName] = "assets/$cleanAvatar"
             }
         }
 
-        onProgress?.invoke(75, "正在生成 HTML 页面...")
+        onProgress?.invoke(75, "正在上传背景图...")
+
+        // 上传背景图到 assets（如果有）
+        var coverUrl: String? = null
+        if (coverUri != null) {
+            try {
+                val ext = when {
+                    coverUri.lastPathSegment?.contains(".png") == true -> "png"
+                    coverUri.lastPathSegment?.contains(".jpg") == true -> "jpg"
+                    coverUri.lastPathSegment?.contains(".jpeg") == true -> "jpeg"
+                    coverUri.lastPathSegment?.contains(".webp") == true -> "webp"
+                    else -> "jpg"
+                }
+                val coverName = "cover.$ext"
+                val inputStream = context.contentResolver.openInputStream(coverUri)
+                if (inputStream != null) {
+                    val contentType = when (ext) {
+                        "png" -> "image/png"
+                        "webp" -> "image/webp"
+                        else -> "image/jpeg"
+                    }
+                    val ok = provider.uploadFileToPath(inputStream, "$targetAssetsDir/$coverName", contentType)
+                    if (ok) coverUrl = "assets/$coverName"
+                }
+            } catch (e: Exception) {
+                Log.w("ChatRepository", "Failed to upload cover image", e)
+            }
+        }
+
+        onProgress?.invoke(78, "正在生成 HTML 页面...")
 
         // 构造媒体解析器
         val resolver = object : DiaryGenerator.MediaUrlResolver {
@@ -2225,7 +2264,7 @@ class ChatRepository(private val context: Context) {
             }
         }
 
-        val html = DiaryGenerator.generateHtml(title, authorStr, templateId, password, effectiveMessages, resolver)
+        val html = DiaryGenerator.generateHtml(title, authorStr, templateId, password, effectiveMessages, resolver, coverUrl)
 
         onProgress?.invoke(85, "正在上传 index.html...")
         val htmlOk = provider.uploadFileToPath(html.byteInputStream(Charsets.UTF_8), "$targetDir/index.html", "text/html; charset=utf-8")

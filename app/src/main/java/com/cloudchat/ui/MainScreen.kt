@@ -811,7 +811,7 @@ fun MainScreen(
                         diaryGenerateTargetIds = null
                         showDiaryGenerateDialog = true
                     }) {
-                        Icon(Icons.Default.MenuBook, contentDescription = "生成日记", tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Default.MenuBook, contentDescription = "生成日记")
                     }
                 }
             }
@@ -1211,15 +1211,20 @@ fun MainScreen(
                         else -> messages
                     }.filter { !it.isDeleted && it.isHidden != true }
                 }
+                // 文件夹生成时，默认标题用文件夹名
+                val diaryDefaultTitle = diaryGenerateFolderId?.let { folderId ->
+                    messages.find { it.id == folderId }?.content ?: "我的日记"
+                } ?: "我的日记"
                 DiaryGenerateDialog(
                     messages = diaryTargetMessages,
+                    defaultTitle = diaryDefaultTitle,
                     onDismiss = {
                         showDiaryGenerateDialog = false
                         diaryGenerateTargetIds = null
                         diaryGenerateFolderId = null
                     },
-                    onGenerate = { title, author, templateId, password, onProgress ->
-                        chatRepository.generateDiary(title, author, templateId, password, diaryTargetMessages, onProgress)
+                    onGenerate = { title, author, templateId, password, coverUri, onProgress ->
+                        chatRepository.generateDiary(title, author, templateId, password, coverUri, diaryTargetMessages, onProgress)
                     },
                     onSuccess = {
                         showDiaryGenerateDialog = false
@@ -5175,13 +5180,14 @@ fun CalendarDialog(
 @Composable
 fun DiaryGenerateDialog(
     messages: List<ChatMessage>,
+    defaultTitle: String = "我的日记",
     onDismiss: () -> Unit,
-    onGenerate: suspend (title: String, author: String, templateId: String, password: String, onProgress: (Int, String) -> Unit) -> String?,
+    onGenerate: suspend (title: String, author: String, templateId: String, password: String, coverUri: Uri?, onProgress: (Int, String) -> Unit) -> String?,
     onSuccess: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    var title by remember { mutableStateOf("我的日记") }
+    var title by remember { mutableStateOf(defaultTitle) }
     var author by remember { mutableStateOf("") }
     var templateId by remember { mutableStateOf("wechat") }
     var enablePassword by remember { mutableStateOf(false) }
@@ -5191,6 +5197,18 @@ fun DiaryGenerateDialog(
     var statusText by remember { mutableStateOf("") }
     var resultUrl by remember { mutableStateOf<String?>(null) }
     var errorMsg by remember { mutableStateOf("") }
+    // 背景图：uri 形式，null 表示未设置
+    var coverUri by remember { mutableStateOf<Uri?>(null) }
+    var showCoverPicker by remember { mutableStateOf(false) }
+
+    // 从手机相册选择背景图
+    val coverPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            coverUri = uri
+        }
+    }
 
     AlertDialog(
         onDismissRequest = { if (!isGenerating) onDismiss() },
@@ -5278,6 +5296,34 @@ fun DiaryGenerateDialog(
                         )
                     }
 
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 背景图选择
+                    Text("顶部背景图", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        if (coverUri != null) {
+                            Box(modifier = Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFFF0F0F0))) {
+                                AsyncImage(model = coverUri, contentDescription = "背景图", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            }
+                        }
+                        // 从聊天条目选择背景图
+                        OutlinedButton(onClick = { showCoverPicker = true }) {
+                            Text("从聊天选择", style = MaterialTheme.typography.labelSmall)
+                        }
+                        OutlinedButton(onClick = {
+                            // 从手机相册选择
+                            coverPickerLauncher.launch("image/*")
+                        }) {
+                            Text("从相册选择", style = MaterialTheme.typography.labelSmall)
+                        }
+                        if (coverUri != null) {
+                            TextButton(onClick = { coverUri = null }) {
+                                Text("清除", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = "将归档 ${messages.size} 条消息（媒体文件会一并上传到 diary 目录）",
@@ -5314,7 +5360,7 @@ fun DiaryGenerateDialog(
                             isGenerating = true
                             errorMsg = ""
                             progress = 0
-                            val url = onGenerate(title, author, templateId, if (enablePassword) password else "", { p, t ->
+                            val url = onGenerate(title, author, templateId, if (enablePassword) password else "", coverUri, { p, t ->
                                 progress = p
                                 statusText = t
                             })
@@ -5344,5 +5390,46 @@ fun DiaryGenerateDialog(
             }
         }
     )
+
+    // 从聊天条目选择背景图
+    if (showCoverPicker) {
+        val chatImages = messages.filter { it.type == MessageType.IMAGE }
+        AlertDialog(
+            onDismissRequest = { showCoverPicker = false },
+            title = { Text("从聊天选择背景图") },
+            text = {
+                if (chatImages.isEmpty()) {
+                    Text("当前条目中没有图片消息", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        modifier = Modifier.heightIn(max = 400.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(chatImages) { img ->
+                            // 本地缓存文件路径：filesDir/media/{msg.id}_{fileName}
+                            val localFile = File(context.filesDir, "media/${img.id}_${img.content}")
+                            val displayUri = if (localFile.exists()) Uri.fromFile(localFile) else Uri.parse(img.remoteUrl ?: "")
+                            Box(
+                                modifier = Modifier
+                                    .aspectRatio(1f)
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable {
+                                        coverUri = displayUri
+                                        showCoverPicker = false
+                                    }
+                            ) {
+                                AsyncImage(model = displayUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showCoverPicker = false }) { Text("取消") }
+            }
+        )
+    }
 }
 

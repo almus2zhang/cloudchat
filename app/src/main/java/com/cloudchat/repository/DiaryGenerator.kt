@@ -113,7 +113,8 @@ object DiaryGenerator {
         templateId: String,
         password: String,
         messages: List<ChatMessage>,
-        resolver: MediaUrlResolver
+        resolver: MediaUrlResolver,
+        coverUrl: String? = null
     ): String {
         val isWeChat = templateId == "wechat"
         val sorted = messages.sortedWith(
@@ -227,13 +228,16 @@ object DiaryGenerator {
             }
         }
 
+        val coverStyle = if (coverUrl != null) {
+            " style=\"background-image: url('$coverUrl'); background-size: cover; background-position: center;\""
+        } else ""
         val body = if (isWeChat) {
-            "<div class=\"wechat-container\"><div class=\"wechat-header-cover\"><div class=\"cover-bg\"></div>" +
+            "<div class=\"wechat-container\"><div class=\"wechat-header-cover\"$coverStyle><div class=\"cover-bg\"></div>" +
                 "<div class=\"user-profile\"><span class=\"user-name\">${escapeHtml(authorStr)}</span></div></div>" +
                 "<div class=\"diary-title-banner\"><h2>📂 ${escapeHtml(titleStr)}</h2><p>共收录 ${sorted.size} 条记录 (${groupedCount} 组动态)</p></div>" +
                 "<div class=\"wechat-feed\">${renderWeChat()}</div></div>"
         } else {
-            "<div class=\"diary-container\"><header class=\"main-header\"><div class=\"header-inner\">" +
+            "<div class=\"diary-container\"><header class=\"main-header\"$coverStyle><div class=\"header-inner\">" +
                 "<h1>📖 ${escapeHtml(titleStr)}</h1>" +
                 "<p class=\"subtitle\">记录人：${escapeHtml(authorStr)} · 共 ${groupedCount} 条动态</p></div></header>" +
                 "<main class=\"timeline-container\">${renderJournal()}</main></div>"
