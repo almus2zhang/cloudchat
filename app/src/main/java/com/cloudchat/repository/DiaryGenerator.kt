@@ -174,8 +174,8 @@ object DiaryGenerator {
                     val subs = item.messages
                     val isAllMedia = subs.all { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
                     if (isAllMedia) {
-                        val count = subs.size
-                        val gridClass = "grid-count-${minOf(count, 9)}"
+                        // 固定 3 列网格，不限数量
+                        val gridClass = "grid-3col"
                         val imgs = subs.joinToString("") { s ->
                             val u = resolver.resolve(s)
                             if (s.type == MessageType.VIDEO) "<video src=\"$u\" controls preload=\"none\" class=\"wechat-grid-img\"></video>"
@@ -215,8 +215,7 @@ object DiaryGenerator {
                     // 宫格聚合：渲染所有图片/视频
                     val isAllMedia = item.messages.all { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
                     if (isAllMedia) {
-                        val count = item.messages.size
-                        val gridClass = "grid-count-${minOf(count, 9)}"
+                        val gridClass = "grid-3col"
                         val imgs = item.messages.joinToString("") { s ->
                             val u = resolver.resolve(s)
                             if (s.type == MessageType.VIDEO) "<video src=\"$u\" controls preload=\"none\" class=\"card-grid-img\"></video>"
@@ -404,11 +403,7 @@ object DiaryGenerator {
             .wechat-location-badge { display: inline-flex; align-items: center; gap: 4px; color: #576b95; font-size: 13px; background: #f3f4f7; padding: 4px 8px; border-radius: 4px; margin-bottom: 8px; }
             .wechat-location-badge .icon { width: 14px; height: 14px; }
             .wechat-grid-container { display: grid; gap: 4px; margin-bottom: 8px; }
-            .wechat-grid-container.grid-count-1 { grid-template-columns: 1fr; max-width: 220px; }
-            .wechat-grid-container.grid-count-2 { grid-template-columns: repeat(2, 1fr); width: 220px; }
-            .wechat-grid-container.grid-count-3 { grid-template-columns: repeat(3, 1fr); width: 290px; }
-            .wechat-grid-container.grid-count-4 { grid-template-columns: repeat(2, 1fr); width: 220px; }
-            .wechat-grid-container.grid-count-5, .wechat-grid-container.grid-count-6, .wechat-grid-container.grid-count-7, .wechat-grid-container.grid-count-8, .wechat-grid-container.grid-count-9 { grid-template-columns: repeat(3, 1fr); width: 290px; }
+            .wechat-grid-container.grid-3col { grid-template-columns: repeat(3, 1fr); width: 100%; max-width: 400px; }
             .wechat-grid-img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 4px; cursor: pointer; }
             .wechat-single-img { max-width: 220px; max-height: 280px; object-fit: cover; border-radius: 4px; cursor: pointer; }
             .wechat-caption-sub { font-size: 15px; color: #111; margin-top: 6px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
@@ -436,11 +431,7 @@ object DiaryGenerator {
             .theme-journal .card-header { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 13px; color: #64748b; }
             .theme-journal .card-img { max-height: 400px; width: 100%; object-fit: cover; border-radius: 8px; cursor: pointer; }
             .theme-journal .card-grid-container { display: grid; gap: 4px; margin-bottom: 8px; }
-            .theme-journal .card-grid-container.grid-count-1 { grid-template-columns: 1fr; }
-            .theme-journal .card-grid-container.grid-count-2 { grid-template-columns: repeat(2, 1fr); }
-            .theme-journal .card-grid-container.grid-count-3 { grid-template-columns: repeat(3, 1fr); }
-            .theme-journal .card-grid-container.grid-count-4 { grid-template-columns: repeat(2, 1fr); }
-            .theme-journal .card-grid-container.grid-count-5, .theme-journal .card-grid-container.grid-count-6, .theme-journal .card-grid-container.grid-count-7, .theme-journal .card-grid-container.grid-count-8, .theme-journal .card-grid-container.grid-count-9 { grid-template-columns: repeat(3, 1fr); }
+            .theme-journal .card-grid-container.grid-3col { grid-template-columns: repeat(3, 1fr); }
             .theme-journal .card-grid-img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 6px; cursor: pointer; }
             .theme-journal .card-caption { font-size: 14px; color: #334155; line-height: 1.6; margin-top: 6px; }
             .theme-journal .card-group { display: flex; flex-direction: column; gap: 8px; }
