@@ -70,6 +70,7 @@ import androidx.compose.ui.text.style.TextAlign
 import kotlinx.coroutines.TimeoutCancellationException
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -319,6 +320,7 @@ fun MainScreen(
     var activeCategory by remember { mutableStateOf("all") } // "all" or "diary"
     var diaryFiles by remember { mutableStateOf<List<com.cloudchat.repository.DiaryFileItem>>(emptyList()) }
     var isLoadingDiaryFiles by remember { mutableStateOf(false) }
+    var showDiaryGenerateDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(activeCategory) {
         if (activeCategory == "diary") {
@@ -1077,14 +1079,21 @@ fun MainScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                             }
-                            IconButton(onClick = {
-                                scope.launch {
-                                    isLoadingDiaryFiles = true
-                                    diaryFiles = chatRepository.listDiaryFiles()
-                                    isLoadingDiaryFiles = false
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = { showDiaryGenerateDialog = true }) {
+                                    Icon(Icons.Default.Add, contentDescription = "生成日记", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("生成日记", style = MaterialTheme.typography.labelMedium)
                                 }
-                            }) {
-                                Icon(Icons.Default.Refresh, contentDescription = "刷新", tint = MaterialTheme.colorScheme.primary)
+                                IconButton(onClick = {
+                                    scope.launch {
+                                        isLoadingDiaryFiles = true
+                                        diaryFiles = chatRepository.listDiaryFiles()
+                                        isLoadingDiaryFiles = false
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "刷新", tint = MaterialTheme.colorScheme.primary)
+                                }
                             }
                         }
 
@@ -1181,6 +1190,22 @@ fun MainScreen(
                         }
                     }
                 }
+            }
+
+            if (showDiaryGenerateDialog) {
+                DiaryGenerateDialog(
+                    messages = messages,
+                    onDismiss = { showDiaryGenerateDialog = false },
+                    onGenerate = { title, author, templateId, password, onProgress ->
+                        chatRepository.generateDiary(title, author, templateId, password, messages, onProgress)
+                    },
+                    onSuccess = {
+                        showDiaryGenerateDialog = false
+                        scope.launch {
+                            diaryFiles = chatRepository.listDiaryFiles()
+                        }
+                    }
+                )
             }
 
             val isDiaryTemplate = currentConfig?.messageTemplate == "diary"
@@ -5108,6 +5133,181 @@ fun CalendarDialog(
                         }
                     }
                 }
+            }
+        }
+    )
+}
+
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+fun DiaryGenerateDialog(
+    messages: List<ChatMessage>,
+    onDismiss: () -> Unit,
+    onGenerate: suspend (title: String, author: String, templateId: String, password: String, onProgress: (Int, String) -> Unit) -> String?,
+    onSuccess: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var title by remember { mutableStateOf("我的日记") }
+    var author by remember { mutableStateOf("") }
+    var templateId by remember { mutableStateOf("wechat") }
+    var enablePassword by remember { mutableStateOf(false) }
+    var password by remember { mutableStateOf("") }
+    var isGenerating by remember { mutableStateOf(false) }
+    var progress by remember { mutableStateOf(0) }
+    var statusText by remember { mutableStateOf("") }
+    var resultUrl by remember { mutableStateOf<String?>(null) }
+    var errorMsg by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = { if (!isGenerating) onDismiss() },
+        title = { Text("生成静态日记页面") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                if (resultUrl != null) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("✅ 日记网页已生成！", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = resultUrl!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
+                                try {
+                                    context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(resultUrl!!)))
+                                } catch (e: Exception) {
+                                    android.widget.Toast.makeText(context, "无法打开链接", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }) { Text("打开预览") }
+                            Button(onClick = { resultUrl = null; isGenerating = false; progress = 0 }) { Text("再次生成") }
+                        }
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = title,
+                        onValueChange = { title = it },
+                        label = { Text("日记标题") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = author,
+                        onValueChange = { author = it },
+                        label = { Text("作者署名") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 模板选择
+                    Text("选择模板", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = templateId == "wechat",
+                            onClick = { templateId = "wechat" },
+                            label = { Text("朋友圈九宫格") }
+                        )
+                        FilterChip(
+                            selected = templateId == "journal",
+                            onClick = { templateId = "journal" },
+                            label = { Text("简约现代") }
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 密码选项
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("启用访问密码", style = MaterialTheme.typography.bodyMedium)
+                        Spacer(modifier = Modifier.weight(1f))
+                        Switch(checked = enablePassword, onCheckedChange = { enablePassword = it })
+                    }
+                    if (enablePassword) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("访问密码") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation()
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "将归档 ${messages.size} 条消息（媒体文件会一并上传到 diary 目录）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (isGenerating) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        LinearProgressIndicator(
+                            progress = progress / 100f,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(statusText, style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    if (errorMsg.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(errorMsg, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (resultUrl != null) {
+                TextButton(onClick = {
+                    onSuccess()
+                }) { Text("完成") }
+            } else {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            isGenerating = true
+                            errorMsg = ""
+                            progress = 0
+                            val url = onGenerate(title, author, templateId, if (enablePassword) password else "", { p, t ->
+                                progress = p
+                                statusText = t
+                            })
+                            if (url != null) {
+                                resultUrl = url
+                            } else {
+                                errorMsg = "生成失败，请检查服务器配置和网络"
+                            }
+                            isGenerating = false
+                        }
+                    },
+                    enabled = !isGenerating
+                ) {
+                    if (isGenerating) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("生成中...")
+                    } else {
+                        Text("生成日记")
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            if (resultUrl == null) {
+                TextButton(onClick = onDismiss, enabled = !isGenerating) { Text("取消") }
             }
         }
     )

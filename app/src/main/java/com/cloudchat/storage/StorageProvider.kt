@@ -37,4 +37,12 @@ interface StorageProvider {
     suspend fun recycleFile(fileName: String) {
         deleteFile(fileName)
     }
+
+    // ---- 日记子目录操作（支持子路径，绕过 safeFileName 的单层限制） ----
+    /** 创建目录（含多级），返回是否成功 */
+    suspend fun mkdirRecursive(dirPath: String): Boolean = false
+    /** 上传文件到子路径（如 diary/name/assets/xxx.jpg） */
+    suspend fun uploadFileToPath(inputStream: InputStream, filePath: String, contentType: String): Boolean = false
+    /** 删除整个目录（含其中所有文件），返回是否成功 */
+    suspend fun deleteDirectory(dirPath: String): Boolean = false
 }

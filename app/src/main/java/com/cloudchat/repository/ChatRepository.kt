@@ -2078,14 +2078,116 @@ class ChatRepository(private val context: Context) {
 
     suspend fun deleteDiaryFile(fileName: String): Boolean = withContext(Dispatchers.IO) {
         val provider = storageProvider ?: return@withContext false
-        val cleanName = fileName.removeSuffix("/index.html")
-        val diaryPath = "diary/$cleanName"
+        val cleanName = fileName.removeSuffix("/index.html").trim('/')
+        val diaryDir = "diary/$cleanName"
         try {
-            provider.deleteFile(diaryPath)
+            // 删除整个日记目录（含 assets 等静态资源）
+            provider.deleteDirectory(diaryDir)
             true
         } catch (e: Exception) {
-            Log.e("ChatRepository", "Failed to delete diary file: $fileName", e)
+            Log.e("ChatRepository", "Failed to delete diary directory: $fileName", e)
             false
+        }
+    }
+
+    /**
+     * 生成静态日记网页并上传到 WebDAV。
+     * @param folderName 日记标题
+     * @param author 作者
+     * @param templateId "wechat" | "journal"
+     * @param password 访问密码（空则不加密）
+     * @param messages 要归档的消息列表
+     * @param onProgress 进度回调 (百分比, 文字)
+     * @return 生成后的公开访问 URL（成功）或 null
+     */
+    suspend fun generateDiary(
+        folderName: String,
+        author: String,
+        templateId: String,
+        password: String,
+        messages: List<ChatMessage>,
+        onProgress: ((Int, String) -> Unit)? = null
+    ): String? = withContext(Dispatchers.IO) {
+        val provider = storageProvider ?: return@withContext null
+        val config = currentConfig ?: SettingsRepository(context).currentConfig.firstOrNull() ?: return@withContext null
+        if (config.type != com.cloudchat.model.StorageType.WEBDAV || config.webDavUrl.isBlank()) {
+            return@withContext null
+        }
+
+        val title = folderName.ifBlank { "我的日记" }
+        val authorStr = author.ifBlank { "CloudChat User" }
+        val cleanDir = title.replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        val targetDir = "diary/$cleanDir"
+        val targetAssetsDir = "$targetDir/assets"
+
+        onProgress?.invoke(10, "正在创建服务器目录...")
+        provider.mkdirRecursive(targetAssetsDir)
+
+        onProgress?.invoke(20, "正在准备媒体资源...")
+
+        // 过滤出媒体消息，上传资源到 assets
+        val mediaMsgs = messages.filter {
+            it.type == com.cloudchat.model.MessageType.IMAGE ||
+            it.type == com.cloudchat.model.MessageType.VIDEO ||
+            it.type == com.cloudchat.model.MessageType.AUDIO
+        }
+        val totalMedia = mediaMsgs.size
+        val mediaUrlMap = mutableMapOf<String, String>()
+        var processed = 0
+
+        for (msg in mediaMsgs) {
+            val fileName = msg.content.ifBlank { "${msg.id}.jpg" }
+            val cleanName = DiaryGenerator.cleanFileName(fileName)
+            val localFile = getLocalFile(msg.id, fileName)
+            var uploaded = false
+            if (localFile.exists() && localFile.length() > 0) {
+                val contentType = when (msg.type) {
+                    com.cloudchat.model.MessageType.IMAGE -> "image/jpeg"
+                    com.cloudchat.model.MessageType.VIDEO -> "video/mp4"
+                    else -> "application/octet-stream"
+                }
+                uploaded = provider.uploadFileToPath(localFile.inputStream(), "$targetAssetsDir/$cleanName", contentType)
+            }
+            if (uploaded) {
+                mediaUrlMap[msg.id] = "assets/$cleanName"
+            } else {
+                // 上传失败：尝试用原始 content 作为远程引用
+                mediaUrlMap[msg.id] = msg.remoteUrl ?: msg.content
+            }
+            processed++
+            if (totalMedia > 0) {
+                val pct = 20 + (processed * 40 / totalMedia)
+                onProgress?.invoke(pct, "正在上传媒体资源 [ $processed / $totalMedia ]...")
+            }
+        }
+
+        onProgress?.invoke(70, "正在生成 HTML 页面...")
+
+        // 构造媒体解析器
+        val resolver = object : DiaryGenerator.MediaUrlResolver {
+            override fun resolve(msg: ChatMessage): String {
+                mediaUrlMap[msg.id]?.let { return it }
+                return msg.remoteUrl ?: msg.content
+            }
+            override fun resolveAvatar(msg: ChatMessage, default: String): String {
+                return msg.senderAvatar ?: default
+            }
+        }
+
+        val html = DiaryGenerator.generateHtml(title, authorStr, templateId, password, messages, resolver)
+
+        onProgress?.invoke(85, "正在上传 index.html...")
+        val htmlOk = provider.uploadFileToPath(html.byteInputStream(Charsets.UTF_8), "$targetDir/index.html", "text/html; charset=utf-8")
+        if (!htmlOk) return@withContext null
+
+        onProgress?.invoke(100, "日记生成完成！")
+
+        // 计算公开访问 URL
+        val cleanBaseUrl = config.diaryBaseUrl.trim().trimEnd('/')
+        return@withContext if (cleanBaseUrl.isNotEmpty()) {
+            "$cleanBaseUrl/${java.net.URLEncoder.encode(cleanDir, "UTF-8").replace("+", "%20")}/index.html"
+        } else {
+            provider.getFullUrl("diary/$cleanDir/index.html")
         }
     }
 }

@@ -504,6 +504,207 @@ class WebDavStorageProvider(
         }
     }
 
+    // 编码子路径：逐段 URL 编码，保留 / 分隔符。用于 diary/<name>/assets/x.jpg 这类路径。
+    private fun encodePath(path: String): String {
+        return path.trim('/').split('/').joinToString("/") { seg ->
+            java.net.URLEncoder.encode(seg, "UTF-8").replace("+", "%20")
+        }
+    }
+
+    // 列出目录下所有直接子项（PROPFIND Depth 1），返回 href 相对路径列表
+    private suspend fun listDirChildren(dirPath: String): List<String> {
+        return runWithRetry { currentBaseUrl ->
+            val encoded = encodePath(dirPath)
+            val url = "$currentBaseUrl$encoded/"
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", auth)
+                .method("PROPFIND", null)
+                .header("Depth", "1")
+                .build()
+            val result = mutableListOf<String>()
+            try {
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val xml = response.body?.string() ?: ""
+                        // 简单解析 href，跳过目录本身
+                        val regex = Regex("<[^>]*href[^>]*>([^<]+)</[^>]*href[^>]*>", RegexOption.IGNORE_CASE)
+                        regex.findAll(xml).forEach { m ->
+                            val href = m.groupValues[1].trim()
+                            val decoded = try { java.net.URLDecoder.decode(href, "UTF-8") } catch (e: Exception) { href }
+                            val clean = decoded.trimEnd('/')
+                            val dirClean = dirPath.trimEnd('/')
+                            if (clean != dirClean && clean.endsWith(dirClean) == false && clean.isNotEmpty()) {
+                                // 只取直接子项
+                                val rel = clean.substringAfter("$dirClean/")
+                                if (rel.isNotEmpty() && !rel.contains('/')) {
+                                    result.add(rel)
+                                } else if (rel.isEmpty() && clean != dirClean) {
+                                    // 直接子项
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("WebDavStorage", "listDirChildren failed for $dirPath", e)
+            }
+            result
+        }
+    }
+
+    override suspend fun mkdirRecursive(dirPath: String): Boolean = withContext(Dispatchers.IO) {
+        val segments = dirPath.trim('/').split('/').filter { it.isNotEmpty() }
+        var current = ""
+        runWithRetry { currentBaseUrl ->
+            for (seg in segments) {
+                current = if (current.isEmpty()) seg else "$current/$seg"
+                val url = "$currentBaseUrl${encodePath(current)}/"
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", auth)
+                    .method("MKCOL", null)
+                    .build()
+                try {
+                    client.newCall(request).execute().use { response ->
+                        // 405 (已存在) 或 2xx 都视为成功
+                        if (!response.isSuccessful && response.code != 405 && response.code != 301 && response.code != 409) {
+                            Log.w("WebDavStorage", "MKCOL failed for $current: ${response.code}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("WebDavStorage", "MKCOL exception for $current", e)
+                }
+            }
+            true
+        }
+    }
+
+    override suspend fun uploadFileToPath(inputStream: InputStream, filePath: String, contentType: String): Boolean = withContext(Dispatchers.IO) {
+        // 复制到临时文件以便重试
+        val tempFile = File.createTempFile("webdav_diary", ".tmp")
+        try {
+            tempFile.outputStream().use { out -> inputStream.copyTo(out) }
+            runWithRetry { currentBaseUrl ->
+                val url = "$currentBaseUrl${encodePath(filePath)}"
+                tempFile.inputStream().use { stream ->
+                    val request = Request.Builder()
+                        .url(url)
+                        .addHeader("Authorization", auth)
+                        .put(stream.readBytes().toRequestBody(contentType.toMediaType()))
+                        .build()
+                    client.newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) throw Exception("Diary upload failed: ${response.code}")
+                    }
+                }
+                true
+            }
+        } catch (e: Exception) {
+            Log.e("WebDavStorage", "uploadFileToPath failed for $filePath", e)
+            false
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    override suspend fun deleteDirectory(dirPath: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            runWithRetry { currentBaseUrl ->
+                val encoded = encodePath(dirPath)
+                val url = "$currentBaseUrl$encoded/"
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", auth)
+                    .delete()
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful || response.code == 404) {
+                        // 成功（一些服务器支持递归删除集合）
+                        return@runWithRetry true
+                    }
+                    Log.w("WebDavStorage", "DELETE directory ${response.code}, trying recursive delete")
+                }
+                // 递归删除：列出子项逐个删除
+                recursiveDelete(currentBaseUrl, dirPath)
+                true
+            }
+        } catch (e: Exception) {
+            Log.e("WebDavStorage", "deleteDirectory failed for $dirPath", e)
+            false
+        }
+    }
+
+    // 递归删除目录内容（先删子项，再删目录）
+    private suspend fun recursiveDelete(currentBaseUrl: String, dirPath: String) {
+        val encoded = encodePath(dirPath)
+        val url = "$currentBaseUrl$encoded/"
+        val children = mutableListOf<String>()
+        try {
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("Authorization", auth)
+                .method("PROPFIND", null)
+                .header("Depth", "1")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val xml = response.body?.string() ?: ""
+                    val regex = Regex("<[^>]*href[^>]*>([^<]+)</[^>]*href[^>]*>", RegexOption.IGNORE_CASE)
+                    regex.findAll(xml).forEach { m ->
+                        val href = m.groupValues[1].trim()
+                        val decoded = try { java.net.URLDecoder.decode(href, "UTF-8") } catch (e: Exception) { href }
+                        val clean = decoded.trimEnd('/')
+                        val dirClean = dirPath.trimEnd('/')
+                        if (clean != dirClean && clean.startsWith(dirClean)) {
+                            children.add(clean)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("WebDavStorage", "recursiveDelete PROPFIND failed", e)
+        }
+
+        // 先删除文件（非集合），再删目录
+        val dirs = mutableListOf<String>()
+        for (child in children) {
+            val isDir = child.endsWith("/")
+            val cleanChild = child.trimEnd('/')
+            if (isDir) {
+                dirs.add(cleanChild)
+            } else {
+                deleteSingle(currentBaseUrl, cleanChild)
+            }
+        }
+        for (d in dirs) {
+            recursiveDelete(currentBaseUrl, d)
+        }
+        // 最后删除目录本身
+        try {
+            val delReq = Request.Builder()
+                .url("$currentBaseUrl${encodePath(dirPath)}/")
+                .addHeader("Authorization", auth)
+                .delete()
+                .build()
+            client.newCall(delReq).execute().use { }
+        } catch (e: Exception) {
+            Log.w("WebDavStorage", "recursiveDelete final DELETE failed", e)
+        }
+    }
+
+    private fun deleteSingle(currentBaseUrl: String, filePath: String) {
+        try {
+            val request = Request.Builder()
+                .url("$currentBaseUrl${encodePath(filePath)}")
+                .addHeader("Authorization", auth)
+                .delete()
+                .build()
+            client.newCall(request).execute().use { }
+        } catch (e: Exception) {
+            Log.w("WebDavStorage", "deleteSingle failed for $filePath", e)
+        }
+    }
+
     override suspend fun uploadText(text: String, fileName: String): String = withContext(Dispatchers.IO) {
         val safe = safeFileName(fileName) ?: throw IllegalArgumentException("Unsafe fileName: '$fileName'")
         runWithRetry { currentBaseUrl ->
