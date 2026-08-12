@@ -289,6 +289,32 @@ fun MainScreen(
             }
         )
     }
+    
+    // 上传进度弹窗
+    val uploadSyncProgress by chatRepository.uploadProgressPercent.collectAsState()
+    val uploadSyncText by chatRepository.uploadProgressText.collectAsState()
+    if (uploadSyncProgress >= 0) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("同步记录") },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (uploadSyncProgress in 1..99) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+                    Text(uploadSyncText)
+                }
+            },
+            confirmButton = {
+                if (uploadSyncProgress == 100 || uploadSyncProgress == -1) {
+                    TextButton(onClick = {
+                        chatRepository.resetUploadProgress()
+                    }) { Text("确定") }
+                }
+            }
+        )
+    }
 
     var activeCategory by remember { mutableStateOf("all") } // "all" or "diary"
     var diaryFiles by remember { mutableStateOf<List<com.cloudchat.repository.DiaryFileItem>>(emptyList()) }

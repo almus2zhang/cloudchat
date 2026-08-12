@@ -114,6 +114,12 @@ class ChatRepository(private val context: Context) {
         val message: String   // 用户可见的提示信息
     )
     val historyConflict = MutableSharedFlow<HistoryConflictEvent>(extraBufferCapacity = 4)
+    
+    // 本地覆盖上传的进度：-1=未开始, 0=完成, 1-100=百分比
+    private val _uploadProgressPercent = MutableStateFlow(-1)
+    val uploadProgressPercent: StateFlow<Int> = _uploadProgressPercent.asStateFlow()
+    private val _uploadProgressText = MutableStateFlow("")
+    val uploadProgressText: StateFlow<String> = _uploadProgressText.asStateFlow()
 
     private val deviceId: String by lazy {
         android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "unknown_device"
@@ -1524,25 +1530,50 @@ class ChatRepository(private val context: Context) {
         }
     }
 
-    // 用户选择「用本地覆盖服务器」：将当前 _messages 全部上传到服务器
+    // 用户选择「用本地覆盖服务器」：逐条上传到服务器，保留原始时间戳，显示进度
     suspend fun forceUploadLocalHistory() = withContext(Dispatchers.IO) {
         val provider = storageProvider ?: return@withContext
         val config = currentConfig ?: return@withContext
+        _uploadProgressPercent.value = 0
+        _uploadProgressText.value = "准备上传..."
         try {
             val messages = _messages.value
+            if (messages.isEmpty()) {
+                _uploadProgressPercent.value = -1
+                return@withContext
+            }
+            val total = messages.size
+            
+            // 先删除服务器旧文件
+            try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
+            
+            // 按 shard 分批上传（每批 100 条），保留原始时间戳
             val shards = messages.chunked(100)
             val shardNames = shards.mapIndexed { i, _ -> "chat_shard_${i}.json" }
+            var uploaded = 0
             shards.forEachIndexed { i, chunk ->
                 provider.uploadText(gson.toJson(chunk), shardNames[i])
+                uploaded += chunk.size
+                val pct = (uploaded * 100 / total).coerceAtMost(100)
+                _uploadProgressPercent.value = pct
+                _uploadProgressText.value = "正在上传 ${uploaded}/${total} 条记录..."
             }
             provider.uploadText(gson.toJson(shardNames), "chat_index.json")
-            try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
-            Log.i("ChatRepository", "forceUploadLocalHistory: uploaded ${messages.size} messages in ${shards.size} shards")
+            _uploadProgressPercent.value = 100
+            _uploadProgressText.value = "上传完成，共 ${total} 条记录"
+            Log.i("ChatRepository", "forceUploadLocalHistory: uploaded $total messages in ${shards.size} shards")
         } catch (e: Exception) {
             Log.e("ChatRepository", "forceUploadLocalHistory failed", e)
+            _uploadProgressPercent.value = -1
+            _uploadProgressText.value = "上传失败：${e.message}"
         }
     }
     
+    fun resetUploadProgress() {
+        _uploadProgressPercent.value = -1
+        _uploadProgressText.value = ""
+    }
+
     // 用户选择「清空本地记录」：清除 _messages 和本地缓存
     suspend fun clearLocalHistory() {
         val config = currentConfig ?: return
