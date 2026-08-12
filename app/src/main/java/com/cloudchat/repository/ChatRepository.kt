@@ -2185,17 +2185,35 @@ class ChatRepository(private val context: Context) {
             var uploadedName: String? = null
 
             if (msg.type == com.cloudchat.model.MessageType.IMAGE) {
-                // 图片：优先本地压缩为 WebP 上传（减小体积，加快页面加载）
-                if (localFile.exists() && localFile.length() > 0) {
+                // 图片：统一压缩为 WebP 上传（减小体积，加快页面加载）
+                var srcFile: File? = localFile
+                var needCleanup = false
+                // 本地不存在：从远程下载到本地临时文件
+                if (!localFile.exists() || localFile.length() <= 0) {
+                    if (fileName.isNotBlank()) {
+                        val tempFile = File(context.cacheDir, "diary_src_${System.currentTimeMillis()}_$fileName")
+                        try {
+                            provider.downloadFile(fileName, tempFile)
+                            if (tempFile.exists() && tempFile.length() > 0) {
+                                srcFile = tempFile
+                                needCleanup = true
+                            }
+                        } catch (e: Exception) {
+                            Log.w("ChatRepository", "Failed to download image for compress: $fileName", e)
+                        }
+                    }
+                }
+                if (srcFile != null && srcFile.exists() && srcFile.length() > 0) {
                     val webpName = "$baseName.webp"
-                    val webpFile = compressImageToWebp(localFile)
+                    val webpFile = compressImageToWebp(srcFile)
+                    if (needCleanup) srcFile.delete()
                     if (webpFile != null && webpFile.length() > 0) {
                         uploaded = provider.uploadFileToPath(webpFile.inputStream(), "$targetAssetsDir/$webpName", "image/webp")
                         webpFile.delete()
                         if (uploaded) uploadedName = webpName
                     }
                 }
-                // 本地压缩失败或本地不存在：远程 COPY 原图
+                // 压缩仍失败：远程 COPY 原图兜底
                 if (!uploaded && fileName.isNotBlank()) {
                     uploaded = provider.copyRemoteFile(fileName, "$targetAssetsDir/${DiaryGenerator.cleanFileName(fileName)}")
                     if (uploaded) uploadedName = DiaryGenerator.cleanFileName(fileName)
