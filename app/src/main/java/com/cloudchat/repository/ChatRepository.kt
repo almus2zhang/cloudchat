@@ -2144,18 +2144,18 @@ class ChatRepository(private val context: Context) {
             val cleanName = DiaryGenerator.cleanFileName(fileName)
             val localFile = getLocalFile(msg.id, fileName)
             var uploaded = false
-            // 优先从本地缓存上传
-            if (localFile.exists() && localFile.length() > 0) {
+            // 优先 WebDAV 远程 COPY（文件本就在服务器根目录，省流量且更快）
+            if (fileName.isNotBlank()) {
+                uploaded = provider.copyRemoteFile(fileName, "$targetAssetsDir/$cleanName")
+            }
+            // 远程 COPY 失败：回退到本地缓存上传
+            if (!uploaded && localFile.exists() && localFile.length() > 0) {
                 val contentType = when (msg.type) {
                     com.cloudchat.model.MessageType.IMAGE -> "image/jpeg"
                     com.cloudchat.model.MessageType.VIDEO -> "video/mp4"
                     else -> "application/octet-stream"
                 }
                 uploaded = provider.uploadFileToPath(localFile.inputStream(), "$targetAssetsDir/$cleanName", contentType)
-            }
-            // 本地缓存不存在：尝试 WebDAV 远程 COPY（服务器根目录 -> diary assets）
-            if (!uploaded && fileName.isNotBlank()) {
-                uploaded = provider.copyRemoteFile(fileName, "$targetAssetsDir/$cleanName")
             }
             if (uploaded) {
                 mediaUrlMap[msg.id] = "assets/$cleanName"
