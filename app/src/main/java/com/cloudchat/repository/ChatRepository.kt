@@ -1548,10 +1548,45 @@ class ChatRepository(private val context: Context) {
             try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
             
             // 按 shard 分批上传（每批 100 条），保留原始时间戳
+            // 先上传附件文件，再上传 JSON
             val shards = messages.chunked(100)
             val shardNames = shards.mapIndexed { i, _ -> "chat_shard_${i}.json" }
             var uploaded = 0
             shards.forEachIndexed { i, chunk ->
+                // 先上传每条消息的附件文件
+                chunk.forEach { msg ->
+                    val fileName = msg.content
+                    if (msg.type in listOf(com.cloudchat.model.MessageType.IMAGE,
+                            com.cloudchat.model.MessageType.VIDEO,
+                            com.cloudchat.model.MessageType.AUDIO) && fileName.isNotBlank()) {
+                        val localFile = getLocalFile(msg.id, fileName)
+                        if (localFile.exists() && localFile.length() > 0) {
+                            val contentType = when (msg.type) {
+                                com.cloudchat.model.MessageType.IMAGE -> "image/jpeg"
+                                com.cloudchat.model.MessageType.VIDEO -> "video/mp4"
+                                else -> "application/octet-stream"
+                            }
+                            try {
+                                provider.uploadFile(localFile.inputStream(), fileName, contentType, localFile.length()) { _ -> }
+                            } catch (e: Exception) {
+                                Log.w("ChatRepository", "Failed to upload file $fileName for msg ${msg.id}", e)
+                            }
+                        }
+                        // 上传缩略图
+                        val thumbName = msg.thumbnailUrl
+                        if (!thumbName.isNullOrBlank()) {
+                            val thumbFile = File(localFile.parentFile, thumbName)
+                            if (thumbFile.exists() && thumbFile.length() > 0) {
+                                try {
+                                    provider.uploadFile(thumbFile.inputStream(), thumbName, "image/jpeg", thumbFile.length()) { _ -> }
+                                } catch (e: Exception) {
+                                    Log.w("ChatRepository", "Failed to upload thumbnail $thumbName", e)
+                                }
+                            }
+                        }
+                    }
+                }
+                // 上传 JSON shard
                 provider.uploadText(gson.toJson(chunk), shardNames[i])
                 uploaded += chunk.size
                 val pct = (uploaded * 100 / total).coerceAtMost(100)
