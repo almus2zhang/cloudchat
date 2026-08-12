@@ -1120,6 +1120,44 @@ class ChatRepository(private val context: Context) {
         }
     }
 
+    /** 压缩图片为 WebP（最长边 1280px，质量 80），用于日记静态页面减小体积 */
+    private fun compressImageToWebp(srcFile: File): File? {
+        return try {
+            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(srcFile.absolutePath, opts)
+            val origW = opts.outWidth
+            val origH = opts.outHeight
+            if (origW <= 0 || origH <= 0) return null
+
+            val maxDim = 1280
+            var sample = 1
+            while (origW / sample > maxDim * 2 || origH / sample > maxDim * 2) {
+                sample *= 2
+            }
+            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
+            val bitmap = BitmapFactory.decodeFile(srcFile.absolutePath, decodeOpts) ?: return null
+
+            // 若仍超过 1280，再等比缩放
+            var result = bitmap
+            val scale = maxDim.toFloat() / Math.max(result.width, result.height).coerceAtLeast(1)
+            if (scale < 1f) {
+                val matrix = Matrix().apply { postScale(scale, scale) }
+                result = Bitmap.createBitmap(result, 0, 0, result.width, result.height, matrix, true)
+                if (result != bitmap) bitmap.recycle()
+            }
+
+            val outFile = File(context.cacheDir, "diary_img_${System.currentTimeMillis()}.webp")
+            outFile.outputStream().use { out ->
+                result.compress(Bitmap.CompressFormat.WEBP, 80, out)
+            }
+            if (result != bitmap) result.recycle()
+            outFile
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "compressImageToWebp failed", e)
+            null
+        }
+    }
+
     private fun generateThumbnail(uri: Uri, type: com.cloudchat.model.MessageType): File? {
         val thumbFile = File(context.cacheDir, "thumb_${System.currentTimeMillis()}.jpg")
         return try {
@@ -2141,24 +2179,45 @@ class ChatRepository(private val context: Context) {
 
         for (msg in mediaMsgs) {
             val fileName = msg.content.ifBlank { "${msg.id}.jpg" }
-            val cleanName = DiaryGenerator.cleanFileName(fileName)
+            val baseName = DiaryGenerator.cleanFileName(fileName).substringBeforeLast('.', DiaryGenerator.cleanFileName(fileName))
             val localFile = getLocalFile(msg.id, fileName)
             var uploaded = false
-            // 优先 WebDAV 远程 COPY（文件本就在服务器根目录，省流量且更快）
-            if (fileName.isNotBlank()) {
-                uploaded = provider.copyRemoteFile(fileName, "$targetAssetsDir/$cleanName")
-            }
-            // 远程 COPY 失败：回退到本地缓存上传
-            if (!uploaded && localFile.exists() && localFile.length() > 0) {
-                val contentType = when (msg.type) {
-                    com.cloudchat.model.MessageType.IMAGE -> "image/jpeg"
-                    com.cloudchat.model.MessageType.VIDEO -> "video/mp4"
-                    else -> "application/octet-stream"
+            var uploadedName: String? = null
+
+            if (msg.type == com.cloudchat.model.MessageType.IMAGE) {
+                // 图片：优先本地压缩为 WebP 上传（减小体积，加快页面加载）
+                if (localFile.exists() && localFile.length() > 0) {
+                    val webpName = "$baseName.webp"
+                    val webpFile = compressImageToWebp(localFile)
+                    if (webpFile != null && webpFile.length() > 0) {
+                        uploaded = provider.uploadFileToPath(webpFile.inputStream(), "$targetAssetsDir/$webpName", "image/webp")
+                        webpFile.delete()
+                        if (uploaded) uploadedName = webpName
+                    }
                 }
-                uploaded = provider.uploadFileToPath(localFile.inputStream(), "$targetAssetsDir/$cleanName", contentType)
+                // 本地压缩失败或本地不存在：远程 COPY 原图
+                if (!uploaded && fileName.isNotBlank()) {
+                    uploaded = provider.copyRemoteFile(fileName, "$targetAssetsDir/${DiaryGenerator.cleanFileName(fileName)}")
+                    if (uploaded) uploadedName = DiaryGenerator.cleanFileName(fileName)
+                }
+            } else {
+                // 视频/音频：优先远程 COPY，失败回退本地
+                val cleanName = DiaryGenerator.cleanFileName(fileName)
+                if (fileName.isNotBlank()) {
+                    uploaded = provider.copyRemoteFile(fileName, "$targetAssetsDir/$cleanName")
+                }
+                if (!uploaded && localFile.exists() && localFile.length() > 0) {
+                    val contentType = when (msg.type) {
+                        com.cloudchat.model.MessageType.VIDEO -> "video/mp4"
+                        else -> "application/octet-stream"
+                    }
+                    uploaded = provider.uploadFileToPath(localFile.inputStream(), "$targetAssetsDir/$cleanName", contentType)
+                }
+                if (uploaded) uploadedName = cleanName
             }
-            if (uploaded) {
-                mediaUrlMap[msg.id] = "assets/$cleanName"
+
+            if (uploaded && uploadedName != null) {
+                mediaUrlMap[msg.id] = "assets/$uploadedName"
             } else {
                 // 都失败：尝试用原始 content 作为远程引用
                 mediaUrlMap[msg.id] = msg.remoteUrl ?: msg.content

@@ -147,12 +147,12 @@ object DiaryGenerator {
                 }
                 sub.type == MessageType.VIDEO -> {
                     "<div class=\"wechat-media-box\" style=\"margin: 4px 0;\">" +
-                        "<video src=\"$mediaUrl\" controls class=\"wechat-video-player\"></video>" +
+                        "<video src=\"$mediaUrl\" controls preload=\"none\" class=\"wechat-video-player\"></video>" +
                         (if (!sub.caption.isNullOrBlank()) "<div class=\"wechat-caption-sub\"><div class=\"caption-item\">${escapeHtml(sub.caption)}</div></div>" else "") +
                         "</div>"
                 }
                 sub.type == MessageType.AUDIO -> {
-                    "<div class=\"wechat-audio-box\" style=\"margin: 4px 0;\"><audio src=\"$mediaUrl\" controls class=\"wechat-audio-player\"></audio></div>"
+                    "<div class=\"wechat-audio-box\" style=\"margin: 4px 0;\"><audio src=\"$mediaUrl\" controls preload=\"none\" class=\"wechat-audio-player\"></audio></div>"
                 }
                 sub.type == MessageType.FILE -> {
                     "<div class=\"wechat-file-box\" style=\"margin: 4px 0;\">" +
@@ -178,7 +178,7 @@ object DiaryGenerator {
                         val gridClass = "grid-count-${minOf(count, 9)}"
                         val imgs = subs.joinToString("") { s ->
                             val u = resolver.resolve(s)
-                            if (s.type == MessageType.VIDEO) "<video src=\"$u\" controls class=\"wechat-grid-img\"></video>"
+                            if (s.type == MessageType.VIDEO) "<video src=\"$u\" controls preload=\"none\" class=\"wechat-grid-img\"></video>"
                             else "<img src=\"$u\" class=\"wechat-grid-img\" loading=\"lazy\" onclick=\"openLightbox(this.src)\"/>"
                         }
                         val captions = subs.mapNotNull { it.caption ?: it.locationAddress }.filter { it.isNotBlank() }
@@ -212,8 +212,8 @@ object DiaryGenerator {
                 var cardMedia = ""
                 when (msg.type) {
                     MessageType.IMAGE -> cardMedia = "<div class=\"card-image-wrap\"><img src=\"$mediaUrl\" class=\"card-img\" loading=\"lazy\" onclick=\"openLightbox(this.src)\"/></div>"
-                    MessageType.VIDEO -> cardMedia = "<div class=\"card-video-wrap\"><video src=\"$mediaUrl\" controls class=\"card-video\"></video></div>"
-                    MessageType.AUDIO -> cardMedia = "<div class=\"card-audio-wrap\"><audio src=\"$mediaUrl\" controls></audio></div>"
+                    MessageType.VIDEO -> cardMedia = "<div class=\"card-video-wrap\"><video src=\"$mediaUrl\" controls preload=\"none\" class=\"card-video\"></video></div>"
+                    MessageType.AUDIO -> cardMedia = "<div class=\"card-audio-wrap\"><audio src=\"$mediaUrl\" controls preload=\"none\"></audio></div>"
                     else -> {}
                 }
                 val isLocation = msg.content.startsWith("[位置]")
