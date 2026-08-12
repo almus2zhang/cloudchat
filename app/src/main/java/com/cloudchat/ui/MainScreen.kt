@@ -540,6 +540,69 @@ fun MainScreen(
         }
     }
 
+    fun doSendLocation(location: android.location.Location) {
+        scope.launch(Dispatchers.IO) {
+            val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+            var addressText = "纬度: ${location.latitude}, 经度: ${location.longitude}"
+            try {
+                val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
+                if (!addresses.isNullOrEmpty()) {
+                    val address = addresses[0]
+                    val sb = StringBuilder()
+                    address.adminArea?.let { sb.append(it) }
+                    val locality = address.locality
+                    if (locality != null && !sb.contains(locality)) sb.append(locality)
+                    address.subLocality?.let { sb.append(it) }
+                    address.thoroughfare?.let { sb.append(it) }
+                    address.subThoroughfare?.let { sb.append(it) }
+                    addressText = if (sb.isNotEmpty()) sb.toString() else (address.getAddressLine(0) ?: addressText)
+                }
+            } catch (e: Exception) {
+                Log.e("MainScreen", "Geocoder failed", e)
+            }
+            chatRepository.sendMessage(
+                content = "[位置] $addressText",
+                type = MessageType.TEXT,
+                folderId = currentFolderId
+            )
+        }
+    }
+
+    fun sendLocation() {
+        val locationManager = context.getSystemService(android.content.Context.LOCATION_SERVICE) as android.location.LocationManager
+        val isGpsEnabled = locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)
+        val isNetworkEnabled = locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+
+        val provider = when {
+            isNetworkEnabled -> android.location.LocationManager.NETWORK_PROVIDER
+            isGpsEnabled -> android.location.LocationManager.GPS_PROVIDER
+            else -> null
+        }
+
+        if (provider == null) {
+            android.widget.Toast.makeText(context, "无法获取位置：GPS或网络定位未开启", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        try {
+            val lastLoc = locationManager.getLastKnownLocation(provider)
+            if (lastLoc != null) {
+                doSendLocation(lastLoc)
+            } else {
+                locationManager.requestSingleUpdate(provider, object : android.location.LocationListener {
+                    override fun onLocationChanged(loc: android.location.Location) {
+                        doSendLocation(loc)
+                    }
+                    override fun onStatusChanged(p0: String?, p1: Int, p2: android.os.Bundle?) {}
+                    override fun onProviderEnabled(p0: String) {}
+                    override fun onProviderDisabled(p0: String) {}
+                }, null)
+            }
+        } catch (e: SecurityException) {
+            android.widget.Toast.makeText(context, "定位失败：无权限", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun cancelVoiceRecording() {
         val recorder = mediaRecorder ?: return
         mediaRecorder = null
@@ -815,10 +878,17 @@ fun MainScreen(
                 showQuickTextDialog = true
                 onQuickActionHandled()
             }
+            "send_location" -> {
+                sendLocation()
+                onQuickActionHandled()
+            }
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().pointerInput(isPrivacyMode) {
+    val isQuickDialogShowing = showQuickTextDialog || showQuickVoiceDialog
+    Box(modifier = Modifier.fillMaxSize()
+        .graphicsLayer { alpha = if (isQuickDialogShowing) 0f else 1f }
+        .pointerInput(isPrivacyMode) {
         if (isPrivacyMode) {
             awaitPointerEventScope {
                 while (true) {
@@ -1894,6 +1964,7 @@ fun MainScreen(
             onQuickTextDismiss = { showQuickTextDialog = false },
             showQuickVoiceDialog = showQuickVoiceDialog,
             isRecordingVoiceState = isRecordingVoiceState,
+            voiceAmplitude = currentAmplitude,
             onStopAndSendVoice = {
                 if (isRecordingVoiceState) {
                     stopAndSendVoice()
@@ -1919,6 +1990,7 @@ fun QuickActionDialogs(
     onQuickTextDismiss: () -> Unit,
     showQuickVoiceDialog: Boolean,
     isRecordingVoiceState: Boolean,
+    voiceAmplitude: Float = 0f,
     onStopAndSendVoice: () -> Unit,
     onCancelVoice: () -> Unit
 ) {
@@ -1927,11 +1999,13 @@ fun QuickActionDialogs(
             onDismissRequest = onQuickTextDismiss,
             title = { Text("发送文本", fontWeight = FontWeight.Bold) },
             text = {
+                val focusRequester = remember { FocusRequester() }
+                LaunchedEffect(Unit) { focusRequester.requestFocus() }
                 OutlinedTextField(
                     value = quickTextInput,
                     onValueChange = onQuickTextInputChange,
                     label = { Text("请输入发送内容...") },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
                     maxLines = 6
                 )
             },
@@ -1965,15 +2039,39 @@ fun QuickActionDialogs(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
                 ) {
                     Text(
-                        text = if (isRecordingVoiceState) "🎙️ 正在录音中..." else "录音就绪",
+                        text = if (isRecordingVoiceState) "正在录音中..." else "录音就绪",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Spacer(modifier = Modifier.height(16.dp))
+                    // 音量条
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.height(40.dp).padding(vertical = 4.dp)
+                    ) {
+                        val barCount = 9
+                        for (i in 0 until barCount) {
+                            val phase = (i + 1) * 0.7f
+                            val factor = 0.25f + 0.75f * Math.abs(
+                                Math.sin(phase.toDouble() + System.currentTimeMillis() * 0.008)
+                            ).toFloat()
+                            val hFraction = if (isRecordingVoiceState)
+                                (voiceAmplitude * factor).coerceIn(0.12f, 1f) else 0.12f
+                            Box(
+                                modifier = Modifier
+                                    .width(5.dp)
+                                    .fillMaxHeight(hFraction)
+                                    .clip(RoundedCornerShape(3.dp))
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
                     Box(
                         modifier = Modifier
-                            .size(72.dp)
+                            .size(56.dp)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.primaryContainer),
                         contentAlignment = Alignment.Center
@@ -1982,7 +2080,7 @@ fun QuickActionDialogs(
                             imageVector = Icons.Default.Mic,
                             contentDescription = "Mic",
                             tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(28.dp)
                         )
                     }
                 }
