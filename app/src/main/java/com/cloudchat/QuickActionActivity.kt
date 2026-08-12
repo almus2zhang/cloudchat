@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -50,7 +51,6 @@ class QuickActionActivity : ComponentActivity() {
         setContent {
             CloudChatTheme {
                 val chatRepository = remember { ChatRepository(this@QuickActionActivity) }
-                val scope = rememberCoroutineScope()
 
                 val action = actionType ?: run {
                     finish()
@@ -81,6 +81,7 @@ class QuickActionActivity : ComponentActivity() {
                             "send_image" -> ImageActionView(chatRepository) { finish() }
                             "send_voice" -> VoiceActionView(chatRepository) { finish() }
                             "send_text" -> TextActionView(chatRepository) { finish() }
+                            "send_location" -> LocationActionView(chatRepository) { finish() }
                             else -> LaunchedEffect(Unit) { finish() }
                         }
                     }
@@ -420,6 +421,127 @@ class QuickActionActivity : ComponentActivity() {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    @Composable
+    private fun LocationActionView(chatRepository: ChatRepository, onDismiss: () -> Unit) {
+        val scope = rememberCoroutineScope()
+        val context = LocalContext.current
+
+        var hasPermission by remember {
+            mutableStateOf(
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.ACCESS_FINE_LOCATION
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            )
+        }
+
+        val permissionLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.RequestMultiplePermissions()
+        ) { perms ->
+            val granted = perms[android.Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                    perms[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true
+            hasPermission = granted
+            if (!granted) {
+                Toast.makeText(applicationContext, "发送位置需要定位权限", Toast.LENGTH_SHORT).show()
+                onDismiss()
+            }
+        }
+
+        fun fetchAndSendLocation() {
+            Toast.makeText(applicationContext, "正在获取并发送位置...", Toast.LENGTH_SHORT).show()
+            val locationManager = context.getSystemService(android.content.Context.LOCATION_SERVICE) as android.location.LocationManager
+            val isGpsEnabled = locationManager.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)
+            val isNetworkEnabled = locationManager.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER)
+
+            val provider = when {
+                isNetworkEnabled -> android.location.LocationManager.NETWORK_PROVIDER
+                isGpsEnabled -> android.location.LocationManager.GPS_PROVIDER
+                else -> null
+            }
+
+            if (provider == null) {
+                Toast.makeText(applicationContext, "无法获取位置：GPS或网络定位未开启", Toast.LENGTH_SHORT).show()
+                onDismiss()
+                return
+            }
+
+            fun sendLocationObj(location: android.location.Location) {
+                scope.launch(Dispatchers.IO) {
+                    val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
+                    var addressText = "纬度: ${location.latitude}, 经度: ${location.longitude}"
+                    try {
+                        val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
+                        if (!addresses.isNullOrEmpty()) {
+                            val address = addresses[0]
+                            val sb = java.lang.StringBuilder()
+                            address.adminArea?.let { sb.append(it) }
+                            val locality = address.locality
+                            if (locality != null && !sb.contains(locality)) {
+                                sb.append(locality)
+                            }
+                            address.subLocality?.let { sb.append(it) }
+                            address.thoroughfare?.let { sb.append(it) }
+                            address.subThoroughfare?.let { sb.append(it) }
+                            addressText = if (sb.isNotEmpty()) sb.toString() else (address.getAddressLine(0) ?: addressText)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("QuickActionActivity", "Geocoder failed", e)
+                    }
+
+                    try {
+                        chatRepository.sendMessage(
+                            content = "[位置] $addressText",
+                            type = MessageType.TEXT
+                        )
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(applicationContext, "位置发送成功！", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Log.e("QuickActionActivity", "Send location failed", e)
+                    } finally {
+                        withContext(Dispatchers.Main) { onDismiss() }
+                    }
+                }
+            }
+
+            try {
+                val lastLoc = locationManager.getLastKnownLocation(provider)
+                if (lastLoc != null) {
+                    sendLocationObj(lastLoc)
+                } else {
+                    locationManager.requestSingleUpdate(provider, object : android.location.LocationListener {
+                        override fun onLocationChanged(loc: android.location.Location) {
+                            sendLocationObj(loc)
+                        }
+                        override fun onStatusChanged(p0: String?, p1: Int, p2: android.os.Bundle?) {}
+                        override fun onProviderEnabled(p0: String) {}
+                        override fun onProviderDisabled(p0: String) {}
+                    }, null)
+                }
+            } catch (e: SecurityException) {
+                Toast.makeText(applicationContext, "定位失败：无权限", Toast.LENGTH_SHORT).show()
+                onDismiss()
+            }
+        }
+
+        LaunchedEffect(hasPermission) {
+            if (!hasPermission) {
+                permissionLauncher.launch(
+                    arrayOf(
+                        android.Manifest.permission.ACCESS_FINE_LOCATION,
+                        android.Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                )
+            } else {
+                fetchAndSendLocation()
             }
         }
     }

@@ -39,4 +39,17 @@
             <extra android:name="quick_action" android:value="send_text" />
         </intent>
     </shortcut>
+    <shortcut
+        android:shortcutId="send_location"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_location"
+        android:shortcutShortLabel="@string/shortcut_send_location"
+        android:shortcutLongLabel="@string/shortcut_send_location">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.cloudchat"
+            android:targetClass="com.cloudchat.QuickActionActivity">
+            <extra android:name="quick_action" android:value="send_location" />
+        </intent>
+    </shortcut>
 </shortcuts>

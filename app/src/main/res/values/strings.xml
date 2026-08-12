@@ -3,4 +3,5 @@
     <string name="shortcut_send_image">发图片</string>
     <string name="shortcut_send_voice">发语音</string>
     <string name="shortcut_send_text">发文本</string>
+    <string name="shortcut_send_location">发位置</string>
 </resources>
