@@ -2164,7 +2164,43 @@ class ChatRepository(private val context: Context) {
             }
         }
 
-        onProgress?.invoke(70, "正在生成 HTML 页面...")
+        onProgress?.invoke(70, "正在上传头像资源...")
+
+        // 上传头像文件到 assets 目录，映射 avatar 文件名 -> 相对路径
+        val avatarUrlMap = mutableMapOf<String, String>()
+        val distinctAvatars = effectiveMessages.mapNotNull { it.senderAvatar }
+            .filter { it.isNotBlank() && !it.startsWith("http://") && !it.startsWith("https://") &&
+                    !it.startsWith("data:") && !it.startsWith("file://") && !it.startsWith("content://") }
+            .distinct()
+        for (avatarName in distinctAvatars) {
+            // 头像文件在 WebDAV 根目录，下载到本地临时文件再上传到 assets
+            val tempAvatar = File(context.cacheDir, "avatar_tmp_${System.currentTimeMillis()}_$avatarName")
+            var uploadedAvatar = false
+            try {
+                provider.downloadFile(avatarName, tempAvatar)
+                if (tempAvatar.exists() && tempAvatar.length() > 0) {
+                    val ext = avatarName.substringAfterLast('.', "png")
+                    val cleanAvatar = "avatar_${avatarName.hashCode().toUInt()}.$ext"
+                    val contentType = when (ext.lowercase()) {
+                        "jpg", "jpeg" -> "image/jpeg"
+                        "png" -> "image/png"
+                        "gif" -> "image/gif"
+                        "webp" -> "image/webp"
+                        else -> "image/jpeg"
+                    }
+                    uploadedAvatar = provider.uploadFileToPath(tempAvatar.inputStream(), "$targetAssetsDir/$cleanAvatar", contentType)
+                    if (uploadedAvatar) {
+                        avatarUrlMap[avatarName] = "assets/$cleanAvatar"
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w("ChatRepository", "Failed to upload avatar $avatarName", e)
+            } finally {
+                tempAvatar.delete()
+            }
+        }
+
+        onProgress?.invoke(75, "正在生成 HTML 页面...")
 
         // 构造媒体解析器
         val resolver = object : DiaryGenerator.MediaUrlResolver {
@@ -2182,7 +2218,9 @@ class ChatRepository(private val context: Context) {
                     raw.startsWith("file://") || raw.startsWith("content://")) {
                     return raw
                 }
-                // avatar_xxx 文件名 → 解析为服务器完整 URL
+                // 优先使用已上传到 assets 的头像相对路径
+                avatarUrlMap[raw]?.let { return it }
+                // fallback：解析为服务器完整 URL
                 return provider.getFullUrl(raw) ?: fallback
             }
         }
