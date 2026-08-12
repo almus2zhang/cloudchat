@@ -502,17 +502,18 @@ class ChatRepository(private val context: Context) {
             oldConfig.fullModePath != config.fullModePath
 
         if (locationChanged) {
-            // 位置变了：清空旧消息，直接以新位置的云端历史为准（无历史则显示空）
-            _messages.value = emptyList()
-            refreshHistoryFromCloud()
+            // 位置变了：保留本地待发送（FAILED/SENDING）的消息，其余以新位置的云端历史为准
+            val pendingMsgs = _messages.value.filter { it.status != MessageStatus.SUCCESS }
+            _messages.value = pendingMsgs
+            scope.launch { refreshHistoryFromCloud() }
         } else {
             // 位置未变（仅修改证书/分块等设置）：保留本地缓存，离线也能看
             loadLocalHistory(config.id)
             if (_messages.value.isEmpty()) {
-                refreshHistoryFromCloud()
+                scope.launch { refreshHistoryFromCloud() }
             }
         }
-        uploadLoginLog(config)
+        scope.launch { uploadLoginLog(config) }
         startSyncLoop()
     }
 
@@ -565,16 +566,33 @@ class ChatRepository(private val context: Context) {
 
     private suspend fun loadLocalHistory(accountId: String) = withContext(Dispatchers.IO) {
         val file = getLocalHistoryFile(accountId)
+        var history: List<ChatMessage> = emptyList()
         if (file.exists()) {
             try {
                 val json = file.readText()
                 val rawHistory: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
-                val history = rawHistory?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
-                _messages.value = history
+                history = rawHistory?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Load failed", e)
             }
         }
+        // 文件为空时尝试从 SharedPrefs 恢复
+        if (history.isEmpty()) {
+            val prefsJson = context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE)
+                .getString("history_$accountId", null)
+            if (!prefsJson.isNullOrBlank()) {
+                try {
+                    val raw: List<ChatMessage>? = gson.fromJson(prefsJson, object : TypeToken<List<ChatMessage>>() {}.type)
+                    history = raw?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
+                } catch (e: Exception) {
+                    Log.e("ChatRepository", "SharedPrefs load failed", e)
+                }
+            }
+        }
+        // 合并：文件中的历史 + 当前内存中不在文件里的 FAILED/SENDING 消息
+        val fileIds = history.map { it.id }.toSet()
+        val pendingInMemory = _messages.value.filter { it.id !in fileIds && it.status != MessageStatus.SUCCESS }
+        _messages.value = history + pendingInMemory
     }
 
     private suspend fun saveLocalHistory(accountId: String) = withContext(Dispatchers.IO) {
@@ -630,7 +648,7 @@ class ChatRepository(private val context: Context) {
             remoteUrl = remoteUrl,
             fileSize = fileSize,
             videoDuration = videoDuration,
-            status = if (inputStream != null) MessageStatus.SENDING else MessageStatus.SUCCESS,
+            status = MessageStatus.SENDING,
             locationAddress = locationAddress,
             isChunked = useChunking,
             chunkSize = chunkSize,
@@ -644,7 +662,15 @@ class ChatRepository(private val context: Context) {
             transientLocalUris[newMessage.id] = uriStr
         }
         _messages.update { it + newMessage }
-        saveLocalHistory(config.id)
+        // 立即同步写本地缓存，防止 scope 取消后消息丢失
+        try {
+            val json = gson.toJson(_messages.value)
+            context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE).edit()
+                .putString("history_${config.id}", json).apply()
+            getLocalHistoryFile(config.id).writeText(json)
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Failed to save local history on send", e)
+        }
 
         if (inputStream != null) {
             _uploadProgress.update { it + (newMessage.id to 0) }
@@ -834,6 +860,8 @@ class ChatRepository(private val context: Context) {
                         sourceReadyToDelete.tryEmit(localUri)
                     }
                 } else {
+                    // 纯文本消息：上传到云端，成功才标记 SUCCESS
+                    provider.uploadText(content, "msg_${System.currentTimeMillis()}.txt")
                     updateMessageStatus(newMessage.id, MessageStatus.SUCCESS)
                 }
                 syncHistory()
@@ -841,6 +869,7 @@ class ChatRepository(private val context: Context) {
                 Log.e("ChatRepository", "Cloud upload failed for message ${newMessage.id}", e)
                 _uploadProgress.update { it - newMessage.id }
                 updateMessageStatus(newMessage.id, MessageStatus.FAILED)
+                config.id.let { saveLocalHistory(it) }
             } finally {
                 activeUploadJobs.remove(newMessage.id)
             }
@@ -897,7 +926,8 @@ class ChatRepository(private val context: Context) {
                 }
                 try {
                     val fileName = msg.content
-                    if (msg.type == com.cloudchat.model.MessageType.TEXT || fileName.isBlank()) {
+                    if (msg.type == com.cloudchat.model.MessageType.TEXT) {
+                        provider.uploadText(msg.content, "msg_${msg.id}.txt")
                         updateMessageStatus(messageId, MessageStatus.SUCCESS)
                     } else {
                         val targetFile = getLocalFile(msg.id, fileName)
@@ -939,6 +969,7 @@ class ChatRepository(private val context: Context) {
                     Log.e("ChatRepository", "Resend message failed for $messageId", e)
                     _uploadProgress.update { it - messageId }
                     updateMessageStatus(messageId, MessageStatus.FAILED)
+                    currentConfig?.id?.let { saveLocalHistory(it) }
                 } finally {
                     activeUploadJobs.remove(messageId)
                 }
@@ -1407,9 +1438,7 @@ class ChatRepository(private val context: Context) {
                     try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
                     indexJson = gson.toJson(shards.keys.toList())
                 } else {
-                    // Server has no history files: Server is source of truth, retain only local FAILED messages
-                    _messages.update { current -> current.filter { it.status == MessageStatus.FAILED } }
-                    saveLocalHistory(config.id)
+                    // Server has no history files: keep all local messages (FAILED/SENDING are pending sends)
                     _isServerConnected.value = true
                     _isSyncing.value = false
                     isRefreshingFromCloud.set(false)

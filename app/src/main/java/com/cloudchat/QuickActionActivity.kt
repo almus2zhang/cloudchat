@@ -13,10 +13,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -30,18 +28,18 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.cloudchat.model.AppMode
-import com.cloudchat.model.MessageType
-import com.cloudchat.repository.ChatRepository
-import com.cloudchat.repository.SettingsRepository
 import com.cloudchat.ui.theme.CloudChatTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/**
+ * 快捷操作 Activity：从桌面快捷方式/Widget 触发。
+ * 不自己发送消息（避免独立 ChatRepository 实例导致消息丢失），
+ * 而是把数据通过 Intent 传回 MainActivity 统一发送。
+ */
 class QuickActionActivity : ComponentActivity() {
 
     private var actionType: String? = null
@@ -52,28 +50,10 @@ class QuickActionActivity : ComponentActivity() {
 
         setContent {
             CloudChatTheme {
-                val chatRepository = remember { ChatRepository(this@QuickActionActivity) }
-                var isRepoInitialized by remember { mutableStateOf(false) }
-
                 val action = actionType ?: run {
                     finish()
                     return@CloudChatTheme
                 }
-
-                LaunchedEffect(Unit) {
-                    val settingsRepo = SettingsRepository(applicationContext)
-                    val config = settingsRepo.currentConfig.firstOrNull()
-                    val mode = settingsRepo.appMode.firstOrNull() ?: AppMode.NOT_SET
-                    if (config != null) {
-                        chatRepository.updateConfig(config, mode)
-                        isRepoInitialized = true
-                    } else {
-                        Toast.makeText(applicationContext, "请先在主应用配置服务器账号", Toast.LENGTH_LONG).show()
-                        finish()
-                    }
-                }
-
-                if (!isRepoInitialized) return@CloudChatTheme
 
                 Box(
                     modifier = Modifier
@@ -96,10 +76,10 @@ class QuickActionActivity : ComponentActivity() {
                             ) {} // Consume click inside dialog
                     ) {
                         when (action) {
-                            "send_image" -> ImageActionView(chatRepository) { finish() }
-                            "send_voice" -> VoiceActionView(chatRepository) { finish() }
-                            "send_text" -> TextActionView(chatRepository) { finish() }
-                            "send_location" -> LocationActionView(chatRepository) { finish() }
+                            "send_image" -> ImageActionView { finish() }
+                            "send_voice" -> VoiceActionView { finish() }
+                            "send_text" -> TextActionView { finish() }
+                            "send_location" -> LocationActionView { finish() }
                             else -> LaunchedEffect(Unit) { finish() }
                         }
                     }
@@ -108,9 +88,24 @@ class QuickActionActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * 把数据通过 Intent 发送给 MainActivity，由它统一处理发送。
+     * 消息将进入 MainActivity 的 ChatRepository，不会丢失。
+     */
+    private fun deliverToMainActivity(data: QuickActionData) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("quick_action_data_type", data.type)
+            data.text?.let { putExtra("quick_action_text", it) }
+            data.filePath?.let { putExtra("quick_action_file_path", it) }
+            data.uri?.let { putExtra("quick_action_uri", it.toString()) }
+        }
+        startActivity(intent)
+        finish()
+    }
+
     @Composable
-    private fun ImageActionView(chatRepository: ChatRepository, onDismiss: () -> Unit) {
-        val scope = rememberCoroutineScope()
+    private fun ImageActionView(onDismiss: () -> Unit) {
         val imagePickerLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.GetMultipleContents()
         ) { uris ->
@@ -118,30 +113,11 @@ class QuickActionActivity : ComponentActivity() {
                 onDismiss()
                 return@rememberLauncherForActivityResult
             }
-            scope.launch(Dispatchers.IO) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(applicationContext, "正在发送图片...", Toast.LENGTH_SHORT).show()
-                }
-                uris.forEach { uri ->
-                    try {
-                        val stream = contentResolver.openInputStream(uri)
-                        val name = getFileName(uri)
-                        chatRepository.sendMessage(
-                            content = name,
-                            type = MessageType.IMAGE,
-                            inputStream = stream,
-                            fileName = name,
-                            localUri = uri.toString()
-                        )
-                    } catch (e: Exception) {
-                        Log.e("QuickActionActivity", "Failed to send image", e)
-                    }
-                }
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(applicationContext, "图片发送成功！", Toast.LENGTH_SHORT).show()
-                    onDismiss()
-                }
+            Toast.makeText(applicationContext, "正在发送图片...", Toast.LENGTH_SHORT).show()
+            uris.forEach { uri ->
+                deliverToMainActivity(QuickActionData(type = "image", uri = uri))
             }
+            onDismiss()
         }
 
         LaunchedEffect(Unit) {
@@ -150,7 +126,7 @@ class QuickActionActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun VoiceActionView(chatRepository: ChatRepository, onDismiss: () -> Unit) {
+    private fun VoiceActionView(onDismiss: () -> Unit) {
         val scope = rememberCoroutineScope()
         var mediaRecorder by remember { mutableStateOf<android.media.MediaRecorder?>(null) }
         var recordFile by remember { mutableStateOf<File?>(null) }
@@ -207,9 +183,7 @@ class QuickActionActivity : ComponentActivity() {
                         try {
                             val maxAmp = mediaRecorder?.maxAmplitude ?: 0
                             amplitude = (maxAmp.toFloat() / 32767f).coerceIn(0f, 1f)
-                        } catch (e: Exception) {
-                            // ignore
-                        }
+                        } catch (e: Exception) {}
                         delay(80)
                     }
                 }
@@ -235,28 +209,10 @@ class QuickActionActivity : ComponentActivity() {
                 return
             }
 
-            scope.launch(Dispatchers.IO) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(applicationContext, "正在发送语音...", Toast.LENGTH_SHORT).show()
-                }
-                try {
-                    val inputStream = file.inputStream()
-                    chatRepository.sendMessage(
-                        content = file.name,
-                        type = MessageType.AUDIO,
-                        inputStream = inputStream,
-                        fileName = file.name,
-                        localUri = Uri.fromFile(file).toString()
-                    )
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(applicationContext, "语音发送成功！", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    Log.e("QuickActionActivity", "Send voice error", e)
-                } finally {
-                    withContext(Dispatchers.Main) { onDismiss() }
-                }
-            }
+            // 把录音文件路径传给 MainActivity，由它来发送
+            deliverToMainActivity(QuickActionData(type = "voice", filePath = file.absolutePath))
+            Toast.makeText(applicationContext, "正在发送语音...", Toast.LENGTH_SHORT).show()
+            onDismiss()
         }
 
         fun cancelRecording() {
@@ -293,7 +249,6 @@ class QuickActionActivity : ComponentActivity() {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Dynamic Volume Amplitude Wave Bar (音量指示条)
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -318,7 +273,7 @@ class QuickActionActivity : ComponentActivity() {
 
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = if (isRecording) "🎙️ 正在录音中..." else "准备中...",
+                    text = if (isRecording) "正在录音中..." else "准备中...",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -347,7 +302,7 @@ class QuickActionActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun TextActionView(chatRepository: ChatRepository, onDismiss: () -> Unit) {
+    private fun TextActionView(onDismiss: () -> Unit) {
         val scope = rememberCoroutineScope()
         var textInput by remember { mutableStateOf("") }
         var isSending by remember { mutableStateOf(false) }
@@ -365,18 +320,11 @@ class QuickActionActivity : ComponentActivity() {
             val text = textInput.trim()
             if (text.isEmpty()) return
             isSending = true
-            scope.launch(Dispatchers.IO) {
-                try {
-                    chatRepository.sendMessage(text)
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(applicationContext, "消息发送成功！", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    Log.e("QuickActionActivity", "Send text failed", e)
-                } finally {
-                    withContext(Dispatchers.Main) { onDismiss() }
-                }
-            }
+
+            // 把文本传给 MainActivity，由它来发送
+            deliverToMainActivity(QuickActionData(type = "text", text = text))
+            Toast.makeText(applicationContext, "正在发送...", Toast.LENGTH_SHORT).show()
+            onDismiss()
         }
 
         Card(
@@ -444,7 +392,7 @@ class QuickActionActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun LocationActionView(chatRepository: ChatRepository, onDismiss: () -> Unit) {
+    private fun LocationActionView(onDismiss: () -> Unit) {
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
 
@@ -499,7 +447,7 @@ class QuickActionActivity : ComponentActivity() {
                         val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
                         if (!addresses.isNullOrEmpty()) {
                             val address = addresses[0]
-                            val sb = java.lang.StringBuilder()
+                            val sb = StringBuilder()
                             address.adminArea?.let { sb.append(it) }
                             val locality = address.locality
                             if (locality != null && !sb.contains(locality)) {
@@ -514,18 +462,11 @@ class QuickActionActivity : ComponentActivity() {
                         Log.e("QuickActionActivity", "Geocoder failed", e)
                     }
 
-                    try {
-                        chatRepository.sendMessage(
-                            content = "[位置] $addressText",
-                            type = MessageType.TEXT
-                        )
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(applicationContext, "位置发送成功！", Toast.LENGTH_SHORT).show()
-                        }
-                    } catch (e: Exception) {
-                        Log.e("QuickActionActivity", "Send location failed", e)
-                    } finally {
-                        withContext(Dispatchers.Main) { onDismiss() }
+                    // 把位置文本传给 MainActivity，由它来发送
+                    withContext(Dispatchers.Main) {
+                        deliverToMainActivity(QuickActionData(type = "text", text = "[位置] $addressText"))
+                        Toast.makeText(applicationContext, "位置发送成功！", Toast.LENGTH_SHORT).show()
+                        onDismiss()
                     }
                 }
             }
@@ -563,22 +504,15 @@ class QuickActionActivity : ComponentActivity() {
             }
         }
     }
-
-    private fun getFileName(uri: Uri): String {
-        var name = "file_${System.currentTimeMillis()}"
-        try {
-            contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    if (idx >= 0) {
-                        val n = cursor.getString(idx)
-                        if (!n.isNullOrEmpty()) name = n
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            // ignore
-        }
-        return name
-    }
 }
+
+/**
+ * 快捷操作产生的数据，由 QuickActionActivity 传给 MainActivity。
+ * MainActivity 使用自己的 ChatRepository 实例统一发送。
+ */
+data class QuickActionData(
+    val type: String,       // "text" | "image" | "voice"
+    val text: String? = null,
+    val filePath: String? = null,
+    val uri: Uri? = null
+)

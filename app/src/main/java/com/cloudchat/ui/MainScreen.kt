@@ -99,9 +99,11 @@ val LocalTextSelectionClearKey = compositionLocalOf { 0 }
 fun MainScreen(
     sharedData: com.cloudchat.SharedData?,
     quickAction: String? = null,
+    quickActionData: com.cloudchat.QuickActionData? = null,
     onFullScreenToggle: (Boolean) -> Unit,
     onSharedDataHandled: () -> Unit,
     onQuickActionHandled: () -> Unit = {},
+    onQuickActionDataHandled: () -> Unit = {},
     setTopBarActions: (@Composable RowScope.() -> Unit) -> Unit,
     setTopBarTitle: (String) -> Unit,
     setTopBarTitleComposable: (((@Composable () -> Unit)?) -> Unit) = {},
@@ -728,7 +730,6 @@ fun MainScreen(
     LaunchedEffect(currentConfig, appMode) {
         currentConfig?.let {
             chatRepository.updateConfig(it, appMode)
-            chatRepository.refreshHistoryFromCloud()
             
             if (appMode == com.cloudchat.model.AppMode.FULL) {
                 chatRepository.checkSecurityAuth()
@@ -817,6 +818,66 @@ fun MainScreen(
                 onQuickActionHandled()
             }
         }
+    }
+
+    // 处理 QuickActionActivity 传来的快捷发送数据（文本/图片/语音）
+    LaunchedEffect(quickActionData) {
+        val data = quickActionData ?: return@LaunchedEffect
+        val config = currentConfig ?: return@LaunchedEffect
+        chatRepository.updateConfig(config, appMode)
+
+        when (data.type) {
+            "text" -> {
+                val text = data.text ?: ""
+                if (text.isNotBlank()) {
+                    chatRepository.sendMessage(
+                        type = com.cloudchat.model.MessageType.TEXT,
+                        content = text
+                    )
+                }
+            }
+            "voice" -> {
+                val filePath = data.filePath
+                if (!filePath.isNullOrBlank()) {
+                    val file = java.io.File(filePath)
+                    if (file.exists()) {
+                        chatRepository.sendMessage(
+                            type = com.cloudchat.model.MessageType.AUDIO,
+                            content = "",
+                            localUri = filePath,
+                            fileName = file.name,
+                            inputStream = file.inputStream()
+                        )
+                    }
+                }
+            }
+            "image" -> {
+                val uri = data.uri ?: return@LaunchedEffect
+                val inputStream = try {
+                    context.contentResolver.openInputStream(uri)
+                } catch (e: Exception) { null }
+                val fileName = try {
+                    val cursor = context.contentResolver.query(uri, null, null, null, null)
+                    val name = cursor?.use {
+                        val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                        if (it.moveToFirst() && nameIndex >= 0) it.getString(nameIndex) else null
+                    }
+                    name ?: "image_${System.currentTimeMillis()}.jpg"
+                } catch (e: Exception) {
+                    "image_${System.currentTimeMillis()}.jpg"
+                }
+                if (inputStream != null) {
+                    chatRepository.sendMessage(
+                        type = com.cloudchat.model.MessageType.IMAGE,
+                        content = "",
+                        localUri = uri.toString(),
+                        fileName = fileName,
+                        inputStream = inputStream
+                    )
+                }
+            }
+        }
+        onQuickActionDataHandled()
     }
 
     Box(modifier = Modifier.fillMaxSize().pointerInput(isPrivacyMode) {

@@ -55,13 +55,15 @@ class WebDavStorageProvider(
             .build()
     }
 
-    // 测试连接专用：不跟随重定向，以便直接观察服务器返回的重定向状态码
+    // 测试连接专用：不跟随重定向 + 短超时，以便快速诊断服务器状态
     // （例如 Lucky/STUN 穿透在「访问域名未授权」时会返回 307 重定向到无效地址，
     //  若跟随重定向会导致连接 0.0.0.0 失败，从而掩盖真实原因）
     private val noRedirectClient: OkHttpClient by lazy {
         client.newBuilder()
             .followRedirects(false)
             .followSslRedirects(false)
+            .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(8, java.util.concurrent.TimeUnit.SECONDS)
             .build()
     }
 
@@ -90,7 +92,7 @@ class WebDavStorageProvider(
     @Volatile
     private var lastFailureTime = 0L
 
-    private val fallbackCheckInterval = 30 * 1000L // 30 seconds
+    private val fallbackCheckInterval = 120 * 1000L // 2 minutes — 给主地址足够恢复时间
 
     private fun getBaseUrl(useFallbackUrl: Boolean): String {
         val rawUrl = if (useFallbackUrl && config.webDavFallbackUrl.isNotBlank()) {
