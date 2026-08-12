@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
 
     // State to hold shared content
     private val sharedContent = mutableStateOf<SharedData?>(null)
+    private val quickAction = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -193,9 +194,13 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     MainScreen(
                                         sharedData = sharedContent.value,
+                                        quickAction = quickAction.value,
                                         onFullScreenToggle = { isTopBarVisible = !it },
                                         onSharedDataHandled = {
                                             sharedContent.value = null
+                                        },
+                                        onQuickActionHandled = {
+                                            quickAction.value = null
                                         },
                                         setTopBarActions = { actions ->
                                             topBarActions = actions
@@ -260,11 +265,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_SEND) {
+        if (intent == null) return
+        val actionExtra = intent.getStringExtra("quick_action")
+        if (!actionExtra.isNullOrEmpty()) {
+            quickAction.value = actionExtra
+            intent.removeExtra("quick_action")
+            return
+        }
+        if (intent.action == Intent.ACTION_SEND) {
             val text = intent.getStringExtra(Intent.EXTRA_TEXT)
             val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
             sharedContent.value = SharedData(text, uri)
-        } else if (intent?.action == Intent.ACTION_SEND_MULTIPLE) {
+        } else if (intent.action == Intent.ACTION_SEND_MULTIPLE) {
             val uris = intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
             sharedContent.value = SharedData(uris = uris)
         }

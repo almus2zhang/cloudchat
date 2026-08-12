@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="send_image"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_image"
+        android:shortcutShortLabel="@string/shortcut_send_image"
+        android:shortcutLongLabel="@string/shortcut_send_image">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.cloudchat"
+            android:targetClass="com.cloudchat.MainActivity">
+            <extra android:name="quick_action" android:value="send_image" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="send_voice"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_voice"
+        android:shortcutShortLabel="@string/shortcut_send_voice"
+        android:shortcutLongLabel="@string/shortcut_send_voice">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.cloudchat"
+            android:targetClass="com.cloudchat.MainActivity">
+            <extra android:name="quick_action" android:value="send_voice" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="send_text"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_text"
+        android:shortcutShortLabel="@string/shortcut_send_text"
+        android:shortcutLongLabel="@string/shortcut_send_text">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.cloudchat"
+            android:targetClass="com.cloudchat.MainActivity">
+            <extra android:name="quick_action" android:value="send_text" />
+        </intent>
+    </shortcut>
+</shortcuts>

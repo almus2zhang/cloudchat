@@ -98,8 +98,10 @@ val LocalTextSelectionClearKey = compositionLocalOf { 0 }
 @Composable
 fun MainScreen(
     sharedData: com.cloudchat.SharedData?,
+    quickAction: String? = null,
     onFullScreenToggle: (Boolean) -> Unit,
     onSharedDataHandled: () -> Unit,
+    onQuickActionHandled: () -> Unit = {},
     setTopBarActions: (@Composable RowScope.() -> Unit) -> Unit,
     setTopBarTitle: (String) -> Unit,
     setTopBarTitleComposable: (((@Composable () -> Unit)?) -> Unit) = {},
@@ -153,6 +155,10 @@ fun MainScreen(
     var isMediaSyncing by remember { mutableStateOf(false) }
     var showImagePicker by remember { mutableStateOf(false) }
     var showCalendarDialog by remember { mutableStateOf(false) }
+    // --- Quick Action States ---
+    var showQuickTextDialog by remember { mutableStateOf(false) }
+    var quickTextInput by remember { mutableStateOf("") }
+    var showQuickVoiceDialog by remember { mutableStateOf(false) }
     // --- Selection and Haptic States ---
     var textSelectionClearKey by remember { mutableStateOf(0) }
     var isTextSelected by remember { mutableStateOf(false) }
@@ -786,6 +792,29 @@ fun MainScreen(
                     chatRepository.sendMessage(name, type, stream, name, uri.toString(), folderId = currentFolderId, deleteSourceFile = deleteSourceAfterSend && type == com.cloudchat.model.MessageType.IMAGE)
                 }
                 onSharedDataHandled()
+            }
+        }
+    }
+
+    LaunchedEffect(quickAction) {
+        when (quickAction) {
+            "send_image" -> {
+                multimediaPickerLauncher.launch("image/*")
+                onQuickActionHandled()
+            }
+            "send_voice" -> {
+                if (!hasAudioPermission) {
+                    audioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                } else {
+                    startVoiceRecording()
+                    showQuickVoiceDialog = true
+                }
+                onQuickActionHandled()
+            }
+            "send_text" -> {
+                quickTextInput = ""
+                showQuickTextDialog = true
+                onQuickActionHandled()
             }
         }
     }
@@ -1850,6 +1879,127 @@ fun MainScreen(
                     selectedIds = emptySet()
                 }
                 showDeleteMessagesConfirmDialog = false
+            }
+        )
+
+        QuickActionDialogs(
+            showQuickTextDialog = showQuickTextDialog,
+            quickTextInput = quickTextInput,
+            onQuickTextInputChange = { quickTextInput = it },
+            onQuickTextSend = { text ->
+                scope.launch {
+                    chatRepository.sendMessage(text, folderId = currentFolderId)
+                }
+                showQuickTextDialog = false
+            },
+            onQuickTextDismiss = { showQuickTextDialog = false },
+            showQuickVoiceDialog = showQuickVoiceDialog,
+            isRecordingVoiceState = isRecordingVoiceState,
+            onStopAndSendVoice = {
+                if (isRecordingVoiceState) {
+                    stopAndSendVoice()
+                }
+                showQuickVoiceDialog = false
+            },
+            onCancelVoice = {
+                if (isRecordingVoiceState) {
+                    cancelVoiceRecording()
+                }
+                showQuickVoiceDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+fun QuickActionDialogs(
+    showQuickTextDialog: Boolean,
+    quickTextInput: String,
+    onQuickTextInputChange: (String) -> Unit,
+    onQuickTextSend: (String) -> Unit,
+    onQuickTextDismiss: () -> Unit,
+    showQuickVoiceDialog: Boolean,
+    isRecordingVoiceState: Boolean,
+    onStopAndSendVoice: () -> Unit,
+    onCancelVoice: () -> Unit
+) {
+    if (showQuickTextDialog) {
+        AlertDialog(
+            onDismissRequest = onQuickTextDismiss,
+            title = { Text("发送文本", fontWeight = FontWeight.Bold) },
+            text = {
+                OutlinedTextField(
+                    value = quickTextInput,
+                    onValueChange = onQuickTextInputChange,
+                    label = { Text("请输入发送内容...") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 6
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val text = quickTextInput.trim()
+                        if (text.isNotEmpty()) {
+                            onQuickTextSend(text)
+                        }
+                    }
+                ) {
+                    Text("发送")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onQuickTextDismiss) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    if (showQuickVoiceDialog) {
+        AlertDialog(
+            onDismissRequest = onCancelVoice,
+            title = { Text("发送语音", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+                ) {
+                    Text(
+                        text = if (isRecordingVoiceState) "🎙️ 正在录音中..." else "录音就绪",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primaryContainer),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Mic,
+                            contentDescription = "Mic",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = onStopAndSendVoice,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("停止录音并发送")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onCancelVoice) {
+                    Text("取消")
+                }
             }
         )
     }
