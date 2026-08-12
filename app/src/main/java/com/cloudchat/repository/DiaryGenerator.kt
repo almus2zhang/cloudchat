@@ -28,6 +28,17 @@ object DiaryGenerator {
         return String.format(Locale.US, "%.1f %s", bytes / Math.pow(k, i.toDouble()), sizes[i])
     }
 
+    /** 根据图片数量返回动态宫格列数 class（微信朋友圈规则 + 超过9张仍继续 3 列） */
+    fun gridClassFor(count: Int): String {
+        return when (count) {
+            1 -> "grid-c1"
+            2 -> "grid-c2"
+            3 -> "grid-c3"
+            4 -> "grid-c4"   // 2x2
+            else -> "grid-c3" // 5+ 张统一 3 列
+        }
+    }
+
     fun cleanFileName(name: String): String {
         return name.split("/").last().replace(Regex("[\\\\/:*?\"<>|]"), "_")
     }
@@ -174,8 +185,8 @@ object DiaryGenerator {
                     val subs = item.messages
                     val isAllMedia = subs.all { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
                     if (isAllMedia) {
-                        // 固定 3 列网格，不限数量
-                        val gridClass = "grid-3col"
+                        val count = subs.size
+                        val gridClass = gridClassFor(count)
                         val imgs = subs.joinToString("") { s ->
                             val u = resolver.resolve(s)
                             if (s.type == MessageType.VIDEO) "<video src=\"$u\" controls preload=\"none\" class=\"wechat-grid-img\"></video>"
@@ -215,7 +226,8 @@ object DiaryGenerator {
                     // 宫格聚合：渲染所有图片/视频
                     val isAllMedia = item.messages.all { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
                     if (isAllMedia) {
-                        val gridClass = "grid-3col"
+                        val count = item.messages.size
+                        val gridClass = gridClassFor(count)
                         val imgs = item.messages.joinToString("") { s ->
                             val u = resolver.resolve(s)
                             if (s.type == MessageType.VIDEO) "<video src=\"$u\" controls preload=\"none\" class=\"card-grid-img\"></video>"
@@ -403,7 +415,10 @@ object DiaryGenerator {
             .wechat-location-badge { display: inline-flex; align-items: center; gap: 4px; color: #576b95; font-size: 13px; background: #f3f4f7; padding: 4px 8px; border-radius: 4px; margin-bottom: 8px; }
             .wechat-location-badge .icon { width: 14px; height: 14px; }
             .wechat-grid-container { display: grid; gap: 4px; margin-bottom: 8px; }
-            .wechat-grid-container.grid-3col { grid-template-columns: repeat(3, 1fr); width: 100%; max-width: 400px; }
+            .wechat-grid-container.grid-c1 { grid-template-columns: 1fr; max-width: 220px; }
+            .wechat-grid-container.grid-c2 { grid-template-columns: repeat(2, 1fr); width: 220px; }
+            .wechat-grid-container.grid-c3 { grid-template-columns: repeat(3, 1fr); width: 290px; }
+            .wechat-grid-container.grid-c4 { grid-template-columns: repeat(2, 1fr); width: 220px; }
             .wechat-grid-img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 4px; cursor: pointer; }
             .wechat-single-img { max-width: 220px; max-height: 280px; object-fit: cover; border-radius: 4px; cursor: pointer; }
             .wechat-caption-sub { font-size: 15px; color: #111; margin-top: 6px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
@@ -431,7 +446,10 @@ object DiaryGenerator {
             .theme-journal .card-header { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 13px; color: #64748b; }
             .theme-journal .card-img { max-height: 400px; width: 100%; object-fit: cover; border-radius: 8px; cursor: pointer; }
             .theme-journal .card-grid-container { display: grid; gap: 4px; margin-bottom: 8px; }
-            .theme-journal .card-grid-container.grid-3col { grid-template-columns: repeat(3, 1fr); }
+            .theme-journal .card-grid-container.grid-c1 { grid-template-columns: 1fr; max-width: 280px; }
+            .theme-journal .card-grid-container.grid-c2 { grid-template-columns: repeat(2, 1fr); }
+            .theme-journal .card-grid-container.grid-c3 { grid-template-columns: repeat(3, 1fr); }
+            .theme-journal .card-grid-container.grid-c4 { grid-template-columns: repeat(2, 1fr); }
             .theme-journal .card-grid-img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 6px; cursor: pointer; }
             .theme-journal .card-caption { font-size: 14px; color: #334155; line-height: 1.6; margin-top: 6px; }
             .theme-journal .card-group { display: flex; flex-direction: column; gap: 8px; }
