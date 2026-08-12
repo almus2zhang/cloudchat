@@ -56,8 +56,6 @@ class MainActivity : ComponentActivity() {
     // State to hold shared content
     private val sharedContent = mutableStateOf<SharedData?>(null)
     private val quickAction = mutableStateOf<String?>(null)
-    // 快捷操作数据：由 QuickActionActivity 通过 Intent 传入，MainScreen 负责发送
-    private val quickActionData = mutableStateOf<QuickActionData?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -197,16 +195,12 @@ class MainActivity : ComponentActivity() {
                                     MainScreen(
                                         sharedData = sharedContent.value,
                                         quickAction = quickAction.value,
-                                        quickActionData = quickActionData.value,
                                         onFullScreenToggle = { isTopBarVisible = !it },
                                         onSharedDataHandled = {
                                             sharedContent.value = null
                                         },
                                         onQuickActionHandled = {
                                             quickAction.value = null
-                                        },
-                                        onQuickActionDataHandled = {
-                                            quickActionData.value = null
                                         },
                                         setTopBarActions = { actions ->
                                             topBarActions = actions
@@ -272,19 +266,6 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
-
-        // 检查是否是 QuickActionActivity 传来的快捷发送数据
-        val dataType = intent.getStringExtra("quick_action_data_type")
-        if (!dataType.isNullOrEmpty()) {
-            quickActionData.value = QuickActionData(
-                type = dataType,
-                text = intent.getStringExtra("quick_action_text"),
-                filePath = intent.getStringExtra("quick_action_file_path"),
-                uri = intent.getStringExtra("quick_action_uri")?.let { Uri.parse(it) }
-            )
-            // 不清除 extras，因为 onNewIntent 复用时可能需要
-            return
-        }
 
         val actionExtra = intent.getStringExtra("quick_action")
         if (!actionExtra.isNullOrEmpty()) {

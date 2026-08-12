@@ -94,7 +94,7 @@ class QuickActionActivity : ComponentActivity() {
      */
     private fun deliverToMainActivity(data: QuickActionData) {
         val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
             putExtra("quick_action_data_type", data.type)
             data.text?.let { putExtra("quick_action_text", it) }
             data.filePath?.let { putExtra("quick_action_file_path", it) }
@@ -113,7 +113,6 @@ class QuickActionActivity : ComponentActivity() {
                 onDismiss()
                 return@rememberLauncherForActivityResult
             }
-            Toast.makeText(applicationContext, "正在发送图片...", Toast.LENGTH_SHORT).show()
             uris.forEach { uri ->
                 deliverToMainActivity(QuickActionData(type = "image", uri = uri))
             }
@@ -211,7 +210,6 @@ class QuickActionActivity : ComponentActivity() {
 
             // 把录音文件路径传给 MainActivity，由它来发送
             deliverToMainActivity(QuickActionData(type = "voice", filePath = file.absolutePath))
-            Toast.makeText(applicationContext, "正在发送语音...", Toast.LENGTH_SHORT).show()
             onDismiss()
         }
 
@@ -323,7 +321,6 @@ class QuickActionActivity : ComponentActivity() {
 
             // 把文本传给 MainActivity，由它来发送
             deliverToMainActivity(QuickActionData(type = "text", text = text))
-            Toast.makeText(applicationContext, "正在发送...", Toast.LENGTH_SHORT).show()
             onDismiss()
         }
 
@@ -465,7 +462,6 @@ class QuickActionActivity : ComponentActivity() {
                     // 把位置文本传给 MainActivity，由它来发送
                     withContext(Dispatchers.Main) {
                         deliverToMainActivity(QuickActionData(type = "text", text = "[位置] $addressText"))
-                        Toast.makeText(applicationContext, "位置发送成功！", Toast.LENGTH_SHORT).show()
                         onDismiss()
                     }
                 }
