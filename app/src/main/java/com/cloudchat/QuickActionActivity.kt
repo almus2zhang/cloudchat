@@ -30,12 +30,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.cloudchat.model.AppMode
 import com.cloudchat.model.MessageType
 import com.cloudchat.repository.ChatRepository
 import com.cloudchat.repository.SettingsRepository
 import com.cloudchat.ui.theme.CloudChatTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -51,11 +53,27 @@ class QuickActionActivity : ComponentActivity() {
         setContent {
             CloudChatTheme {
                 val chatRepository = remember { ChatRepository(this@QuickActionActivity) }
+                var isRepoInitialized by remember { mutableStateOf(false) }
 
                 val action = actionType ?: run {
                     finish()
                     return@CloudChatTheme
                 }
+
+                LaunchedEffect(Unit) {
+                    val settingsRepo = SettingsRepository(applicationContext)
+                    val config = settingsRepo.currentConfig.firstOrNull()
+                    val mode = settingsRepo.appMode.firstOrNull() ?: AppMode.NOT_SET
+                    if (config != null) {
+                        chatRepository.updateConfig(config, mode)
+                        isRepoInitialized = true
+                    } else {
+                        Toast.makeText(applicationContext, "请先在主应用配置服务器账号", Toast.LENGTH_LONG).show()
+                        finish()
+                    }
+                }
+
+                if (!isRepoInitialized) return@CloudChatTheme
 
                 Box(
                     modifier = Modifier

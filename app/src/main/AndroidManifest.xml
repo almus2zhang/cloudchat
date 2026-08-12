@@ -62,8 +62,7 @@
             android:theme="@style/Theme.CloudChat.Translucent"
             android:excludeFromRecents="true"
             android:noHistory="true"
-            android:taskAffinity=""
-            android:launchMode="singleInstance">
+            android:launchMode="singleTop">
         </activity>
         <provider
             android:name="androidx.core.content.FileProvider"
