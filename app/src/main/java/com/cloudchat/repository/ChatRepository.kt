@@ -107,6 +107,13 @@ class ChatRepository(private val context: Context) {
     /** 文件已成功上传后，待删除的源文件 URI（图库需经用户授权确认才可删）。 */
     val sourceReadyToDelete = MutableSharedFlow<String>(extraBufferCapacity = 32)
     val isServerConnected = _isServerConnected.asStateFlow()
+    
+    // 服务器 history 异常事件：需要用户选择操作
+    data class HistoryConflictEvent(
+        val reason: String,  // "empty" | "not_found" | "corrupted"
+        val message: String   // 用户可见的提示信息
+    )
+    val historyConflict = MutableSharedFlow<HistoryConflictEvent>(extraBufferCapacity = 4)
 
     private val deviceId: String by lazy {
         android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: "unknown_device"
@@ -502,9 +509,9 @@ class ChatRepository(private val context: Context) {
             oldConfig.fullModePath != config.fullModePath
 
         if (locationChanged) {
-            // 位置变了：保留本地待发送（FAILED/SENDING）的消息，其余以新位置的云端历史为准
-            val pendingMsgs = _messages.value.filter { it.status != MessageStatus.SUCCESS }
-            _messages.value = pendingMsgs
+            // 切换配置：清空当前消息，从新配置的本地缓存加载，然后异步从云端刷新
+            _messages.value = emptyList()
+            loadLocalHistory(config.id)
             scope.launch { refreshHistoryFromCloud() }
         } else {
             // 位置未变（仅修改证书/分块等设置）：保留本地缓存，离线也能看
@@ -554,6 +561,15 @@ class ChatRepository(private val context: Context) {
             while (isActive) {
                 delay(_syncInterval.value)
                 try {
+                    // SENDING 超时检测：超过 30 秒自动标记 FAILED
+                    val now = System.currentTimeMillis()
+                    _messages.update { list ->
+                        list.map { msg ->
+                            if (msg.status == MessageStatus.SENDING && (now - msg.timestamp) > 30_000) {
+                                msg.copy(status = MessageStatus.FAILED)
+                            } else msg
+                        }
+                    }
                     if (storageProvider != null && currentConfig != null) {
                         refreshHistoryFromCloud()
                     }
@@ -590,9 +606,15 @@ class ChatRepository(private val context: Context) {
             }
         }
         // 合并：文件中的历史 + 当前内存中不在文件里的 FAILED/SENDING 消息
+        // 如果文件/SharedPrefs都为空，保留当前内存中的全部消息（不覆盖）
         val fileIds = history.map { it.id }.toSet()
         val pendingInMemory = _messages.value.filter { it.id !in fileIds && it.status != MessageStatus.SUCCESS }
-        _messages.value = history + pendingInMemory
+        if (history.isNotEmpty()) {
+            _messages.value = history + pendingInMemory
+        } else {
+            // 没有任何本地缓存数据：保留当前内存中的消息，不覆盖
+            Log.w("ChatRepository", "loadLocalHistory: no cached data found, keeping current _messages")
+        }
     }
 
     private suspend fun saveLocalHistory(accountId: String) = withContext(Dispatchers.IO) {
@@ -1438,10 +1460,16 @@ class ChatRepository(private val context: Context) {
                     try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
                     indexJson = gson.toJson(shards.keys.toList())
                 } else {
-                    // Server has no history files: keep all local messages (FAILED/SENDING are pending sends)
+                    // 服务器没有任何 history 文件：异常状态（正常不会为空），通知用户选择
                     _isServerConnected.value = true
                     _isSyncing.value = false
                     isRefreshingFromCloud.set(false)
+                    historyConflict.tryEmit(HistoryConflictEvent(
+                        reason = "not_found",
+                        message = "服务器上未找到聊天记录，可能是首次使用或记录被意外清空。\n\n" +
+                                "• 用本地记录覆盖服务器：将本机聊天记录上传到服务器\n" +
+                                "• 清空本地记录：清除本机所有记录，从零开始"
+                    ))
                     return@withContext
                 }
             }
@@ -1461,12 +1489,28 @@ class ChatRepository(private val context: Context) {
             
             val cloudIds = allCloudMsgs.map { it.id }.toSet()
 
+            // 服务器 index 文件存在：云端是唯一真相
+            // - shard 有数据：合并云端 + 本地 pending
+            // - shard 全为空（服务器被清空）：保留本地 pending，清空已成功的
             _messages.update { current ->
                 val pendingOrFailed = current.filter { it.status != MessageStatus.SUCCESS && it.id !in cloudIds }
-                val merged = allCloudMsgs.map { cloudMsg ->
-                    current.find { it.id == cloudMsg.id }?.let { if (it.lastModified > cloudMsg.lastModified) it else cloudMsg } ?: cloudMsg
-                } + pendingOrFailed
-                merged.sortedBy { it.timestamp }
+                if (allCloudMsgs.isNotEmpty()) {
+                    val merged = allCloudMsgs.map { cloudMsg ->
+                        current.find { it.id == cloudMsg.id }?.let { if (it.lastModified > cloudMsg.lastModified) it else cloudMsg } ?: cloudMsg
+                    } + pendingOrFailed
+                    merged.sortedBy { it.timestamp }
+                } else {
+                    // 云端 index 存在但 shard 全为空 → 服务器记录被清空，通知用户选择
+                    Log.w("ChatRepository", "Cloud index exists but all shards empty")
+                    isRefreshingFromCloud.set(false)
+                    historyConflict.tryEmit(HistoryConflictEvent(
+                        reason = "empty",
+                        message = "服务器上的聊天记录为空（可能是被其他人清空了）。\n\n" +
+                                "• 用本地记录覆盖服务器：将本机聊天记录上传到服务器\n" +
+                                "• 清空本地记录：清除本机所有记录，与服务器保持一致"
+                    ))
+                    return@withContext
+                }
             }
 
             saveLocalHistory(config.id)
@@ -1477,6 +1521,40 @@ class ChatRepository(private val context: Context) {
         } finally {
             _isSyncing.value = false
             isRefreshingFromCloud.set(false)
+        }
+    }
+
+    // 用户选择「用本地覆盖服务器」：将当前 _messages 全部上传到服务器
+    suspend fun forceUploadLocalHistory() = withContext(Dispatchers.IO) {
+        val provider = storageProvider ?: return@withContext
+        val config = currentConfig ?: return@withContext
+        try {
+            val messages = _messages.value
+            val shards = messages.chunked(100)
+            val shardNames = shards.mapIndexed { i, _ -> "chat_shard_${i}.json" }
+            shards.forEachIndexed { i, chunk ->
+                provider.uploadText(gson.toJson(chunk), shardNames[i])
+            }
+            provider.uploadText(gson.toJson(shardNames), "chat_index.json")
+            try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
+            Log.i("ChatRepository", "forceUploadLocalHistory: uploaded ${messages.size} messages in ${shards.size} shards")
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "forceUploadLocalHistory failed", e)
+        }
+    }
+    
+    // 用户选择「清空本地记录」：清除 _messages 和本地缓存
+    suspend fun clearLocalHistory() {
+        val config = currentConfig ?: return
+        _messages.value = emptyList()
+        withContext(Dispatchers.IO) {
+            try {
+                getLocalHistoryFile(config.id).delete()
+                context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE).edit()
+                    .remove("history_${config.id}").apply()
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "clearLocalHistory failed", e)
+            }
         }
     }
 

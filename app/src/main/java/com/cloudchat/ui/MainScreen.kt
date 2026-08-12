@@ -254,6 +254,41 @@ fun MainScreen(
             if (sourceDeleteQueue.size == 1) advanceSourceDelete()
         }
     }
+    
+    // 服务器 history 异常冲突弹窗
+    var historyConflictEvent by remember { mutableStateOf<com.cloudchat.repository.ChatRepository.HistoryConflictEvent?>(null) }
+    LaunchedEffect(chatRepository) {
+        chatRepository.historyConflict.collect { event ->
+            historyConflictEvent = event
+        }
+    }
+    
+    if (historyConflictEvent != null) {
+        val event = historyConflictEvent!!
+        AlertDialog(
+            onDismissRequest = { historyConflictEvent = null },
+            title = { Text("聊天记录冲突") },
+            text = { Text(event.message) },
+            confirmButton = {
+                TextButton(onClick = {
+                    // 用本地记录覆盖服务器
+                    historyConflictEvent = null
+                    scope.launch {
+                        chatRepository.forceUploadLocalHistory()
+                    }
+                }) { Text("用本地覆盖服务器") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    // 清空本地记录
+                    historyConflictEvent = null
+                    scope.launch {
+                        chatRepository.clearLocalHistory()
+                    }
+                }) { Text("清空本地记录") }
+            }
+        )
+    }
 
     var activeCategory by remember { mutableStateOf("all") } // "all" or "diary"
     var diaryFiles by remember { mutableStateOf<List<com.cloudchat.repository.DiaryFileItem>>(emptyList()) }
@@ -541,25 +576,26 @@ fun MainScreen(
     }
 
     fun doSendLocation(location: android.location.Location) {
-        scope.launch(Dispatchers.IO) {
+        // Geocoder 必须在主线程执行，否则返回空
+        var addressText = "纬度: ${location.latitude}, 经度: ${location.longitude}"
+        try {
             val geocoder = android.location.Geocoder(context, java.util.Locale.getDefault())
-            var addressText = "纬度: ${location.latitude}, 经度: ${location.longitude}"
-            try {
-                val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
-                if (!addresses.isNullOrEmpty()) {
-                    val address = addresses[0]
-                    val sb = StringBuilder()
-                    address.adminArea?.let { sb.append(it) }
-                    val locality = address.locality
-                    if (locality != null && !sb.contains(locality)) sb.append(locality)
-                    address.subLocality?.let { sb.append(it) }
-                    address.thoroughfare?.let { sb.append(it) }
-                    address.subThoroughfare?.let { sb.append(it) }
-                    addressText = if (sb.isNotEmpty()) sb.toString() else (address.getAddressLine(0) ?: addressText)
-                }
-            } catch (e: Exception) {
-                Log.e("MainScreen", "Geocoder failed", e)
+            val addresses = geocoder.getFromLocation(location.latitude, location.longitude, 1)
+            if (!addresses.isNullOrEmpty()) {
+                val address = addresses[0]
+                val sb = StringBuilder()
+                address.adminArea?.let { sb.append(it) }
+                val locality = address.locality
+                if (locality != null && !sb.contains(locality)) sb.append(locality)
+                address.subLocality?.let { sb.append(it) }
+                address.thoroughfare?.let { sb.append(it) }
+                address.subThoroughfare?.let { sb.append(it) }
+                addressText = if (sb.isNotEmpty()) sb.toString() else (address.getAddressLine(0) ?: addressText)
             }
+        } catch (e: Exception) {
+            Log.e("MainScreen", "Geocoder failed", e)
+        }
+        scope.launch {
             chatRepository.sendMessage(
                 content = "[位置] $addressText",
                 type = MessageType.TEXT,
@@ -2682,6 +2718,35 @@ fun DiaryBubble(
                     if (!message.locationAddress.isNullOrBlank()) {
                         Text(text = message.locationAddress, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.Start)
                     }
+                    // SENDING / FAILED 状态标记
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                        when (message.status) {
+                            MessageStatus.SENDING -> {
+                                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("发送中...", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                            }
+                            MessageStatus.FAILED -> {
+                                val scope = rememberCoroutineScope()
+                                Icon(
+                                    imageVector = Icons.Default.Warning,
+                                    contentDescription = "发送失败",
+                                    tint = Color(0xFFFF5252),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    "发送失败，点击重试",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFFFF5252),
+                                    modifier = Modifier.clickable {
+                                        scope.launch { chatRepository.resendMessage(message.id) }
+                                    }
+                                )
+                            }
+                            else -> {}
+                        }
+                    }
                 }
                 MessageType.IMAGE -> {
                     val localFile = remember(message.id) { chatRepository.getLocalFile(message.id, message.content) }
@@ -2839,6 +2904,37 @@ fun DiaryBubble(
                 }
                 else -> {
                     Text(text = message.content, style = MaterialTheme.typography.bodyMedium, color = Color(0xFF222222), textAlign = TextAlign.Start)
+                }
+            }
+            // 非图片类型（已在图片内部处理）的 SENDING / FAILED 状态
+            if (message.type != MessageType.IMAGE && message.type != MessageType.FOLDER) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                    when (message.status) {
+                        MessageStatus.SENDING -> {
+                            CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("发送中...", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                        }
+                        MessageStatus.FAILED -> {
+                            val scope = rememberCoroutineScope()
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = "发送失败",
+                                tint = Color(0xFFFF5252),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                "发送失败，点击重试",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFFF5252),
+                                modifier = Modifier.clickable {
+                                    scope.launch { chatRepository.resendMessage(message.id) }
+                                }
+                            )
+                        }
+                        else -> {}
+                    }
                 }
             }
         }
