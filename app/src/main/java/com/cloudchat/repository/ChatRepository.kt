@@ -2040,21 +2040,15 @@ class ChatRepository(private val context: Context) {
                                             if (itemName.isNotEmpty() && seenNames.add(itemName)) {
                                                 val webUrl = if (isCollection) {
                                                     if (cleanBaseUrl.isNotEmpty()) {
-                                                        if (cleanBaseUrl.endsWith("/diary")) {
-                                                            "$cleanBaseUrl/${java.net.URLEncoder.encode(itemName, "UTF-8")}/index.html"
-                                                        } else {
-                                                            "$cleanBaseUrl/diary/${java.net.URLEncoder.encode(itemName, "UTF-8")}/index.html"
-                                                        }
+                                                        // diaryBaseUrl 已是完整地址（等价 webdav目录/diary），直接拼子目录
+                                                        "$cleanBaseUrl/${java.net.URLEncoder.encode(itemName, "UTF-8")}/index.html"
                                                     } else {
+                                                        // 未设 diaryBaseUrl：用 webdav 打开的 cleanTarget（已含 diary）拼子目录
                                                         "$cleanTarget/${java.net.URLEncoder.encode(itemName, "UTF-8")}/index.html"
                                                     }
                                                 } else {
                                                     if (cleanBaseUrl.isNotEmpty()) {
-                                                        if (cleanBaseUrl.endsWith("/diary")) {
-                                                            "$cleanBaseUrl/${java.net.URLEncoder.encode(itemName, "UTF-8")}"
-                                                        } else {
-                                                            "$cleanBaseUrl/diary/${java.net.URLEncoder.encode(itemName, "UTF-8")}"
-                                                        }
+                                                        "$cleanBaseUrl/${java.net.URLEncoder.encode(itemName, "UTF-8")}"
                                                     } else {
                                                         if (href.startsWith("http")) href else "$baseUrl${if (href.startsWith("/")) "" else "/"}$href"
                                                     }
