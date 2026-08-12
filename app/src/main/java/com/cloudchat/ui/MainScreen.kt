@@ -321,6 +321,8 @@ fun MainScreen(
     var diaryFiles by remember { mutableStateOf<List<com.cloudchat.repository.DiaryFileItem>>(emptyList()) }
     var isLoadingDiaryFiles by remember { mutableStateOf(false) }
     var showDiaryGenerateDialog by remember { mutableStateOf(false) }
+    var diaryGenerateTargetIds by remember { mutableStateOf<Set<String>?>(null) }
+    var diaryGenerateFolderId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(activeCategory) {
         if (activeCategory == "diary") {
@@ -803,6 +805,14 @@ fun MainScreen(
                     }) {
                         Icon(Icons.Default.Edit, contentDescription = "重命名文件夹")
                     }
+                    IconButton(modifier = Modifier.size(40.dp), onClick = {
+                        // 生成整个文件夹内所有条目的日记
+                        diaryGenerateFolderId = currentFolderId
+                        diaryGenerateTargetIds = null
+                        showDiaryGenerateDialog = true
+                    }) {
+                        Icon(Icons.Default.MenuBook, contentDescription = "生成日记", tint = MaterialTheme.colorScheme.primary)
+                    }
                 }
             }
         }
@@ -1193,14 +1203,28 @@ fun MainScreen(
             }
 
             if (showDiaryGenerateDialog) {
+                // 确定要归档的消息：多选目标 / 文件夹内所有条目 / 全部，跳过隐藏和删除
+                val diaryTargetMessages = remember(messages, diaryGenerateTargetIds, diaryGenerateFolderId, showDiaryGenerateDialog) {
+                    when {
+                        diaryGenerateTargetIds != null -> messages.filter { it.id in diaryGenerateTargetIds!! }
+                        diaryGenerateFolderId != null -> messages.filter { it.folderId == diaryGenerateFolderId }
+                        else -> messages
+                    }.filter { !it.isDeleted && it.isHidden != true }
+                }
                 DiaryGenerateDialog(
-                    messages = messages,
-                    onDismiss = { showDiaryGenerateDialog = false },
+                    messages = diaryTargetMessages,
+                    onDismiss = {
+                        showDiaryGenerateDialog = false
+                        diaryGenerateTargetIds = null
+                        diaryGenerateFolderId = null
+                    },
                     onGenerate = { title, author, templateId, password, onProgress ->
-                        chatRepository.generateDiary(title, author, templateId, password, messages, onProgress)
+                        chatRepository.generateDiary(title, author, templateId, password, diaryTargetMessages, onProgress)
                     },
                     onSuccess = {
                         showDiaryGenerateDialog = false
+                        diaryGenerateTargetIds = null
+                        diaryGenerateFolderId = null
                         scope.launch {
                             diaryFiles = chatRepository.listDiaryFiles()
                         }
@@ -1787,6 +1811,15 @@ fun MainScreen(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    }
+
+                    // 8. 生成日记（多选）
+                    IconButton(onClick = {
+                        diaryGenerateTargetIds = selectedIds
+                        selectedIds = emptySet()
+                        showDiaryGenerateDialog = true
+                    }) {
+                        Icon(Icons.Default.MenuBook, contentDescription = "生成日记")
                     }
 
                     // 删除图标：短按确认删除；长按移入隐私空间

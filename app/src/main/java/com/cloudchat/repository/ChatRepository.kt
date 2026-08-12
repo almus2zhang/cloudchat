@@ -2120,13 +2120,16 @@ class ChatRepository(private val context: Context) {
         val targetDir = "diary/$cleanDir"
         val targetAssetsDir = "$targetDir/assets"
 
+        // 防御性过滤：跳过删除/隐藏条目
+        val effectiveMessages = messages.filter { !it.isDeleted && it.isHidden != true }
+
         onProgress?.invoke(10, "正在创建服务器目录...")
         provider.mkdirRecursive(targetAssetsDir)
 
         onProgress?.invoke(20, "正在准备媒体资源...")
 
         // 过滤出媒体消息，上传资源到 assets
-        val mediaMsgs = messages.filter {
+        val mediaMsgs = effectiveMessages.filter {
             it.type == com.cloudchat.model.MessageType.IMAGE ||
             it.type == com.cloudchat.model.MessageType.VIDEO ||
             it.type == com.cloudchat.model.MessageType.AUDIO
@@ -2170,11 +2173,21 @@ class ChatRepository(private val context: Context) {
                 return msg.remoteUrl ?: msg.content
             }
             override fun resolveAvatar(msg: ChatMessage, default: String): String {
-                return msg.senderAvatar ?: default
+                val displayName = msg.senderName?.ifEmpty { msg.sender } ?: msg.sender ?: authorStr
+                val fallback = "https://api.dicebear.com/7.x/bottts/png?seed=${java.net.URLEncoder.encode(displayName, "UTF-8")}"
+                val raw = msg.senderAvatar
+                if (raw.isNullOrEmpty()) return fallback
+                // 完整 URL 直接使用
+                if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("data:") ||
+                    raw.startsWith("file://") || raw.startsWith("content://")) {
+                    return raw
+                }
+                // avatar_xxx 文件名 → 解析为服务器完整 URL
+                return provider.getFullUrl(raw) ?: fallback
             }
         }
 
-        val html = DiaryGenerator.generateHtml(title, authorStr, templateId, password, messages, resolver)
+        val html = DiaryGenerator.generateHtml(title, authorStr, templateId, password, effectiveMessages, resolver)
 
         onProgress?.invoke(85, "正在上传 index.html...")
         val htmlOk = provider.uploadFileToPath(html.byteInputStream(Charsets.UTF_8), "$targetDir/index.html", "text/html; charset=utf-8")
