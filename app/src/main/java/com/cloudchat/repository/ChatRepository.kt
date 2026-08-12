@@ -1120,7 +1120,7 @@ class ChatRepository(private val context: Context) {
         }
     }
 
-    /** 压缩图片为 WebP（最长边 1280px，质量 80），用于日记静态页面减小体积 */
+    /** 压缩图片为 WebP（最长边 1280px，质量 80），处理 EXIF 方向避免旋转 */
     private fun compressImageToWebp(srcFile: File): File? {
         return try {
             val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -1135,22 +1135,45 @@ class ChatRepository(private val context: Context) {
                 sample *= 2
             }
             val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
-            val bitmap = BitmapFactory.decodeFile(srcFile.absolutePath, decodeOpts) ?: return null
+            var bitmap = BitmapFactory.decodeFile(srcFile.absolutePath, decodeOpts) ?: return null
+
+            // 读取 EXIF 方向并旋转（相机拍摄的图片常带 orientation 标签）
+            val rotation = try {
+                val exif = androidx.exifinterface.media.ExifInterface(srcFile.absolutePath)
+                when (exif.getAttributeInt(
+                    androidx.exifinterface.media.ExifInterface.TAG_ORIENTATION,
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_NORMAL
+                )) {
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                    androidx.exifinterface.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                    else -> 0f
+                }
+            } catch (e: Exception) {
+                0f
+            }
+
+            var result = bitmap
+            if (rotation != 0f) {
+                val matrix = Matrix().apply { postRotate(rotation) }
+                result = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                if (result != bitmap) bitmap.recycle()
+            }
 
             // 若仍超过 1280，再等比缩放
-            var result = bitmap
             val scale = maxDim.toFloat() / Math.max(result.width, result.height).coerceAtLeast(1)
             if (scale < 1f) {
                 val matrix = Matrix().apply { postScale(scale, scale) }
-                result = Bitmap.createBitmap(result, 0, 0, result.width, result.height, matrix, true)
-                if (result != bitmap) bitmap.recycle()
+                val scaled = Bitmap.createBitmap(result, 0, 0, result.width, result.height, matrix, true)
+                if (scaled != result) result.recycle()
+                result = scaled
             }
 
             val outFile = File(context.cacheDir, "diary_img_${System.currentTimeMillis()}.webp")
             outFile.outputStream().use { out ->
                 result.compress(Bitmap.CompressFormat.WEBP, 80, out)
             }
-            if (result != bitmap) result.recycle()
+            result.recycle()
             outFile
         } catch (e: Exception) {
             Log.e("ChatRepository", "compressImageToWebp failed", e)
