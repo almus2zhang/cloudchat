@@ -222,8 +222,7 @@ class ChatRepository(private val context: Context) {
 
     suspend fun uploadCustomAvatar(config: ServerConfig, imageUri: Uri): String? = withContext(Dispatchers.IO) {
         try {
-            val cleanKey = config.username.trim().ifEmpty { "user" }.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-            val avatarFileName = "avatar_${cleanKey}_${System.currentTimeMillis()}.jpg"
+            val avatarFileName = "avatar____${System.currentTimeMillis()}.jpg"
 
             val inputStream = context.contentResolver.openInputStream(imageUri) ?: return@withContext null
             val originalBitmap = BitmapFactory.decodeStream(inputStream)
@@ -259,6 +258,41 @@ class ChatRepository(private val context: Context) {
             return@withContext avatarFileName
         } catch (e: Exception) {
             Log.e("ChatRepository", "Failed to upload avatar", e)
+            null
+        }
+    }
+
+    suspend fun uploadAvatarFromBitmap(config: ServerConfig, bitmap: Bitmap): String? = withContext(Dispatchers.IO) {
+        try {
+            val avatarFileName = "avatar____${System.currentTimeMillis()}.jpg"
+            val maxSide = 128
+            val side = Math.min(bitmap.width, bitmap.height)
+            val sx = (bitmap.width - side) / 2
+            val sy = (bitmap.height - side) / 2
+            val cropped = Bitmap.createBitmap(bitmap, sx, sy, side, side)
+            val scaled = Bitmap.createScaledBitmap(cropped, maxSide, maxSide, true)
+
+            val avatarDir = File(context.cacheDir, "avatars")
+            if (!avatarDir.exists()) avatarDir.mkdirs()
+            val localFile = File(avatarDir, avatarFileName)
+
+            java.io.FileOutputStream(localFile).use { out ->
+                scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+
+            val provider = if (config.type == com.cloudchat.model.StorageType.S3) {
+                S3StorageProvider(config, config.saveDir)
+            } else {
+                WebDavStorageProvider(config, config.saveDir, false)
+            }
+
+            localFile.inputStream().use { input ->
+                provider.uploadFile(input, avatarFileName, "image/jpeg", localFile.length(), null)
+            }
+
+            return@withContext avatarFileName
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Failed to upload avatar from bitmap", e)
             null
         }
     }

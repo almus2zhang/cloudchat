@@ -479,11 +479,31 @@ fun SettingsScreen(onBack: () -> Unit) {
                             coroutineScope.launch {
                                 var finalConfig = config
                                 val uriToUpload = pendingAvatarUri
-                                if (uriToUpload != null && config.avatarUrl.startsWith("content://")) {
+                                val avatarUrl = config.avatarUrl
+                                if (uriToUpload != null && avatarUrl.startsWith("content://")) {
                                     val repo = com.cloudchat.repository.ChatRepository(context)
                                     val uploadedName = repo.uploadCustomAvatar(config, uriToUpload)
                                     if (!uploadedName.isNullOrEmpty()) {
                                         finalConfig = config.copy(avatarUrl = uploadedName)
+                                    }
+                                } else if (!avatarUrl.startsWith("avatar_") && !avatarUrl.startsWith("avatar____") && avatarUrl.isNotEmpty()) {
+                                    val repo = com.cloudchat.repository.ChatRepository(context)
+                                    try {
+                                        val uploadedName = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                            val url = java.net.URL(avatarUrl)
+                                            val conn = url.openConnection()
+                                            conn.connectTimeout = 5000
+                                            conn.readTimeout = 5000
+                                            val bmp = android.graphics.BitmapFactory.decodeStream(conn.getInputStream())
+                                            if (bmp != null) {
+                                                repo.uploadAvatarFromBitmap(config, bmp)
+                                            } else null
+                                        }
+                                        if (!uploadedName.isNullOrEmpty()) {
+                                            finalConfig = config.copy(avatarUrl = uploadedName)
+                                        }
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("SettingsScreen", "Failed to convert preset avatar to WebDAV file", e)
                                     }
                                 }
                                 settingsRepository.saveAccount(finalConfig)
