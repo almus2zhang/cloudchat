@@ -1534,24 +1534,43 @@ class ChatRepository(private val context: Context) {
     suspend fun forceUploadLocalHistory() = withContext(Dispatchers.IO) {
         val provider = storageProvider ?: return@withContext
         val config = currentConfig ?: return@withContext
+        // 禁止同步循环触发冲突检测
+        isRefreshingFromCloud.set(true)
         _uploadProgressPercent.value = 0
         _uploadProgressText.value = "准备上传..."
         try {
-            val messages = _messages.value
+            val allMessages = _messages.value
+            // 过滤已删除的条目
+            val messages = allMessages.filter { !it.isDeleted }
             if (messages.isEmpty()) {
                 _uploadProgressPercent.value = -1
+                isRefreshingFromCloud.set(false)
                 return@withContext
             }
             val total = messages.size
+            
+            // 先统计文件数量
+            var fileCount = 0
+            messages.forEach { msg ->
+                val fileName = msg.content
+                if (msg.type in listOf(com.cloudchat.model.MessageType.IMAGE,
+                        com.cloudchat.model.MessageType.VIDEO,
+                        com.cloudchat.model.MessageType.AUDIO) && fileName.isNotBlank()) {
+                    val localFile = getLocalFile(msg.id, fileName)
+                    if (localFile.exists() && localFile.length() > 0) fileCount++
+                    if (!msg.thumbnailUrl.isNullOrBlank()) fileCount++
+                }
+            }
+            _uploadProgressText.value = "共 ${total} 条记录，${fileCount} 个文件，开始上传..."
             
             // 先删除服务器旧文件
             try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
             
             // 按 shard 分批上传（每批 100 条），保留原始时间戳
-            // 先上传附件文件，再上传 JSON
             val shards = messages.chunked(100)
             val shardNames = shards.mapIndexed { i, _ -> "chat_shard_${i}.json" }
             var uploaded = 0
+            var uploadedFiles = 0
             shards.forEachIndexed { i, chunk ->
                 // 先上传每条消息的附件文件
                 chunk.forEach { msg ->
@@ -1568,6 +1587,7 @@ class ChatRepository(private val context: Context) {
                             }
                             try {
                                 provider.uploadFile(localFile.inputStream(), fileName, contentType, localFile.length()) { _ -> }
+                                uploadedFiles++
                             } catch (e: Exception) {
                                 Log.w("ChatRepository", "Failed to upload file $fileName for msg ${msg.id}", e)
                             }
@@ -1579,6 +1599,7 @@ class ChatRepository(private val context: Context) {
                             if (thumbFile.exists() && thumbFile.length() > 0) {
                                 try {
                                     provider.uploadFile(thumbFile.inputStream(), thumbName, "image/jpeg", thumbFile.length()) { _ -> }
+                                    uploadedFiles++
                                 } catch (e: Exception) {
                                     Log.w("ChatRepository", "Failed to upload thumbnail $thumbName", e)
                                 }
@@ -1591,16 +1612,18 @@ class ChatRepository(private val context: Context) {
                 uploaded += chunk.size
                 val pct = (uploaded * 100 / total).coerceAtMost(100)
                 _uploadProgressPercent.value = pct
-                _uploadProgressText.value = "正在上传 ${uploaded}/${total} 条记录..."
+                _uploadProgressText.value = "正在上传记录 ${uploaded}/${total}，文件 ${uploadedFiles}/${fileCount}..."
             }
             provider.uploadText(gson.toJson(shardNames), "chat_index.json")
             _uploadProgressPercent.value = 100
-            _uploadProgressText.value = "上传完成，共 ${total} 条记录"
-            Log.i("ChatRepository", "forceUploadLocalHistory: uploaded $total messages in ${shards.size} shards")
+            _uploadProgressText.value = "history 修复完成！共上传 ${total} 条记录，${uploadedFiles} 个文件"
+            Log.i("ChatRepository", "forceUploadLocalHistory: uploaded $total messages, $uploadedFiles files in ${shards.size} shards")
         } catch (e: Exception) {
             Log.e("ChatRepository", "forceUploadLocalHistory failed", e)
             _uploadProgressPercent.value = -1
             _uploadProgressText.value = "上传失败：${e.message}"
+        } finally {
+            isRefreshingFromCloud.set(false)
         }
     }
     
