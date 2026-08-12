@@ -9,7 +9,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.cloudchat"
-            android:targetClass="com.cloudchat.MainActivity">
+            android:targetClass="com.cloudchat.QuickActionActivity">
             <extra android:name="quick_action" android:value="send_image" />
         </intent>
     </shortcut>
@@ -22,7 +22,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.cloudchat"
-            android:targetClass="com.cloudchat.MainActivity">
+            android:targetClass="com.cloudchat.QuickActionActivity">
             <extra android:name="quick_action" android:value="send_voice" />
         </intent>
     </shortcut>
@@ -35,7 +35,7 @@
         <intent
             android:action="android.intent.action.VIEW"
             android:targetPackage="com.cloudchat"
-            android:targetClass="com.cloudchat.MainActivity">
+            android:targetClass="com.cloudchat.QuickActionActivity">
             <extra android:name="quick_action" android:value="send_text" />
         </intent>
     </shortcut>
