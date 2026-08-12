@@ -208,22 +208,52 @@ object DiaryGenerator {
             return groups.joinToString("\n") { item ->
                 val date = formatDate(item.timestamp)
                 val msg = item.messages[0]
-                val mediaUrl = resolver.resolve(msg)
-                var cardMedia = ""
-                when (msg.type) {
-                    MessageType.IMAGE -> cardMedia = "<div class=\"card-image-wrap\"><img src=\"$mediaUrl\" class=\"card-img\" loading=\"lazy\" onclick=\"openLightbox(this.src)\"/></div>"
-                    MessageType.VIDEO -> cardMedia = "<div class=\"card-video-wrap\"><video src=\"$mediaUrl\" controls preload=\"none\" class=\"card-video\"></video></div>"
-                    MessageType.AUDIO -> cardMedia = "<div class=\"card-audio-wrap\"><audio src=\"$mediaUrl\" controls preload=\"none\"></audio></div>"
-                    else -> {}
-                }
                 val isLocation = msg.content.startsWith("[位置]")
+
+                val cardMedia: String
+                if (item.isGroup) {
+                    // 宫格聚合：渲染所有图片/视频
+                    val isAllMedia = item.messages.all { it.type == MessageType.IMAGE || it.type == MessageType.VIDEO }
+                    if (isAllMedia) {
+                        val count = item.messages.size
+                        val gridClass = "grid-count-${minOf(count, 9)}"
+                        val imgs = item.messages.joinToString("") { s ->
+                            val u = resolver.resolve(s)
+                            if (s.type == MessageType.VIDEO) "<video src=\"$u\" controls preload=\"none\" class=\"card-grid-img\"></video>"
+                            else "<img src=\"$u\" class=\"card-grid-img\" loading=\"lazy\" onclick=\"openLightbox(this.src)\"/>"
+                        }
+                        val captions = item.messages.mapNotNull { it.caption ?: it.locationAddress }.filter { it.isNotBlank() }
+                        cardMedia = "<div class=\"card-grid-container $gridClass\">$imgs</div>" +
+                            (if (captions.isNotEmpty()) "<div class=\"card-caption\">${captions.joinToString(" ") { escapeHtml(it) }}</div>" else "")
+                    } else {
+                        // 混合内容组：逐条渲染
+                        cardMedia = "<div class=\"card-group\">" + item.messages.joinToString("") { s ->
+                            val u = resolver.resolve(s)
+                            when (s.type) {
+                                MessageType.IMAGE -> "<img src=\"$u\" class=\"card-img\" loading=\"lazy\" onclick=\"openLightbox(this.src)\"/>"
+                                MessageType.VIDEO -> "<video src=\"$u\" controls preload=\"none\" class=\"card-video\"></video>"
+                                MessageType.AUDIO -> "<audio src=\"$u\" controls preload=\"none\"></audio>"
+                                else -> "<div class=\"card-text\">${escapeHtml(s.content)}</div>"
+                            }
+                        } + "</div>"
+                    }
+                } else {
+                    val mediaUrl = resolver.resolve(msg)
+                    cardMedia = when (msg.type) {
+                        MessageType.IMAGE -> "<div class=\"card-image-wrap\"><img src=\"$mediaUrl\" class=\"card-img\" loading=\"lazy\" onclick=\"openLightbox(this.src)\"/></div>"
+                        MessageType.VIDEO -> "<div class=\"card-video-wrap\"><video src=\"$mediaUrl\" controls preload=\"none\" class=\"card-video\"></video></div>"
+                        MessageType.AUDIO -> "<div class=\"card-audio-wrap\"><audio src=\"$mediaUrl\" controls preload=\"none\"></audio></div>"
+                        else -> ""
+                    }
+                }
+
                 val textStr = if (isLocation) (msg.locationAddress ?: msg.content) else (if (msg.type == MessageType.TEXT) msg.content else (msg.caption ?: ""))
                 "<div class=\"timeline-node\"><div class=\"timeline-dot\"></div>" +
                     "<div class=\"timeline-content-card\">" +
                     "<div class=\"card-header\"><span class=\"card-date\">${date.full}</span>" +
                     (if (isLocation) "<span class=\"location-badge\">📍 ${escapeHtml(textStr)}</span>" else "") +
                     "</div>$cardMedia" +
-                    (if (!isLocation && textStr.isNotBlank()) "<div class=\"card-text\">${escapeHtml(textStr)}</div>" else "") +
+                    (if (!isLocation && textStr.isNotBlank() && !item.isGroup) "<div class=\"card-text\">${escapeHtml(textStr)}</div>" else "") +
                     "</div></div>"
             }
         }
@@ -405,6 +435,16 @@ object DiaryGenerator {
             .theme-journal .timeline-content-card { background: #fff; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.04); border: 1px solid #e2e8f0; }
             .theme-journal .card-header { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 13px; color: #64748b; }
             .theme-journal .card-img { max-height: 400px; width: 100%; object-fit: cover; border-radius: 8px; cursor: pointer; }
+            .theme-journal .card-grid-container { display: grid; gap: 4px; margin-bottom: 8px; }
+            .theme-journal .card-grid-container.grid-count-1 { grid-template-columns: 1fr; }
+            .theme-journal .card-grid-container.grid-count-2 { grid-template-columns: repeat(2, 1fr); }
+            .theme-journal .card-grid-container.grid-count-3 { grid-template-columns: repeat(3, 1fr); }
+            .theme-journal .card-grid-container.grid-count-4 { grid-template-columns: repeat(2, 1fr); }
+            .theme-journal .card-grid-container.grid-count-5, .theme-journal .card-grid-container.grid-count-6, .theme-journal .card-grid-container.grid-count-7, .theme-journal .card-grid-container.grid-count-8, .theme-journal .card-grid-container.grid-count-9 { grid-template-columns: repeat(3, 1fr); }
+            .theme-journal .card-grid-img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 6px; cursor: pointer; }
+            .theme-journal .card-caption { font-size: 14px; color: #334155; line-height: 1.6; margin-top: 6px; }
+            .theme-journal .card-group { display: flex; flex-direction: column; gap: 8px; }
+            .theme-journal .card-group .card-img { max-height: 300px; width: 100%; object-fit: cover; border-radius: 8px; cursor: pointer; }
             .theme-journal .card-text { font-size: 15px; color: #334155; line-height: 1.7; white-space: pre-wrap; margin-top: 10px; }
             .location-badge { background: #e1f5fe; color: #0288d1; padding: 4px 10px; border-radius: 20px; font-size: 12px; }
             """.trimIndent()
