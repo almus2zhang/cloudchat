@@ -38,6 +38,19 @@ class S3StorageProvider(
             return if (root.isEmpty()) "$userDir/" else "$root/$userDir/"
         }
 
+    // 校验「设定的用户目录」（serverPath 各段 + currentUser）是否安全：
+    // 仅允许数字、字母、下划线、连字符，不能有其他字符。
+    private fun isValidUserDir(): Boolean {
+        val segments = buildList {
+            val root = config.serverPath.trim().removePrefix("/").removeSuffix("/")
+            if (root.isNotEmpty()) addAll(root.split('/').filter { it.isNotEmpty() })
+            if (currentUser.isNotBlank()) add(currentUser)
+        }
+        if (segments.isEmpty()) return false
+        val valid = Regex("^[a-zA-Z0-9_-]+$")
+        return segments.all { it.length <= 255 && valid.matches(it) && it != "." && it != ".." }
+    }
+
     override suspend fun testConnection(): Result<String> = withContext(Dispatchers.IO) {
         try {
             s3Client.listBuckets()
@@ -85,6 +98,10 @@ class S3StorageProvider(
     }
 
     override suspend fun deleteFile(fileName: String): Unit = withContext(Dispatchers.IO) {
+        if (!isValidUserDir()) {
+            Log.e("S3Storage", "Refusing to delete: user directory is invalid (must be alphanumeric/_- only)")
+            return@withContext
+        }
         val name = fileName.trim()
         if (name.isBlank() || name == "." || name == ".." ||
             name.startsWith("/") || name.startsWith("\\") ||

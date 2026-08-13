@@ -121,6 +121,20 @@ class WebDavStorageProvider(
         return name
     }
 
+    // 校验「设定的用户目录」（serverPath 各段 + currentUser）是否安全：
+    // 仅允许数字、字母、下划线、连字符，不能有任何其他字符。
+    // 用于移动/删除操作前，确保操作仅限定在合法的用户目录范围内。
+    private fun isValidUserDir(): Boolean {
+        val segments = buildList {
+            val root = config.serverPath.trim().removePrefix("/").removeSuffix("/")
+            if (root.isNotEmpty()) addAll(root.split('/').filter { it.isNotEmpty() })
+            if (currentUser.isNotBlank()) add(currentUser)
+        }
+        if (segments.isEmpty()) return false
+        val valid = Regex("^[a-zA-Z0-9_-]+$")
+        return segments.all { it.length <= 255 && valid.matches(it) && it != "." && it != ".." }
+    }
+
     private val baseUrl: String
         get() {
             val now = System.currentTimeMillis()
@@ -417,6 +431,10 @@ class WebDavStorageProvider(
     }
 
     override suspend fun deleteFile(fileName: String): Unit = withContext(Dispatchers.IO) {
+        if (!isValidUserDir()) {
+            Log.e("WebDavStorage", "Refusing to delete: user directory is invalid (must be alphanumeric/_- only)")
+            return@withContext
+        }
         val safe = safeFileName(fileName) ?: run {
             Log.e("WebDavStorage", "Refusing to delete unsafe fileName: '$fileName'")
             return@withContext
@@ -448,6 +466,10 @@ class WebDavStorageProvider(
     }
 
     override suspend fun recycleFile(fileName: String): Unit = withContext(Dispatchers.IO) {
+        if (!isValidUserDir()) {
+            Log.e("WebDavStorage", "Refusing to recycle: user directory is invalid (must be alphanumeric/_- only)")
+            return@withContext
+        }
         val safe = safeFileName(fileName) ?: run {
             Log.e("WebDavStorage", "Refusing to recycle unsafe fileName: '$fileName'")
             return@withContext
@@ -615,6 +637,11 @@ class WebDavStorageProvider(
 
     // 将目录（含其全部内容，无论是否为空）移动到 .trash 回收站
     private suspend fun moveDirectoryToTrash(dirPath: String): Boolean {
+        // 移动操作仅限设定的用户目录内：用户目录名必须只含数字字母和 _ -
+        if (!isValidUserDir()) {
+            Log.e("WebDavStorage", "Refusing to move directory: user directory is invalid (must be alphanumeric/_- only)")
+            return false
+        }
         // 纵深防御：只允许移动 "diary/<单段目录名>" 形式的子目录，
         // 拒绝空路径、路径穿越（..）、绝对路径、非法字符、以及数据根目录本身。
         val safePath = dirPath.trim('/')
