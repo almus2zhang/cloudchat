@@ -1885,12 +1885,17 @@ class ChatRepository(private val context: Context) {
         syncHistory()
     }
 
-    suspend fun packIntoFolder(messages: List<com.cloudchat.model.ChatMessage>, annotation: String, existingFolderId: String? = null) {
+    suspend fun packIntoFolder(
+        messages: List<com.cloudchat.model.ChatMessage>,
+        annotation: String,
+        existingFolderId: String? = null,
+        parentFolderId: String? = null
+    ) {
         if (messages.isEmpty()) return
-        
+
         val folderId = existingFolderId ?: "folder_${java.util.UUID.randomUUID()}"
         val now = System.currentTimeMillis()
-        
+
         if (existingFolderId == null) {
             val config = currentConfig ?: return
             val folderMsg = com.cloudchat.model.ChatMessage(
@@ -1901,9 +1906,11 @@ class ChatRepository(private val context: Context) {
                 timestamp = now,
                 isOutgoing = true,
                 status = com.cloudchat.model.MessageStatus.SUCCESS,
+                // 新文件夹归属 parentFolderId（即当前所在文件夹），实现嵌套
+                folderId = parentFolderId,
                 lastModified = now
             )
-            
+
             _messages.update { list ->
                 val updatedList = list.toMutableList()
                 updatedList.add(folderMsg)
@@ -1932,15 +1939,32 @@ class ChatRepository(private val context: Context) {
         syncHistory()
     }
 
-    suspend fun unpackFolder(folderId: String) {
+    suspend fun unpackFolder(folderId: String, recursive: Boolean = false) {
         val now = System.currentTimeMillis()
-        _messages.update { list ->
-            list.map { msg ->
-                if (msg.id == folderId) {
-                    msg.copy(isDeleted = true, lastModified = now)
-                } else if (msg.folderId == folderId) {
-                    msg.copy(folderId = null, lastModified = now)
-                } else msg
+        if (recursive) {
+            // 全部拆散：递归收集所有后代文件夹 id，一并拆散
+            val descendants = collectDescendantFolderIds(folderId)
+            val idsToUnpack = (setOf(folderId) + descendants)
+            _messages.update { list ->
+                list.map { msg ->
+                    when {
+                        msg.id in idsToUnpack -> msg.copy(isDeleted = true, lastModified = now)
+                        msg.folderId in idsToUnpack -> msg.copy(folderId = null, lastModified = now)
+                        else -> msg
+                    }
+                }
+            }
+        } else {
+            // 只拆散一级：仅将直接子项移出（子文件夹保留原 folderId，仍挂在被删文件夹之下则一并上移一级）
+            _messages.update { list ->
+                list.map { msg ->
+                    when {
+                        msg.id == folderId -> msg.copy(isDeleted = true, lastModified = now)
+                        // 直接子项（含子文件夹）移出到该文件夹的父级
+                        msg.folderId == folderId -> msg.copy(folderId = null, lastModified = now)
+                        else -> msg
+                    }
+                }
             }
         }
         syncHistory()
@@ -1957,6 +1981,96 @@ class ChatRepository(private val context: Context) {
             }
         }
         syncHistory()
+    }
+
+    /** 把指定消息（含文件夹本身）移动到目标文件夹；自动防循环嵌套 */
+    suspend fun moveIntoFolder(messageIds: List<String>, targetFolderId: String) {
+        if (messageIds.isEmpty()) return
+        val now = System.currentTimeMillis()
+
+        // 防循环：目标文件夹不能是待移动文件夹中的任何一个，也不能是其后代
+        val targetAncestors = collectAncestorFolderIds(targetFolderId) + targetFolderId
+        val movingFolderIds = _messages.value
+            .filter { it.id in messageIds && it.type == com.cloudchat.model.MessageType.FOLDER }
+            .map { it.id }
+            .toSet()
+        if (movingFolderIds.any { targetAncestors.contains(it) }) return
+
+        _messages.update { list ->
+            list.map { msg ->
+                if (msg.id in messageIds) {
+                    msg.copy(folderId = targetFolderId, lastModified = now)
+                } else msg
+            }
+        }
+        syncHistory()
+    }
+
+    /** 递归收集某个文件夹的所有后代文件夹 id（不含自身） */
+    fun collectDescendantFolderIds(rootFolderId: String): Set<String> {
+        val result = mutableSetOf<String>()
+        val queue = ArrayDeque<String>()
+        queue.add(rootFolderId)
+        val visited = mutableSetOf<String>()
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            if (!visited.add(current)) continue
+            val children = _messages.value.filter {
+                it.type == com.cloudchat.model.MessageType.FOLDER && it.folderId == current
+            }
+            children.forEach { child ->
+                if (result.add(child.id)) queue.add(child.id)
+            }
+        }
+        return result
+    }
+
+    /** 收集某个文件夹的祖先链（从父到顶层），用于防循环校验 */
+    fun collectAncestorFolderIds(folderId: String): List<String> {
+        val result = mutableListOf<String>()
+        val visited = mutableSetOf<String>()
+        var current = _messages.value.find { it.id == folderId }
+        while (current != null && current.folderId != null) {
+            val parentId = current.folderId!!
+            if (!visited.add(parentId)) break
+            result.add(parentId)
+            current = _messages.value.find { it.id == parentId }
+        }
+        return result
+    }
+
+    /** 递归收集指定文件夹下的所有消息（排除 FOLDER 本身与 isDeleted），用于生成日记 */
+    fun collectFolderMessagesRecursive(folderId: String): List<ChatMessage> {
+        val result = mutableListOf<ChatMessage>()
+        val visited = mutableSetOf<String>()
+        val queue = ArrayDeque<String>()
+        queue.add(folderId)
+        while (queue.isNotEmpty()) {
+            val current = queue.removeFirst()
+            if (!visited.add(current)) continue
+            val children = _messages.value.filter {
+                !it.isDeleted && it.folderId == current
+            }
+            children.forEach { child ->
+                if (child.type == com.cloudchat.model.MessageType.FOLDER) {
+                    queue.add(child.id)
+                } else {
+                    result.add(child)
+                }
+            }
+        }
+        return result
+    }
+
+    /** 递归构建文件夹树（用于日记折叠渲染） */
+    fun collectFolderTree(folderId: String): FolderNode {
+        val folderMsg = _messages.value.find { it.id == folderId }
+        val name = folderMsg?.content?.ifBlank { "文件夹" } ?: "文件夹"
+        val children = _messages.value.filter { !it.isDeleted && it.folderId == folderId }
+        val messages = children.filter { it.type != com.cloudchat.model.MessageType.FOLDER }
+        val subFolders = children.filter { it.type == com.cloudchat.model.MessageType.FOLDER }
+            .map { collectFolderTree(it.id) }
+        return FolderNode(folderId, name, messages, subFolders)
     }
 
     suspend fun syncAllMediaFiles(onProgress: (Int, Int) -> Unit) = withContext(Dispatchers.IO) {
@@ -2168,7 +2282,8 @@ class ChatRepository(private val context: Context) {
         password: String,
         coverUri: android.net.Uri?,
         messages: List<ChatMessage>,
-        onProgress: ((Int, String) -> Unit)? = null
+        onProgress: ((Int, String) -> Unit)? = null,
+        rootFolderId: String? = null
     ): String? = withContext(Dispatchers.IO) {
         val provider = storageProvider ?: return@withContext null
         val config = currentConfig ?: SettingsRepository(context).currentConfig.firstOrNull() ?: return@withContext null
@@ -2364,7 +2479,8 @@ class ChatRepository(private val context: Context) {
             }
         }
 
-        val html = DiaryGenerator.generateHtml(title, authorStr, templateId, password, effectiveMessages, resolver, coverUrl)
+        val folderTree = if (rootFolderId != null) collectFolderTree(rootFolderId) else null
+        val html = DiaryGenerator.generateHtml(title, authorStr, templateId, password, effectiveMessages, resolver, coverUrl, folderTree)
 
         onProgress?.invoke(85, "正在上传 index.html...")
         val htmlOk = provider.uploadFileToPath(html.byteInputStream(Charsets.UTF_8), "$targetDir/index.html", "text/html; charset=utf-8")
@@ -2387,4 +2503,12 @@ data class DiaryFileItem(
     val webUrl: String,
     val size: Long,
     val lastModified: Long
+)
+
+/** 文件夹树节点（用于日记递归折叠渲染） */
+data class FolderNode(
+    val folderId: String,
+    val name: String,
+    val messages: List<ChatMessage>,
+    val children: List<FolderNode>
 )

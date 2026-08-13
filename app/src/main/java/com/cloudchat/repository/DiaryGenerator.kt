@@ -125,7 +125,8 @@ object DiaryGenerator {
         password: String,
         messages: List<ChatMessage>,
         resolver: MediaUrlResolver,
-        coverUrl: String? = null
+        coverUrl: String? = null,
+        folderTree: FolderNode? = null
     ): String {
         val isWeChat = templateId == "wechat"
         val sorted = messages.sortedWith(
@@ -177,8 +178,9 @@ object DiaryGenerator {
         }
 
         // 微信朋友圈渲染
-        fun renderWeChat(): String {
-            return groups.joinToString("\n") { item ->
+        fun renderWeChat(list: List<ChatMessage>): String {
+            val g = groupMessages(list.sortedWith(if (isWeChat) compareByDescending { it.timestamp } else compareBy { it.timestamp }))
+            return g.joinToString("\n") { item ->
                 val date = formatDate(item.timestamp)
                 val contentBlock: String
                 if (item.isGroup) {
@@ -215,8 +217,9 @@ object DiaryGenerator {
         }
 
         // 简约现代时间轴渲染
-        fun renderJournal(): String {
-            return groups.joinToString("\n") { item ->
+        fun renderJournal(list: List<ChatMessage>): String {
+            val g = groupMessages(list.sortedWith(if (isWeChat) compareByDescending { it.timestamp } else compareBy { it.timestamp }))
+            return g.joinToString("\n") { item ->
                 val date = formatDate(item.timestamp)
                 val msg = item.messages[0]
                 val isLocation = msg.content.startsWith("[位置]")
@@ -269,6 +272,36 @@ object DiaryGenerator {
             }
         }
 
+        // 计算文件夹节点（含子文件夹）的消息总数
+        fun countMessages(node: FolderNode): Int =
+            node.messages.size + node.children.sumOf { child -> countMessages(child) }
+
+        // 递归渲染单个文件夹节点：先渲染直接消息，再对子文件夹用 details/summary 折叠包裹
+        fun renderFolderNode(node: FolderNode): String {
+            val directHtml = if (isWeChat) renderWeChat(node.messages) else renderJournal(node.messages)
+            val childrenHtml = node.children.joinToString("\n") { child ->
+                "<details class=\"diary-folder\">" +
+                    "<summary class=\"diary-folder-summary\">📁 ${escapeHtml(child.name)}" +
+                    "<span class=\"diary-folder-count\">(${countMessages(child)})</span></summary>" +
+                    "<div class=\"diary-folder-content\">${renderFolderNode(child)}</div>" +
+                    "</details>"
+            }
+            return directHtml + childrenHtml
+        }
+
+        // 当有文件夹树时：顶层消息 + 子文件夹折叠；否则平铺渲染
+        val feedHtml: String = if (folderTree != null) {
+            val topHtml = if (isWeChat) renderWeChat(folderTree.messages) else renderJournal(folderTree.messages)
+            val subFoldersHtml = folderTree.children.joinToString("\n") { child ->
+                "<details class=\"diary-folder\"><summary class=\"diary-folder-summary\">📁 ${escapeHtml(child.name)}" +
+                    "<span class=\"diary-folder-count\">(${countMessages(child)})</span></summary>" +
+                    "<div class=\"diary-folder-content\">${renderFolderNode(child)}</div></details>"
+            }
+            topHtml + subFoldersHtml
+        } else {
+            if (isWeChat) renderWeChat(sorted) else renderJournal(sorted)
+        }
+
         val coverStyle = if (coverUrl != null) {
             " style=\"background-image: url('$coverUrl'); background-size: cover; background-position: center;\""
         } else ""
@@ -276,12 +309,12 @@ object DiaryGenerator {
             "<div class=\"wechat-container\"><div class=\"wechat-header-cover\"$coverStyle><div class=\"cover-bg\"></div>" +
                 "<div class=\"user-profile\"><span class=\"user-name\">${escapeHtml(authorStr)}</span></div></div>" +
                 "<div class=\"diary-title-banner\"><h2>📂 ${escapeHtml(titleStr)}</h2><p>共收录 ${sorted.size} 条记录 (${groupedCount} 组动态)</p></div>" +
-                "<div class=\"wechat-feed\">${renderWeChat()}</div></div>"
+                "<div class=\"wechat-feed\">$feedHtml</div></div>"
         } else {
             "<div class=\"diary-container\"><header class=\"main-header\"$coverStyle><div class=\"header-inner\">" +
                 "<h1>📖 ${escapeHtml(titleStr)}</h1>" +
                 "<p class=\"subtitle\">记录人：${escapeHtml(authorStr)} · 共 ${groupedCount} 条动态</p></div></header>" +
-                "<main class=\"timeline-container\">${renderJournal()}</main></div>"
+                "<main class=\"timeline-container\">$feedHtml</main></div>"
         }
 
         return buildString {
@@ -393,6 +426,14 @@ object DiaryGenerator {
         .lightbox-modal { display: none; position: fixed; z-index: 9999; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.9); align-items: center; justify-content: center; }
         .lightbox-content { max-width: 90%; max-height: 90%; border-radius: 4px; }
         .lightbox-close { position: absolute; top: 20px; right: 35px; color: #fff; font-size: 40px; font-weight: bold; cursor: pointer; }
+        .diary-folder { margin: 10px 0; border: 1px solid #e2e2e2; border-radius: 10px; overflow: hidden; background: #fafafa; }
+        .diary-folder-summary { cursor: pointer; padding: 10px 14px; font-weight: 700; font-size: 14px; color: #576b95; background: #f3f4f7; list-style: none; display: flex; align-items: center; gap: 6px; user-select: none; }
+        .diary-folder-summary::-webkit-details-marker { display: none; }
+        .diary-folder-summary::before { content: "▸"; transition: transform 0.2s; font-size: 12px; }
+        .diary-folder[open] > .diary-folder-summary::before { transform: rotate(90deg); }
+        .diary-folder-count { font-size: 11px; color: #999; font-weight: 400; margin-left: auto; }
+        .diary-folder-content { padding: 8px 10px; }
+        .diary-folder .diary-folder { margin: 6px 0; }
         """.trimIndent()
 
         return if (templateId == "wechat") {

@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -125,7 +126,8 @@ fun MainScreen(
     
     var inputText by remember { mutableStateOf("") }
     var isVoiceMode by remember { mutableStateOf(false) }
-    var currentFolderId by remember { mutableStateOf<String?>(null) }
+    var folderStack by remember { mutableStateOf(listOf<String>()) }
+    val currentFolderId = folderStack.lastOrNull()
     var searchQuery by remember { mutableStateOf("") }
     var mediaPagerIndex by remember { mutableStateOf<Int?>(null) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
@@ -146,6 +148,8 @@ fun MainScreen(
     var showDeleteMessagesConfirmDialog by remember { mutableStateOf(false) }
     var showPackFolderDialog by remember { mutableStateOf(false) }
     var showUnpackFolderConfirmDialog by remember { mutableStateOf(false) }
+    var showChooseParentFolderDialog by remember { mutableStateOf(false) }
+    var showMoveIntoFolderDialog by remember { mutableStateOf(false) }
     var folderAnnotation by remember { mutableStateOf("") }
     var showRenameFolderDialog by remember { mutableStateOf(false) }
     var renameFolderText by remember { mutableStateOf("") }
@@ -337,7 +341,7 @@ fun MainScreen(
             setTopBarTitle("")
             setTopBarTitleComposable(null)
             setTopBarNavigationIcon {
-                currentFolderId = null
+                folderStack = folderStack.dropLast(1)
             }
         } else {
             setTopBarNavigationIcon(null)
@@ -466,7 +470,7 @@ fun MainScreen(
         } else if (isAttachmentPanelVisible) {
             isAttachmentPanelVisible = false
         } else if (currentFolderId != null) {
-            currentFolderId = null
+            folderStack = folderStack.dropLast(1)
         } else if (isPrivacyMode) {
             isPrivacyMode = false
             viewOnlyPrivacyItems = false
@@ -989,31 +993,71 @@ fun MainScreen(
                 }
         ) {
 
-            // Folder header: show the folder name/annotation while browsing inside it
-            if (currentFolderId != null) {
-                val folder = messages.find { it.id == currentFolderId }
-                if (folder != null) {
-                    Surface(
-                        tonalElevation = 1.dp,
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.fillMaxWidth()
+            // Folder breadcrumb: show multi-level path (A -> B -> C), each level clickable
+            if (folderStack.isNotEmpty()) {
+                val breadcrumbNames = folderStack.map { id ->
+                    messages.find { it.id == id }?.content?.ifBlank { "文件夹" } ?: "文件夹"
+                }
+                // 过长时折叠中间层级：始终显示首层和末层，中间用 "..." 省略
+                val displayItems: List<Pair<String, String?>> =
+                    if (breadcrumbNames.size <= 4) {
+                        breadcrumbNames.mapIndexed { idx, name -> name to folderStack[idx] }
+                    } else {
+                        val first = breadcrumbNames.first() to folderStack.first()
+                        val last = breadcrumbNames.last() to folderStack.last()
+                        listOf(first, "..." to null, last)
+                    }
+                Surface(
+                    tonalElevation = 1.dp,
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .horizontalScroll(rememberScrollState())
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Folder,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = if (folder.content.isNotBlank()) folder.content else "文件夹",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        displayItems.forEachIndexed { index, (label, targetId) ->
+                            if (index > 0) {
+                                Text(
+                                    text = "›",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            if (targetId == null) {
+                                Text(
+                                    text = label,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            } else {
+                                val isLast = targetId == folderStack.lastOrNull()
+                                Text(
+                                    text = label,
+                                    color = if (isLast) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            // 点击某级快速跳转：截断 folderStack 到该级
+                                            val idx = folderStack.indexOf(targetId)
+                                            if (idx >= 0) folderStack = folderStack.take(idx + 1)
+                                        }
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -1054,7 +1098,7 @@ fun MainScreen(
                 Modifier.pointerInput(Unit) {
                     detectHorizontalDragGestures { change, dragAmount ->
                         if (dragAmount > 50) { // Swipe right to exit folder
-                            currentFolderId = null
+                            folderStack = folderStack.dropLast(1)
                             change.consume()
                         }
                     }
@@ -1207,9 +1251,9 @@ fun MainScreen(
                 val diaryTargetMessages = remember(messages, diaryGenerateTargetIds, diaryGenerateFolderId, showDiaryGenerateDialog) {
                     when {
                         diaryGenerateTargetIds != null -> messages.filter { it.id in diaryGenerateTargetIds!! }
-                        diaryGenerateFolderId != null -> messages.filter { it.folderId == diaryGenerateFolderId }
+                        diaryGenerateFolderId != null -> chatRepository.collectFolderMessagesRecursive(diaryGenerateFolderId!!)
                         else -> messages
-                    }.filter { !it.isDeleted && it.isHidden != true }
+                    }.filter { !it.isDeleted && it.isHidden != true && it.type != MessageType.FOLDER }
                 }
                 // 文件夹生成时，默认标题用文件夹名
                 val diaryDefaultTitle = diaryGenerateFolderId?.let { folderId ->
@@ -1224,7 +1268,10 @@ fun MainScreen(
                         diaryGenerateFolderId = null
                     },
                     onGenerate = { title, author, templateId, password, coverUri, onProgress ->
-                        chatRepository.generateDiary(title, author, templateId, password, coverUri, diaryTargetMessages, onProgress)
+                        chatRepository.generateDiary(
+                            title, author, templateId, password, coverUri, diaryTargetMessages, onProgress,
+                            rootFolderId = diaryGenerateFolderId
+                        )
                     },
                     onSuccess = {
                         showDiaryGenerateDialog = false
@@ -1322,7 +1369,7 @@ fun MainScreen(
                                     } else if (clickedMsg.type == MessageType.AUDIO) {
                                         playAudioMessage(clickedMsg)
                                     } else if (clickedMsg.type == MessageType.FOLDER) {
-                                        currentFolderId = clickedMsg.id
+                                        folderStack = folderStack + clickedMsg.id
                                     } else if (clickedMsg.type == MessageType.FILE) {
                                         openFileWithDefaultApp(context, chatRepository, clickedMsg)
                                     }
@@ -1729,11 +1776,17 @@ fun MainScreen(
                     // 3. Pack Folder
                     IconButton(onClick = {
                         val selectedMessages = messages.filter { selectedIds.contains(it.id) }
-                        val existingFolder = selectedMessages.find { it.type == MessageType.FOLDER }
-                            ?: if (currentFolderId != null) messages.find { it.id == currentFolderId } else null
+                        val folderMsgs = selectedMessages.filter { it.type == MessageType.FOLDER }
+                        if (folderMsgs.size >= 2) {
+                            // 选中含 2 个及以上文件夹：弹窗选择哪个作为父文件夹
+                            showChooseParentFolderDialog = true
+                        } else {
+                            val existingFolder = selectedMessages.find { it.type == MessageType.FOLDER }
+                                ?: if (currentFolderId != null) messages.find { it.id == currentFolderId } else null
 
-                        folderAnnotation = existingFolder?.content ?: ""
-                        showPackFolderDialog = true
+                            folderAnnotation = existingFolder?.content ?: ""
+                            showPackFolderDialog = true
+                        }
                     }) {
                         Icon(Icons.Default.Folder, contentDescription = "Pack Folder")
                     }
@@ -1748,6 +1801,13 @@ fun MainScreen(
                         }) {
                             Icon(Icons.Default.FolderOff, contentDescription = "Unpack Folder")
                         }
+                    }
+
+                    // 4b. Move into folder (移入文件夹) - 列出本级下所有文件夹，树形选择
+                    IconButton(onClick = {
+                        showMoveIntoFolderDialog = true
+                    }) {
+                        Icon(Icons.Default.DriveFileMove, contentDescription = "移入文件夹")
                     }
 
                     // 5. Combine / Merge (Assign groupId to all items so they group together and can be split)
@@ -1984,19 +2044,26 @@ fun MainScreen(
                 scope.launch {
                     val selectedMessages = messages.filter { selectedIds.contains(it.id) }
                     val existingFolder = selectedMessages.find { it.type == MessageType.FOLDER }
-                    chatRepository.packIntoFolder(selectedMessages.filter { it.type != MessageType.FOLDER }, annotation, existingFolder?.id)
+                    // 若在文件夹内打包且无已选文件夹，则新建子文件夹挂到当前文件夹下
+                    val parentFolderId = if (existingFolder == null) currentFolderId else null
+                    chatRepository.packIntoFolder(
+                        selectedMessages.filter { it.type != MessageType.FOLDER },
+                        annotation,
+                        existingFolder?.id,
+                        parentFolderId
+                    )
                     selectedIds = emptySet()
                 }
             },
             showUnpackFolderConfirmDialog = showUnpackFolderConfirmDialog,
             onUnpackConfirmDismiss = { showUnpackFolderConfirmDialog = false },
-            onUnpackConfirmConfirm = {
+            onUnpackConfirmConfirm = { recursive ->
                 showUnpackFolderConfirmDialog = false
                 scope.launch {
                     selectedIds.forEach { id ->
                         val msg = messages.find { it.id == id }
                         if (msg?.type == MessageType.FOLDER) {
-                            chatRepository.unpackFolder(id)
+                            chatRepository.unpackFolder(id, recursive)
                         }
                     }
                     val nonFolderIds = selectedIds.filter { id ->
@@ -2075,6 +2142,41 @@ fun MainScreen(
                 showDeleteMessagesConfirmDialog = false
             }
         )
+
+        // 选择父文件夹对话框：选中项含 >=2 个文件夹时，选择其中一个作为父文件夹
+        if (showChooseParentFolderDialog) {
+            val folderMsgs = messages.filter { selectedIds.contains(it.id) && it.type == MessageType.FOLDER }
+            ChooseParentFolderDialog(
+                folderMessages = folderMsgs,
+                onDismiss = { showChooseParentFolderDialog = false },
+                onConfirm = { parentId ->
+                    showChooseParentFolderDialog = false
+                    scope.launch {
+                        // 其余项（含其它文件夹）全部放入选中的父文件夹
+                        val others = selectedIds.filter { it != parentId }
+                        chatRepository.moveIntoFolder(others.toList(), parentId)
+                        selectedIds = emptySet()
+                    }
+                }
+            )
+        }
+
+        // 移入文件夹对话框：列出本级下所有文件夹（树形可展开），选定后移入
+        if (showMoveIntoFolderDialog) {
+            MoveIntoFolderDialog(
+                chatRepository = chatRepository,
+                currentFolderId = currentFolderId,
+                selectedIds = selectedIds,
+                onDismiss = { showMoveIntoFolderDialog = false },
+                onConfirm = { targetFolderId ->
+                    showMoveIntoFolderDialog = false
+                    scope.launch {
+                        chatRepository.moveIntoFolder(selectedIds.toList(), targetFolderId)
+                        selectedIds = emptySet()
+                    }
+                }
+            )
+        }
 
         QuickActionDialogs(
             showQuickTextDialog = showQuickTextDialog,
@@ -4470,6 +4572,195 @@ fun ImageGroupBubble(
 }
 
 @Composable
+fun ChooseParentFolderDialog(
+    folderMessages: List<com.cloudchat.model.ChatMessage>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var selectedId by remember { mutableStateOf<String?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择父文件夹") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "选中了多个文件夹，请选择其中一个作为父文件夹，其余所有条目将放入其中。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                folderMessages.forEach { folder ->
+                    val isSelected = selectedId == folder.id
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(
+                                if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                                else MaterialTheme.colorScheme.surface
+                            )
+                            .clickable { selectedId = folder.id }
+                            .padding(horizontal = 12.dp, vertical = 10.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Folder,
+                            contentDescription = null,
+                            tint = if (isSelected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = folder.content.ifBlank { "文件夹" },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { selectedId?.let(onConfirm) },
+                enabled = selectedId != null
+            ) {
+                Text("确定")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+fun MoveIntoFolderDialog(
+    chatRepository: ChatRepository,
+    currentFolderId: String?,
+    selectedIds: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    val allMessages by chatRepository.messages.collectAsState()
+    var selectedFolderId by remember { mutableStateOf<String?>(null) }
+
+    // 列出"本级"下的所有文件夹：即 folderId == 当前文件夹 id（顶层为 null）
+    val siblings = allMessages.filter {
+        it.type == MessageType.FOLDER && !it.isDeleted &&
+            (it.folderId == currentFolderId || (currentFolderId == null && it.folderId.isNullOrEmpty()))
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("移入文件夹") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (siblings.isEmpty()) {
+                    Text(
+                        "当前层级下没有可移入的文件夹。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    siblings.forEach { folder ->
+                        FolderTreeNode(
+                            folder = folder,
+                            allMessages = allMessages,
+                            selectedFolderId = selectedFolderId,
+                            onSelect = { selectedFolderId = it },
+                            depth = 0
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { selectedFolderId?.let(onConfirm) },
+                enabled = selectedFolderId != null
+            ) {
+                Text("移入")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+fun FolderTreeNode(
+    folder: com.cloudchat.model.ChatMessage,
+    allMessages: List<com.cloudchat.model.ChatMessage>,
+    selectedFolderId: String?,
+    onSelect: (String) -> Unit,
+    depth: Int
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val children = allMessages.filter {
+        it.type == MessageType.FOLDER && !it.isDeleted && it.folderId == folder.id
+    }
+    val isSelected = selectedFolderId == folder.id
+
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(
+                    if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                    else MaterialTheme.colorScheme.surface
+                )
+                .clickable { onSelect(folder.id) }
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            if (children.isNotEmpty()) {
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(18.dp)
+                        .clickable { expanded = !expanded },
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Spacer(modifier = Modifier.width(18.dp))
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                imageVector = Icons.Default.Folder,
+                contentDescription = null,
+                tint = if (isSelected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = folder.content.ifBlank { "文件夹" },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        if (expanded && children.isNotEmpty()) {
+            Column(modifier = Modifier.padding(start = 16.dp)) {
+                children.forEach { child ->
+                    FolderTreeNode(
+                        folder = child,
+                        allMessages = allMessages,
+                        selectedFolderId = selectedFolderId,
+                        onSelect = onSelect,
+                        depth = depth + 1
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun MainScreenDialogs(
     chatRepository: ChatRepository,
     showPackFolderDialog: Boolean,
@@ -4479,7 +4770,7 @@ fun MainScreenDialogs(
     onPackFolderConfirm: (String) -> Unit,
     showUnpackFolderConfirmDialog: Boolean = false,
     onUnpackConfirmDismiss: () -> Unit = {},
-    onUnpackConfirmConfirm: () -> Unit = {},
+    onUnpackConfirmConfirm: (Boolean) -> Unit = {},
     isUnpackingFolderObj: Boolean = false,
     selectedCount: Int = 0,
     showEditTextDialog: Boolean,
@@ -4530,7 +4821,7 @@ fun MainScreenDialogs(
     if (showUnpackFolderConfirmDialog) {
         val titleText = if (isUnpackingFolderObj) "解散文件夹确认" else "移出文件夹确认"
         val bodyText = if (isUnpackingFolderObj) {
-            "确定要解散选中的文件夹并将所有条目移出吗？"
+            "确定要解散选中的文件夹吗？"
         } else {
             "确定要将选中的 ${selectedCount} 个条目移出文件夹吗？"
         }
@@ -4538,13 +4829,41 @@ fun MainScreenDialogs(
         AlertDialog(
             onDismissRequest = onUnpackConfirmDismiss,
             title = { Text(titleText) },
-            text = { Text(bodyText) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(bodyText)
+                    if (isUnpackingFolderObj) {
+                        Text(
+                            text = "请选择拆散方式：",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
             confirmButton = {
-                Button(
-                    onClick = onUnpackConfirmConfirm,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                ) {
-                    Text("确认移出")
+                if (isUnpackingFolderObj) {
+                    Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(
+                            onClick = { onUnpackConfirmConfirm(false) },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Text("只拆散一级")
+                        }
+                        Button(
+                            onClick = { onUnpackConfirmConfirm(true) },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary)
+                        ) {
+                            Text("全部拆散")
+                        }
+                    }
+                } else {
+                    Button(
+                        onClick = { onUnpackConfirmConfirm(false) },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("确认移出")
+                    }
                 }
             },
             dismissButton = {
