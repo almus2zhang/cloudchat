@@ -2062,14 +2062,17 @@ class ChatRepository(private val context: Context) {
         return result
     }
 
-    /** 递归构建文件夹树（用于日记折叠渲染） */
-    fun collectFolderTree(folderId: String): FolderNode {
+    /** 递归构建文件夹树（用于日记折叠渲染）；带 visited 防环 */
+    fun collectFolderTree(folderId: String): FolderNode = collectFolderTree(folderId, mutableSetOf())
+
+    private fun collectFolderTree(folderId: String, visited: MutableSet<String>): FolderNode {
         val folderMsg = _messages.value.find { it.id == folderId }
         val name = folderMsg?.content?.ifBlank { "文件夹" } ?: "文件夹"
         val children = _messages.value.filter { !it.isDeleted && it.folderId == folderId }
         val messages = children.filter { it.type != com.cloudchat.model.MessageType.FOLDER }
         val subFolders = children.filter { it.type == com.cloudchat.model.MessageType.FOLDER }
-            .map { collectFolderTree(it.id) }
+            .filter { visited.add(it.id) }   // 跳过已访问（防循环嵌套）
+            .map { collectFolderTree(it.id, visited) }
         return FolderNode(folderId, name, messages, subFolders)
     }
 

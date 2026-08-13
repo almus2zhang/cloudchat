@@ -700,125 +700,28 @@ fun MainScreen(
     // Inject search and sync icons into TopAppBar
     LaunchedEffect(isSearchActive, searchQuery, syncInterval, isServerConnected, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId, isSyncing, isMediaSyncing, mediaSyncProgress) {
         setTopBarActions {
-            if (isSearchActive) {
-                // Auto-focus when search is activated
-                LaunchedEffect(Unit) {
-                    searchFocusRequester.requestFocus()
-                }
-                
-                TextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    placeholder = { Text("Search messages...") },
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(end = 8.dp)
-                        .focusRequester(searchFocusRequester),
-                    singleLine = true,
-                    colors = TextFieldDefaults.textFieldColors(containerColor = Color.Transparent)
-                )
-                IconButton(modifier = Modifier.size(40.dp), onClick = {
-                    isSearchActive = false
-                    searchQuery = ""
-                }) {
-                    Icon(Icons.Default.Close, contentDescription = "Close Search")
-                }
-            } else if (isPrivacyMode) {
-                // Privacy space controls: view-only toggle / change password / exit.
-                IconButton(modifier = Modifier.size(40.dp), onClick = { viewOnlyPrivacyItems = !viewOnlyPrivacyItems }) {
-                    Icon(
-                        imageVector = if (viewOnlyPrivacyItems) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = "只查看隐私条目",
-                        tint = if (viewOnlyPrivacyItems) Color(0xFFFFC107) else Color.Gray
-                    )
-                }
-                IconButton(modifier = Modifier.size(40.dp), onClick = { showChangePrivacyPasswordDialog = true }) {
-                    Icon(Icons.Default.Lock, contentDescription = "修改密码")
-                }
-                IconButton(modifier = Modifier.size(40.dp), onClick = {
-                    isPrivacyMode = false
-                    viewOnlyPrivacyItems = false
-                }) {
-                    Icon(Icons.Default.Logout, contentDescription = "退出隐私模式")
-                }
-            } else {
-                val isFast = syncInterval == 1000L
-                
-                // Manual Refresh Button with spinning + progress ring when syncing
-                IconButton(modifier = Modifier.size(40.dp), onClick = {
-                    scope.launch { chatRepository.refreshHistoryFromCloud() }
-                }) {
-                    Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
-                        if (isSyncing) {
-                            // Indeterminate circular progress ring
-                            androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.size(28.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                            )
-                        }
-                        // Animated rotation for the icon when syncing
-                        val infiniteTransition = rememberInfiniteTransition(label = "syncSpin")
-                        val syncRotation by infiniteTransition.animateFloat(
-                            initialValue = 0f,
-                            targetValue = if (isSyncing) 360f else 0f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1000, easing = LinearEasing),
-                                repeatMode = RepeatMode.Restart
-                            ),
-                            label = "syncRotation"
-                        )
-                        Icon(
-                            imageVector = Icons.Default.Sync,
-                            contentDescription = "立即刷新",
-                            tint = if (isSyncing) MaterialTheme.colorScheme.primary
-                                   else if (isServerConnected) MaterialTheme.colorScheme.onSurface 
-                                   else MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(22.dp).then(
-                                if (isSyncing) Modifier.graphicsLayer { rotationZ = syncRotation } else Modifier
-                            )
-                        )
-                    }
-                }
-
-                // Sync Interval Toggle (Bolt icon colored by mode)
-                IconButton(modifier = Modifier.size(40.dp), onClick = {
-                    chatRepository.setSyncInterval(if (isFast) 5000L else 1000L)
-                }) {
-                    Icon(
-                        imageVector = Icons.Default.Bolt,
-                        contentDescription = if (isFast) "快速同步" else "普通同步",
-                        tint = if (isServerConnected) (if (isFast) Color(0xFFFFC107) else Color.Gray) else MaterialTheme.colorScheme.error
-                    )
-                }
-                
-                IconButton(modifier = Modifier.size(40.dp), onClick = { isSearchActive = true }) {
-                    Icon(Icons.Default.Search, contentDescription = "Search")
-                }
-
-                IconButton(modifier = Modifier.size(40.dp), onClick = { showCalendarDialog = true }) {
-                    Icon(Icons.Default.DateRange, contentDescription = "日历视图")
-                }
-
-                // Rename current folder (only visible when inside a folder)
-                if (currentFolderId != null) {
-                    IconButton(modifier = Modifier.size(40.dp), onClick = {
-                        renameTargetFolderId = currentFolderId
-                        renameFolderText = messages.find { it.id == currentFolderId }?.content ?: ""
-                        showRenameFolderDialog = true
-                    }) {
-                        Icon(Icons.Default.Edit, contentDescription = "重命名文件夹")
-                    }
-                    IconButton(modifier = Modifier.size(40.dp), onClick = {
-                        // 生成整个文件夹内所有条目的日记
-                        diaryGenerateFolderId = currentFolderId
-                        diaryGenerateTargetIds = null
-                        showDiaryGenerateDialog = true
-                    }) {
-                        Icon(Icons.Default.MenuBook, contentDescription = "生成日记")
-                    }
-                }
-            }
+            TopBarActionsContent(
+                isSearchActive = isSearchActive,
+                searchQuery = searchQuery,
+                syncInterval = syncInterval,
+                isServerConnected = isServerConnected,
+                isPrivacyMode = isPrivacyMode,
+                viewOnlyPrivacyItems = viewOnlyPrivacyItems,
+                currentFolderId = currentFolderId,
+                isSyncing = isSyncing,
+                chatRepository = chatRepository,
+                scope = scope,
+                searchFocusRequester = searchFocusRequester,
+                messages = messages,
+                onSearchQueryChange = { searchQuery = it },
+                onSearchActiveChange = { isSearchActive = it },
+                onViewOnlyPrivacyItemsChange = { viewOnlyPrivacyItems = it },
+                onShowChangePrivacyPasswordDialog = { showChangePrivacyPasswordDialog = true },
+                onPrivacyModeChange = { isPrivacyMode = it },
+                onShowCalendarDialog = { showCalendarDialog = true },
+                onRenameFolder = { id, name -> renameTargetFolderId = id; renameFolderText = name; showRenameFolderDialog = true },
+                onGenerateFolderDiary = { id -> diaryGenerateFolderId = id; diaryGenerateTargetIds = null; showDiaryGenerateDialog = true }
+            )
         }
     }
 
@@ -994,74 +897,14 @@ fun MainScreen(
         ) {
 
             // Folder breadcrumb: show multi-level path (A -> B -> C), each level clickable
-            if (folderStack.isNotEmpty()) {
-                val breadcrumbNames = folderStack.map { id ->
-                    messages.find { it.id == id }?.content?.ifBlank { "文件夹" } ?: "文件夹"
+            FolderBreadcrumb(
+                folderStack = folderStack,
+                messages = messages,
+                onNavigateTo = { targetId ->
+                    val idx = folderStack.indexOf(targetId)
+                    if (idx >= 0) folderStack = folderStack.take(idx + 1)
                 }
-                // 过长时折叠中间层级：始终显示首层和末层，中间用 "..." 省略
-                val displayItems: List<Pair<String, String?>> =
-                    if (breadcrumbNames.size <= 4) {
-                        breadcrumbNames.mapIndexed { idx, name -> name to folderStack[idx] }
-                    } else {
-                        val first = breadcrumbNames.first() to folderStack.first()
-                        val last = breadcrumbNames.last() to folderStack.last()
-                        listOf(first, "..." to null, last)
-                    }
-                Surface(
-                    tonalElevation = 1.dp,
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                            .horizontalScroll(rememberScrollState())
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Folder,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        displayItems.forEachIndexed { index, (label, targetId) ->
-                            if (index > 0) {
-                                Text(
-                                    text = "›",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                            }
-                            if (targetId == null) {
-                                Text(
-                                    text = label,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            } else {
-                                val isLast = targetId == folderStack.lastOrNull()
-                                Text(
-                                    text = label,
-                                    color = if (isLast) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurface,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .clickable {
-                                            // 点击某级快速跳转：截断 folderStack 到该级
-                                            val idx = folderStack.indexOf(targetId)
-                                            if (idx >= 0) folderStack = folderStack.take(idx + 1)
-                                        }
-                                        .padding(horizontal = 4.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            )
 
             val chatUiItems = remember(displayedMessages) {
                 groupMessages(displayedMessages)
@@ -1319,367 +1162,60 @@ fun MainScreen(
                 }
             } else emptyMap()
 
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .then(dragModifier),
-                reverseLayout = true,
-                contentPadding = PaddingValues(8.dp)
-            ) {
-                items(chatUiItems.asReversed(), key = { it.id }) { uiItem ->
-                    // Diary template: show date group header before first item of each day
-                    if (isDiaryTemplate) {
-                        val headerLabel = diaryDateGroups[uiItem.id]
-                        if (headerLabel != null) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(modifier = Modifier.weight(1f).height(0.5.dp).background(Color(0xFFCCCCCC)))
-                                Text(
-                                    text = headerLabel,
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                    color = Color(0xFF999999),
-                                    modifier = Modifier.padding(horizontal = 10.dp)
-                                )
-                                Box(modifier = Modifier.weight(1f).height(0.5.dp).background(Color(0xFFCCCCCC)))
-                            }
-                        }
-                    }
-
-                    when (uiItem) {
-                        is ChatUiItem.SingleMessage -> {
-                            val message = uiItem.message
-                            val progress = uploadProgress[message.id] ?: downloadProgress[message.id]
-                            val isDownloading = activeDownloadIds.contains(message.id)
-
-                            val onMediaClickHandler: (ChatMessage) -> Unit = { clickedMsg ->
-                                if (selectedIds.isNotEmpty()) {
-                                    selectedIds = if (selectedIds.contains(clickedMsg.id)) {
-                                        selectedIds - clickedMsg.id
-                                    } else {
-                                        selectedIds + clickedMsg.id
-                                    }
-                                } else {
-                                    if (clickedMsg.type == MessageType.IMAGE || clickedMsg.type == MessageType.VIDEO) {
-                                        val index = mediaMessages.indexOfFirst { it.id == clickedMsg.id }
-                                        if (index != -1) mediaPagerIndex = index
-                                    } else if (clickedMsg.type == MessageType.AUDIO) {
-                                        playAudioMessage(clickedMsg)
-                                    } else if (clickedMsg.type == MessageType.FOLDER) {
-                                        folderStack = folderStack + clickedMsg.id
-                                    } else if (clickedMsg.type == MessageType.FILE) {
-                                        openFileWithDefaultApp(context, chatRepository, clickedMsg)
-                                    }
-                                }
-                            }
-                            val onLongClickHandler: () -> Unit = {
-                                if (selectedIds.isEmpty()) selectedIds = setOf(message.id)
-                            }
-
-                            if (isDiaryTemplate) {
-                                DiaryBubble(
-                                    message = message,
-                                    progress = progress,
-                                    chatRepository = chatRepository,
-                                    isSelected = selectedIds.contains(message.id),
-                                    autoDownloadLimit = autoDownloadLimit,
-                                    downloadProgress = downloadProgress,
-                                    isDownloading = isDownloading,
-                                    playingMessageId = playingMessageId,
-                                    onPlayAudio = { playAudioMessage(it) },
-                                    onMediaClick = onMediaClickHandler,
-                                    onLongClick = onLongClickHandler
-                                )
-                            } else {
-                                ChatBubble(
-                                    message = message,
-                                    progress = progress,
-                                    chatRepository = chatRepository,
-                                    isSelected = selectedIds.contains(message.id),
-                                    autoDownloadLimit = autoDownloadLimit,
-                                    downloadProgress = downloadProgress,
-                                    isDownloading = isDownloading,
-                                    playingMessageId = playingMessageId,
-                                    onPlayAudio = { playAudioMessage(it) },
-                                    onMediaClick = onMediaClickHandler,
-                                    onLongClick = onLongClickHandler
-                                )
-                            }
-                        }
-                        is ChatUiItem.ImageGroup -> {
-                            ImageGroupBubble(
-                                group = uiItem,
-                                chatRepository = chatRepository,
-                                selectedIds = selectedIds,
-                                template = currentConfig?.messageTemplate ?: "default",
-                                downloadProgress = downloadProgress,
-                                playingMessageId = playingMessageId,
-                                onPlayAudio = { playAudioMessage(it) },
-                                onFileClick = { openFileWithDefaultApp(context, chatRepository, it) },
-                                onSelectToggle = { clickedMsg ->
-                                    selectedIds = if (selectedIds.contains(clickedMsg.id)) {
-                                        selectedIds - clickedMsg.id
-                                    } else {
-                                        selectedIds + clickedMsg.id
-                                    }
-                                },
-                                onMediaClick = { clickedMsg ->
-                                    val index = mediaMessages.indexOfFirst { it.id == clickedMsg.id }
-                                    if (index != -1) mediaPagerIndex = index
-                                },
-                                onLongClick = { clickedMsg ->
-                                    if (selectedIds.isEmpty()) selectedIds = setOf(clickedMsg.id)
-                                },
-                                onClickGroup = {
-                                    if (selectedIds.isNotEmpty()) {
-                                        val groupIds = uiItem.messages.map { it.id }.toSet()
-                                        selectedIds = if (selectedIds.containsAll(groupIds)) {
-                                            selectedIds - groupIds
-                                        } else {
-                                            selectedIds + groupIds
-                                        }
-                                    }
-                                },
-                                onLongClickGroup = {
-                                    val groupIds = uiItem.messages.map { it.id }.toSet()
-                                    selectedIds = if (selectedIds.containsAll(groupIds)) {
-                                        selectedIds - groupIds
-                                    } else {
-                                        selectedIds + groupIds
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
-            }
+            ChatMessageList(
+                listState = listState,
+                dragModifier = dragModifier,
+                chatUiItems = chatUiItems,
+                isDiaryTemplate = isDiaryTemplate,
+                diaryDateGroups = diaryDateGroups,
+                chatRepository = chatRepository,
+                context = context,
+                currentConfig = currentConfig,
+                uploadProgress = uploadProgress,
+                downloadProgress = downloadProgress,
+                activeDownloadIds = activeDownloadIds,
+                autoDownloadLimit = autoDownloadLimit,
+                playingMessageId = playingMessageId,
+                mediaMessages = mediaMessages,
+                selectedIds = selectedIds,
+                onSelectionChange = { selectedIds = it },
+                onMediaPagerIndexChange = { mediaPagerIndex = it },
+                onEnterFolder = { folderStack = folderStack + it },
+                onPlayAudio = { playAudioMessage(it) }
+            )
 
 
-            Column(modifier = Modifier.navigationBarsPadding().background(MaterialTheme.colorScheme.surface)) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 6.dp)
-                        .imePadding(),
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    // 1. Voice / Keyboard Toggle
-                    IconButton(
-                        onClick = { 
-                            isVoiceMode = !isVoiceMode 
-                            if (isVoiceMode) {
-                                keyboardController?.hide()
-                                focusManager.clearFocus()
-                                isAttachmentPanelVisible = false
-                            } else {
-                                focusManager.clearFocus()
-                            }
-                        },
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isVoiceMode) Icons.Default.Keyboard else Icons.Default.Mic, 
-                            contentDescription = "Voice Mode",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    // 2. Input Area (Text field or Hold-to-Talk button)
-                    if (isVoiceMode) {
-                        var isRecording by remember { mutableStateOf(false) }
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(40.dp)
-                                .padding(horizontal = 4.dp)
-                                .clip(MaterialTheme.shapes.small)
-                                .background(
-                                    if (isRecording) MaterialTheme.colorScheme.primaryContainer 
-                                    else MaterialTheme.colorScheme.surfaceVariant
-                                )
-                                .pointerInput(Unit) {
-                                    detectTapGestures(
-                                        onPress = {
-                                            if (!hasAudioPermission) {
-                                                audioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
-                                            } else {
-                                                try {
-                                                    isRecording = true
-                                                    startVoiceRecording()
-                                                    val released = tryAwaitRelease()
-                                                    if (released) {
-                                                        stopAndSendVoice()
-                                                    } else {
-                                                        cancelVoiceRecording()
-                                                    }
-                                                } catch (e: Exception) {
-                                                    Log.e("MainScreen", "Recording error", e)
-                                                    cancelVoiceRecording()
-                                                } finally {
-                                                    isRecording = false
-                                                }
-                                            }
-                                        }
-                                    )
-                                }
-                        ) {
-                            Text(
-                                text = if (isRecording) "松开 发送" else "按住 说话",
-                                fontWeight = FontWeight.Bold,
-                                color = if (isRecording) MaterialTheme.colorScheme.onPrimaryContainer 
-                                        else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    } else {
-                        androidx.compose.foundation.text.BasicTextField(
-                            value = inputText,
-                            onValueChange = { inputText = it },
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 4.dp)
-                                .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                                .onFocusChanged { 
-                                    if (it.isFocused) {
-                                        isAttachmentPanelVisible = false
-                                    }
-                                },
-                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                            cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
-                            maxLines = 4
-                        )
-                    }
-
-                    // 3. Location Attachment Toggle Button
-                    if (!isVoiceMode && inputText.isBlank()) {
-                        IconButton(
-                            onClick = {
-                                attachLocationEnabled = !attachLocationEnabled
-                                if (attachLocationEnabled && !hasLocationPermission) {
-                                    locationPermissionLauncher.launch(
-                                        arrayOf(
-                                            android.Manifest.permission.ACCESS_FINE_LOCATION,
-                                            android.Manifest.permission.ACCESS_COARSE_LOCATION
-                                        )
-                                    )
-                                }
-                            },
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.LocationOn,
-                                contentDescription = "Attach Location Toggle",
-                                tint = if (attachLocationEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    // 4. "+" Add or Send Button
-                    if (inputText.isNotBlank() && !isVoiceMode) {
-                        Box(
-                            modifier = Modifier
-                                .minimumInteractiveComponentSize()
-                                .size(40.dp)
-                                .clip(CircleShape)
-                                .combinedClickable(
-                                    onClick = {
-                                        scope.launch {
-                                            if (inputText.startsWith("/link ", ignoreCase = true)) {
-                                                val fileName = inputText.substring(6).trim()
-                                                if (fileName.isNotEmpty()) {
-                                                    chatRepository.linkServerFile(fileName)
-                                                }
-                                            } else {
-                                                var finalContent = inputText
-                                                if (attachLocationEnabled) {
-                                                    val address = fetchAddressQuickly(context)
-                                                    if (address != null) {
-                                                        finalContent = "$finalContent\n[位置] $address"
-                                                    }
-                                                }
-                                                chatRepository.sendMessage(finalContent, folderId = currentFolderId)
-                                            }
-                                            inputText = ""
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (inputText.startsWith("##") && inputText.endsWith("##")) {
-                                            val pin = inputText.substring(2, inputText.length - 2)
-                                            if (pin == privacyPin) {
-                                                isPrivacyMode = !isPrivacyMode
-                                                viewOnlyPrivacyItems = isPrivacyMode
-                                            }
-                                            inputText = ""
-                                        }
-                                    }
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Send,
-                                contentDescription = "Send",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    } else {
-                        IconButton(
-                            onClick = { 
-                                isAttachmentPanelVisible = !isAttachmentPanelVisible
-                                if (isAttachmentPanelVisible) {
-                                    keyboardController?.hide()
-                                    focusManager.clearFocus()
-                                }
-                            },
-                            modifier = Modifier.size(40.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.AddCircleOutline,
-                                contentDescription = "Attachment Options",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                AnimatedVisibility(
-                    visible = isAttachmentPanelVisible,
-                    enter = expandVertically(),
-                    exit = shrinkVertically()
-                ) {
-                    AttachmentPanel(
-                        onImageClick = {
-                            showImagePicker = true
-                            isAttachmentPanelVisible = false
-                        },
-                        onFileClick = {
-                            filePickerLauncher.launch("*/*")
-                            isAttachmentPanelVisible = false
-                        },
-                        onLocationClick = {
-                            if (!hasLocationPermission) {
-                                locationPermissionLauncher.launch(
-                                    arrayOf(
-                                        android.Manifest.permission.ACCESS_FINE_LOCATION,
-                                        android.Manifest.permission.ACCESS_COARSE_LOCATION
-                                    )
-                                )
-                            } else {
-                                sendNativeLocation(context, chatRepository, scope, folderId = currentFolderId)
-                            }
-                            isAttachmentPanelVisible = false
-                        },
-                        deleteSourceAfterSend = deleteSourceAfterSend,
-                        onToggleDeleteSource = {
-                            deleteSourceAfterSend = it
-                            sharedPrefs.edit().putBoolean("delete_source_after_send", it).apply()
-                        }
-                    )
-                }
-            }
+            ChatInputBar(
+                context = context,
+                chatRepository = chatRepository,
+                scope = scope,
+                keyboardController = keyboardController,
+                focusManager = focusManager,
+                sharedPrefs = sharedPrefs,
+                currentFolderId = currentFolderId,
+                inputText = inputText,
+                onInputTextChange = { inputText = it },
+                isVoiceMode = isVoiceMode,
+                onVoiceModeChange = { isVoiceMode = it },
+                isAttachmentPanelVisible = isAttachmentPanelVisible,
+                onAttachmentPanelVisibleChange = { isAttachmentPanelVisible = it },
+                attachLocationEnabled = attachLocationEnabled,
+                onAttachLocationEnabledChange = { attachLocationEnabled = it },
+                hasAudioPermission = hasAudioPermission,
+                hasLocationPermission = hasLocationPermission,
+                deleteSourceAfterSend = deleteSourceAfterSend,
+                onDeleteSourceAfterSendChange = { deleteSourceAfterSend = it },
+                privacyPin = privacyPin,
+                onPrivacyModeChange = { isPrivacyMode = it },
+                onViewOnlyPrivacyItemsChange = { viewOnlyPrivacyItems = it },
+                audioPermissionLauncher = audioPermissionLauncher,
+                locationPermissionLauncher = locationPermissionLauncher,
+                filePickerLauncher = filePickerLauncher,
+                onShowImagePicker = { showImagePicker = true },
+                startVoiceRecording = ::startVoiceRecording,
+                stopAndSendVoice = ::stopAndSendVoice,
+                cancelVoiceRecording = ::cancelVoiceRecording
+            )
         }
 
         // WeChat Style Media Pager
@@ -1708,225 +1244,33 @@ fun MainScreen(
         }
 
         // Selection Toolbar (Bottom floating pill bar)
-        if (selectedIds.isNotEmpty()) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 64.dp) // Lift it slightly above bottom input bar
-                    .navigationBarsPadding()
-                    .wrapContentWidth(),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                tonalElevation = 8.dp,
-                shadowElevation = 8.dp
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    IconButton(onClick = { selectedIds = emptySet() }) {
-                        Icon(Icons.Default.Close, contentDescription = "Cancel")
-                    }
-
-                    // 1. Copy (only for text messages)
-                    if (selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.TEXT }) {
-                        val clipboardManager = LocalClipboardManager.current
-                        IconButton(onClick = {
-                            val textToCopy = selectedIds.mapNotNull { id ->
-                                messages.find { it.id == id }
-                            }.sortedBy { it.timestamp }
-                             .joinToString("\n") { it.content }
-                            
-                            clipboardManager.setText(AnnotatedString(textToCopy))
-                            android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
-                            selectedIds = emptySet()
-                        }) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
-                        }
-                    }
-
-
-
-                    // 2. Edit Text / Caption / Rename Folder
-                    if (selectedIds.size == 1) {
-                        val firstId = selectedIds.firstOrNull()
-                        val singleMsg = if (firstId != null) messages.find { it.id == firstId } else null
-                        if (singleMsg != null) {
-                            IconButton(onClick = {
-                                if (singleMsg.type == MessageType.FOLDER) {
-                                    // Rename the folder
-                                    renameTargetFolderId = singleMsg.id
-                                    renameFolderText = singleMsg.content
-                                    showRenameFolderDialog = true
-                                } else {
-                                    editingTargetMessage = singleMsg
-                                    if (singleMsg.type == MessageType.TEXT) {
-                                        showEditTextDialog = true
-                                    } else {
-                                        showEditCaptionDialog = true
-                                    }
-                                }
-                            }) {
-                                Icon(Icons.Default.Edit, contentDescription = "Edit")
-                            }
-                        }
-                    }
-
-                    // 3. Pack Folder
-                    IconButton(onClick = {
-                        val selectedMessages = messages.filter { selectedIds.contains(it.id) }
-                        val folderMsgs = selectedMessages.filter { it.type == MessageType.FOLDER }
-                        if (folderMsgs.size >= 2) {
-                            // 选中含 2 个及以上文件夹：弹窗选择哪个作为父文件夹
-                            showChooseParentFolderDialog = true
-                        } else {
-                            val existingFolder = selectedMessages.find { it.type == MessageType.FOLDER }
-                                ?: if (currentFolderId != null) messages.find { it.id == currentFolderId } else null
-
-                            folderAnnotation = existingFolder?.content ?: ""
-                            showPackFolderDialog = true
-                        }
-                    }) {
-                        Icon(Icons.Default.Folder, contentDescription = "Pack Folder")
-                    }
-
-                    // 4. Unpack Folder / Move out of folder
-                    val hasFolderToUnpack = selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.FOLDER }
-                    val hasItemsInFolder = currentFolderId != null || selectedIds.any { id -> messages.find { it.id == id }?.folderId != null }
-
-                    if (hasFolderToUnpack || hasItemsInFolder) {
-                        IconButton(onClick = {
-                            showUnpackFolderConfirmDialog = true
-                        }) {
-                            Icon(Icons.Default.FolderOff, contentDescription = "Unpack Folder")
-                        }
-                    }
-
-                    // 4b. Move into folder (移入文件夹) - 列出本级下所有文件夹，树形选择
-                    IconButton(onClick = {
-                        showMoveIntoFolderDialog = true
-                    }) {
-                        Icon(Icons.Default.DriveFileMove, contentDescription = "移入文件夹")
-                    }
-
-                    // 5. Combine / Merge (Assign groupId to all items so they group together and can be split)
-                    if (selectedIds.size >= 2) {
-                        IconButton(onClick = {
-                            val newGroupId = "group_${System.currentTimeMillis()}"
-                            scope.launch {
-                                chatRepository.groupSelectedMessages(selectedIds, newGroupId)
-                                selectedIds = emptySet()
-                            }
-                        }) {
-                            Icon(Icons.Default.GroupWork, contentDescription = "Combine")
-                        }
-                    }
-
-                    // 6. Split / Ungroup
-                    if (selectedIds.any { id -> !messages.find { it.id == id }?.groupId.isNullOrEmpty() }) {
-                        IconButton(onClick = {
-                            scope.launch {
-                                val selectedMsgs = messages.filter { selectedIds.contains(it.id) }
-                                chatRepository.ungroupMessages(selectedMsgs)
-                                selectedIds = emptySet()
-                            }
-                        }) {
-                            Icon(Icons.Default.CallSplit, contentDescription = "Uncombine")
-                        }
-                    }
-
-                    // 7. Share
-                    IconButton(onClick = { 
-                        val uris = selectedIds.mapNotNull { id ->
-                            val msg = messages.find { it.id == id }
-                            val fileName = msg?.content ?: ""
-                            val localFile = chatRepository.getLocalFile(id, fileName)
-                            
-                            if (localFile.exists()) {
-                                try {
-                                    val authority = "${context.packageName}.fileprovider"
-                                    androidx.core.content.FileProvider.getUriForFile(context, authority, localFile)
-                                } catch (e: Exception) {
-                                    null
-                                }
-                            } else {
-                                msg?.remoteUrl?.let { chatRepository.resolveUrl(it)?.let { url -> Uri.parse(url) } }
-                            }
-                        }
-                        if (uris.isNotEmpty()) {
-                            shareMediaMultiple(context, uris)
-                        }
-                    }) {
-                        Icon(Icons.Default.Share, contentDescription = "Share")
-                    }
-
-                    // 移出隐私空间（仅在隐私模式下显示）
-                    if (isPrivacyMode) {
-                        IconButton(onClick = {
-                            scope.launch {
-                                chatRepository.toggleHideMessages(selectedIds)
-                                selectedIds = emptySet()
-                                android.widget.Toast.makeText(context, "已移出隐私空间", android.widget.Toast.LENGTH_SHORT).show()
-                            }
-                        }) {
-                            Icon(
-                                imageVector = Icons.Default.LockOpen,
-                                contentDescription = "移出隐私空间",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    // 8. 生成日记（多选）
-                    IconButton(onClick = {
-                        diaryGenerateTargetIds = selectedIds
-                        selectedIds = emptySet()
-                        showDiaryGenerateDialog = true
-                    }) {
-                        Icon(Icons.Default.MenuBook, contentDescription = "生成日记")
-                    }
-
-                    // 删除图标：短按确认删除；长按移入隐私空间
-                    Box(
-                        modifier = Modifier
-                            .minimumInteractiveComponentSize()
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .pointerInput(Unit) {
-                                detectTapGestures(
-                                    onPress = { _ ->
-                                        var longPressHandled = false
-                                        try {
-                                            withTimeout(800L) {
-                                                tryAwaitRelease()
-                                            }
-                                        } catch (e: TimeoutCancellationException) {
-                                            longPressHandled = true
-                                            // 长按：移入隐私空间（无任何提示）
-                                            scope.launch {
-                                                chatRepository.toggleHideMessages(selectedIds)
-                                                selectedIds = emptySet()
-                                            }
-                                        }
-                                        if (!longPressHandled) {
-                                            // 短按：确认删除
-                                            showDeleteMessagesConfirmDialog = true
-                                        }
-                                    }
-                                )
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Delete,
-                            contentDescription = "Delete",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-        }
+        SelectionToolbar(
+            selectedIds = selectedIds,
+            messages = messages,
+            currentFolderId = currentFolderId,
+            isPrivacyMode = isPrivacyMode,
+            context = context,
+            chatRepository = chatRepository,
+            scope = scope,
+            onSelectionChange = { selectedIds = it },
+            onRenameFolder = { id, name -> renameTargetFolderId = id; renameFolderText = name; showRenameFolderDialog = true },
+            onEditMessage = { msg ->
+                editingTargetMessage = msg
+                if (msg.type == MessageType.TEXT) showEditTextDialog = true else showEditCaptionDialog = true
+            },
+            onPackFolder = { existingFolderName ->
+                folderAnnotation = existingFolderName
+                showPackFolderDialog = true
+            },
+            onChooseParentFolder = { showChooseParentFolderDialog = true },
+            onUnpack = { showUnpackFolderConfirmDialog = true },
+            onMoveIntoFolder = { showMoveIntoFolderDialog = true },
+            onGenerateDiary = { ids ->
+                diaryGenerateTargetIds = ids
+                showDiaryGenerateDialog = true
+            },
+            onDelete = { showDeleteMessagesConfirmDialog = true }
+        )
 
         if (isRecordingVoiceState) {
             Box(
@@ -2143,40 +1487,32 @@ fun MainScreen(
             }
         )
 
-        // 选择父文件夹对话框：选中项含 >=2 个文件夹时，选择其中一个作为父文件夹
-        if (showChooseParentFolderDialog) {
-            val folderMsgs = messages.filter { selectedIds.contains(it.id) && it.type == MessageType.FOLDER }
-            ChooseParentFolderDialog(
-                folderMessages = folderMsgs,
-                onDismiss = { showChooseParentFolderDialog = false },
-                onConfirm = { parentId ->
-                    showChooseParentFolderDialog = false
-                    scope.launch {
-                        // 其余项（含其它文件夹）全部放入选中的父文件夹
-                        val others = selectedIds.filter { it != parentId }
-                        chatRepository.moveIntoFolder(others.toList(), parentId)
-                        selectedIds = emptySet()
-                    }
+        // 选择父文件夹 / 移入文件夹 对话框
+        FolderActionDialogs(
+            chatRepository = chatRepository,
+            messages = messages,
+            currentFolderId = currentFolderId,
+            selectedIds = selectedIds,
+            showChooseParentFolderDialog = showChooseParentFolderDialog,
+            onChooseParentDismiss = { showChooseParentFolderDialog = false },
+            onChooseParentConfirm = { parentId ->
+                showChooseParentFolderDialog = false
+                scope.launch {
+                    val others = selectedIds.filter { it != parentId }
+                    chatRepository.moveIntoFolder(others.toList(), parentId)
+                    selectedIds = emptySet()
                 }
-            )
-        }
-
-        // 移入文件夹对话框：列出本级下所有文件夹（树形可展开），选定后移入
-        if (showMoveIntoFolderDialog) {
-            MoveIntoFolderDialog(
-                chatRepository = chatRepository,
-                currentFolderId = currentFolderId,
-                selectedIds = selectedIds,
-                onDismiss = { showMoveIntoFolderDialog = false },
-                onConfirm = { targetFolderId ->
-                    showMoveIntoFolderDialog = false
-                    scope.launch {
-                        chatRepository.moveIntoFolder(selectedIds.toList(), targetFolderId)
-                        selectedIds = emptySet()
-                    }
+            },
+            showMoveIntoFolderDialog = showMoveIntoFolderDialog,
+            onMoveIntoDismiss = { showMoveIntoFolderDialog = false },
+            onMoveIntoConfirm = { targetFolderId ->
+                showMoveIntoFolderDialog = false
+                scope.launch {
+                    chatRepository.moveIntoFolder(selectedIds.toList(), targetFolderId)
+                    selectedIds = emptySet()
                 }
-            )
-        }
+            }
+        )
 
         QuickActionDialogs(
             showQuickTextDialog = showQuickTextDialog,
@@ -4697,11 +4033,13 @@ fun FolderTreeNode(
     allMessages: List<com.cloudchat.model.ChatMessage>,
     selectedFolderId: String?,
     onSelect: (String) -> Unit,
-    depth: Int
+    depth: Int,
+    visited: MutableSet<String> = remember { mutableSetOf() }
 ) {
     var expanded by remember { mutableStateOf(false) }
+    // 防循环嵌套：过滤掉已访问过的后代文件夹
     val children = allMessages.filter {
-        it.type == MessageType.FOLDER && !it.isDeleted && it.folderId == folder.id
+        it.type == MessageType.FOLDER && !it.isDeleted && it.folderId == folder.id && visited.add(it.id)
     }
     val isSelected = selectedFolderId == folder.id
 
@@ -4719,16 +4057,18 @@ fun FolderTreeNode(
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             if (children.isNotEmpty()) {
-                Icon(
-                    imageVector = if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(18.dp)
-                        .clickable { expanded = !expanded },
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                IconButton(
+                    onClick = { expanded = !expanded },
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = if (expanded) Icons.Default.ExpandMore else Icons.Default.ChevronRight,
+                        contentDescription = if (expanded) "折叠" else "展开",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             } else {
-                Spacer(modifier = Modifier.width(18.dp))
+                Spacer(modifier = Modifier.width(28.dp))
             }
             Spacer(modifier = Modifier.width(4.dp))
             Icon(
@@ -4752,9 +4092,876 @@ fun FolderTreeNode(
                         allMessages = allMessages,
                         selectedFolderId = selectedFolderId,
                         onSelect = onSelect,
-                        depth = depth + 1
+                        depth = depth + 1,
+                        visited = visited
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun FolderBreadcrumb(
+    folderStack: List<String>,
+    messages: List<com.cloudchat.model.ChatMessage>,
+    onNavigateTo: (String) -> Unit
+) {
+    if (folderStack.isEmpty()) return
+    val breadcrumbNames = folderStack.map { id ->
+        messages.find { it.id == id }?.content?.ifBlank { "文件夹" } ?: "文件夹"
+    }
+    // 过长时折叠中间层级：始终显示首层和末层，中间用 "..." 省略
+    val displayItems: List<Pair<String, String?>> =
+        if (breadcrumbNames.size <= 4) {
+            breadcrumbNames.mapIndexed { idx, name -> name to folderStack[idx] }
+        } else {
+            val first = breadcrumbNames.first() to folderStack.first()
+            val last = breadcrumbNames.last() to folderStack.last()
+            listOf(first, "..." to null, last)
+        }
+    Surface(
+        tonalElevation = 1.dp,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .horizontalScroll(rememberScrollState())
+        ) {
+            Icon(
+                imageVector = Icons.Default.Folder,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            displayItems.forEachIndexed { index, (label, targetId) ->
+                if (index > 0) {
+                    Text(
+                        text = "›",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+                if (targetId == null) {
+                    Text(
+                        text = label,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    val isLast = targetId == folderStack.lastOrNull()
+                    Text(
+                        text = label,
+                        color = if (isLast) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = if (isLast) FontWeight.Bold else FontWeight.Normal,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { onNavigateTo(targetId) }
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun FolderActionDialogs(
+    chatRepository: ChatRepository,
+    messages: List<com.cloudchat.model.ChatMessage>,
+    currentFolderId: String?,
+    selectedIds: Set<String>,
+    showChooseParentFolderDialog: Boolean,
+    onChooseParentDismiss: () -> Unit,
+    onChooseParentConfirm: (String) -> Unit,
+    showMoveIntoFolderDialog: Boolean,
+    onMoveIntoDismiss: () -> Unit,
+    onMoveIntoConfirm: (String) -> Unit
+) {
+    if (showChooseParentFolderDialog) {
+        val folderMsgs = messages.filter { selectedIds.contains(it.id) && it.type == MessageType.FOLDER }
+        ChooseParentFolderDialog(
+            folderMessages = folderMsgs,
+            onDismiss = onChooseParentDismiss,
+            onConfirm = onChooseParentConfirm
+        )
+    }
+    if (showMoveIntoFolderDialog) {
+        MoveIntoFolderDialog(
+            chatRepository = chatRepository,
+            currentFolderId = currentFolderId,
+            selectedIds = selectedIds,
+            onDismiss = onMoveIntoDismiss,
+            onConfirm = onMoveIntoConfirm
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun ChatInputBar(
+    context: android.content.Context,
+    chatRepository: ChatRepository,
+    scope: kotlinx.coroutines.CoroutineScope,
+    keyboardController: androidx.compose.ui.platform.SoftwareKeyboardController?,
+    focusManager: androidx.compose.ui.focus.FocusManager,
+    sharedPrefs: android.content.SharedPreferences,
+    currentFolderId: String?,
+    inputText: String,
+    onInputTextChange: (String) -> Unit,
+    isVoiceMode: Boolean,
+    onVoiceModeChange: (Boolean) -> Unit,
+    isAttachmentPanelVisible: Boolean,
+    onAttachmentPanelVisibleChange: (Boolean) -> Unit,
+    attachLocationEnabled: Boolean,
+    onAttachLocationEnabledChange: (Boolean) -> Unit,
+    hasAudioPermission: Boolean,
+    hasLocationPermission: Boolean,
+    deleteSourceAfterSend: Boolean,
+    onDeleteSourceAfterSendChange: (Boolean) -> Unit,
+    privacyPin: String,
+    onPrivacyModeChange: (Boolean) -> Unit,
+    onViewOnlyPrivacyItemsChange: (Boolean) -> Unit,
+    audioPermissionLauncher: androidx.activity.result.ActivityResultLauncher<String>,
+    locationPermissionLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+    filePickerLauncher: androidx.activity.result.ActivityResultLauncher<String>,
+    onShowImagePicker: () -> Unit,
+    startVoiceRecording: () -> Unit,
+    stopAndSendVoice: () -> Unit,
+    cancelVoiceRecording: () -> Unit
+) {
+    Column(modifier = Modifier.navigationBarsPadding().background(MaterialTheme.colorScheme.surface)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 6.dp)
+                .imePadding(),
+            verticalAlignment = Alignment.Bottom
+        ) {
+            // 1. Voice / Keyboard Toggle
+            IconButton(
+                onClick = {
+                    onVoiceModeChange(!isVoiceMode)
+                    if (!isVoiceMode) {
+                        keyboardController?.hide()
+                        focusManager.clearFocus()
+                        onAttachmentPanelVisibleChange(false)
+                    } else {
+                        focusManager.clearFocus()
+                    }
+                },
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    imageVector = if (isVoiceMode) Icons.Default.Keyboard else Icons.Default.Mic,
+                    contentDescription = "Voice Mode",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // 2. Input Area (Text field or Hold-to-Talk button)
+            if (isVoiceMode) {
+                var isRecording by remember { mutableStateOf(false) }
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp)
+                        .padding(horizontal = 4.dp)
+                        .clip(MaterialTheme.shapes.small)
+                        .background(
+                            if (isRecording) MaterialTheme.colorScheme.primaryContainer
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        )
+                        .pointerInput(Unit) {
+                            detectTapGestures(
+                                onPress = {
+                                    if (!hasAudioPermission) {
+                                        audioPermissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
+                                    } else {
+                                        try {
+                                            isRecording = true
+                                            startVoiceRecording()
+                                            val released = tryAwaitRelease()
+                                            if (released) {
+                                                stopAndSendVoice()
+                                            } else {
+                                                cancelVoiceRecording()
+                                            }
+                                        } catch (e: Exception) {
+                                            Log.e("MainScreen", "Recording error", e)
+                                            cancelVoiceRecording()
+                                        } finally {
+                                            isRecording = false
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                ) {
+                    Text(
+                        text = if (isRecording) "松开 发送" else "按住 说话",
+                        fontWeight = FontWeight.Bold,
+                        color = if (isRecording) MaterialTheme.colorScheme.onPrimaryContainer
+                        else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                androidx.compose.foundation.text.BasicTextField(
+                    value = inputText,
+                    onValueChange = onInputTextChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(horizontal = 4.dp)
+                        .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .onFocusChanged {
+                            if (it.isFocused) {
+                                onAttachmentPanelVisibleChange(false)
+                            }
+                        },
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
+                    maxLines = 4
+                )
+            }
+
+            // 3. Location Attachment Toggle Button
+            if (!isVoiceMode && inputText.isBlank()) {
+                IconButton(
+                    onClick = {
+                        onAttachLocationEnabledChange(!attachLocationEnabled)
+                        if (!attachLocationEnabled && !hasLocationPermission) {
+                            locationPermissionLauncher.launch(
+                                arrayOf(
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
+                            )
+                        }
+                    },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = "Attach Location Toggle",
+                        tint = if (attachLocationEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 4. "+" Add or Send Button
+            if (inputText.isNotBlank() && !isVoiceMode) {
+                Box(
+                    modifier = Modifier
+                        .minimumInteractiveComponentSize()
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .combinedClickable(
+                            onClick = {
+                                scope.launch {
+                                    if (inputText.startsWith("/link ", ignoreCase = true)) {
+                                        val fileName = inputText.substring(6).trim()
+                                        if (fileName.isNotEmpty()) {
+                                            chatRepository.linkServerFile(fileName)
+                                        }
+                                    } else {
+                                        var finalContent = inputText
+                                        if (attachLocationEnabled) {
+                                            val address = fetchAddressQuickly(context)
+                                            if (address != null) {
+                                                finalContent = "$finalContent\n[位置] $address"
+                                            }
+                                        }
+                                        chatRepository.sendMessage(finalContent, folderId = currentFolderId)
+                                    }
+                                    onInputTextChange("")
+                                }
+                            },
+                            onLongClick = {
+                                if (inputText.startsWith("##") && inputText.endsWith("##")) {
+                                    val pin = inputText.substring(2, inputText.length - 2)
+                                    if (pin == privacyPin) {
+                                        onPrivacyModeChange(true)
+                                        onViewOnlyPrivacyItemsChange(true)
+                                    }
+                                    onInputTextChange("")
+                                }
+                            }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Send,
+                        contentDescription = "Send",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = {
+                        onAttachmentPanelVisibleChange(!isAttachmentPanelVisible)
+                        if (!isAttachmentPanelVisible) {
+                            keyboardController?.hide()
+                            focusManager.clearFocus()
+                        }
+                    },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AddCircleOutline,
+                        contentDescription = "Attachment Options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        AnimatedVisibility(
+            visible = isAttachmentPanelVisible,
+            enter = expandVertically(),
+            exit = shrinkVertically()
+        ) {
+            AttachmentPanel(
+                onImageClick = {
+                    onShowImagePicker()
+                    onAttachmentPanelVisibleChange(false)
+                },
+                onFileClick = {
+                    filePickerLauncher.launch("*/*")
+                    onAttachmentPanelVisibleChange(false)
+                },
+                onLocationClick = {
+                    if (!hasLocationPermission) {
+                        locationPermissionLauncher.launch(
+                            arrayOf(
+                                android.Manifest.permission.ACCESS_FINE_LOCATION,
+                                android.Manifest.permission.ACCESS_COARSE_LOCATION
+                            )
+                        )
+                    } else {
+                        sendNativeLocation(context, chatRepository, scope, folderId = currentFolderId)
+                    }
+                    onAttachmentPanelVisibleChange(false)
+                },
+                deleteSourceAfterSend = deleteSourceAfterSend,
+                onToggleDeleteSource = { v ->
+                    onDeleteSourceAfterSendChange(v)
+                    sharedPrefs.edit().putBoolean("delete_source_after_send", v).apply()
+                }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun androidx.compose.foundation.layout.BoxScope.SelectionToolbar(
+    selectedIds: Set<String>,
+    messages: List<com.cloudchat.model.ChatMessage>,
+    currentFolderId: String?,
+    isPrivacyMode: Boolean,
+    context: android.content.Context,
+    chatRepository: ChatRepository,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onSelectionChange: (Set<String>) -> Unit,
+    onRenameFolder: (String, String) -> Unit,
+    onEditMessage: (com.cloudchat.model.ChatMessage) -> Unit,
+    onPackFolder: (String) -> Unit,
+    onChooseParentFolder: () -> Unit,
+    onUnpack: () -> Unit,
+    onMoveIntoFolder: () -> Unit,
+    onGenerateDiary: (Set<String>) -> Unit,
+    onDelete: () -> Unit
+) {
+    if (selectedIds.isEmpty()) return
+    Surface(
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 64.dp)
+            .navigationBarsPadding()
+            .wrapContentWidth(),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 8.dp,
+        shadowElevation = 8.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            IconButton(onClick = { onSelectionChange(emptySet()) }) {
+                Icon(Icons.Default.Close, contentDescription = "Cancel")
+            }
+
+            // 1. Copy (only for text messages)
+            if (selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.TEXT }) {
+                val clipboardManager = LocalClipboardManager.current
+                IconButton(onClick = {
+                    val textToCopy = selectedIds.mapNotNull { id ->
+                        messages.find { it.id == id }
+                    }.sortedBy { it.timestamp }
+                        .joinToString("\n") { it.content }
+                    clipboardManager.setText(AnnotatedString(textToCopy))
+                    android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                    onSelectionChange(emptySet())
+                }) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
+                }
+            }
+
+            // 2. Edit Text / Caption / Rename Folder
+            if (selectedIds.size == 1) {
+                val firstId = selectedIds.firstOrNull()
+                val singleMsg = if (firstId != null) messages.find { it.id == firstId } else null
+                if (singleMsg != null) {
+                    IconButton(onClick = {
+                        if (singleMsg.type == MessageType.FOLDER) {
+                            onRenameFolder(singleMsg.id, singleMsg.content)
+                        } else {
+                            onEditMessage(singleMsg)
+                        }
+                    }) {
+                        Icon(Icons.Default.Edit, contentDescription = "Edit")
+                    }
+                }
+            }
+
+            // 3. Pack Folder
+            IconButton(onClick = {
+                val selectedMessages = messages.filter { selectedIds.contains(it.id) }
+                val folderMsgs = selectedMessages.filter { it.type == MessageType.FOLDER }
+                if (folderMsgs.size >= 2) {
+                    onChooseParentFolder()
+                } else {
+                    val existingFolder = selectedMessages.find { it.type == MessageType.FOLDER }
+                        ?: if (currentFolderId != null) messages.find { it.id == currentFolderId } else null
+                    onPackFolder(existingFolder?.content ?: "")
+                }
+            }) {
+                Icon(Icons.Default.Folder, contentDescription = "Pack Folder")
+            }
+
+            // 4. Unpack Folder / Move out of folder
+            val hasFolderToUnpack = selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.FOLDER }
+            val hasItemsInFolder = currentFolderId != null || selectedIds.any { id -> messages.find { it.id == id }?.folderId != null }
+            if (hasFolderToUnpack || hasItemsInFolder) {
+                IconButton(onClick = { onUnpack() }) {
+                    Icon(Icons.Default.FolderOff, contentDescription = "Unpack Folder")
+                }
+            }
+
+            // 4b. Move into folder (移入文件夹)
+            IconButton(onClick = { onMoveIntoFolder() }) {
+                Icon(Icons.Default.DriveFileMove, contentDescription = "移入文件夹")
+            }
+
+            // 5. Combine / Merge
+            if (selectedIds.size >= 2) {
+                IconButton(onClick = {
+                    val newGroupId = "group_${System.currentTimeMillis()}"
+                    scope.launch {
+                        chatRepository.groupSelectedMessages(selectedIds, newGroupId)
+                        onSelectionChange(emptySet())
+                    }
+                }) {
+                    Icon(Icons.Default.GroupWork, contentDescription = "Combine")
+                }
+            }
+
+            // 6. Split / Ungroup
+            if (selectedIds.any { id -> !messages.find { it.id == id }?.groupId.isNullOrEmpty() }) {
+                IconButton(onClick = {
+                    scope.launch {
+                        val selectedMsgs = messages.filter { selectedIds.contains(it.id) }
+                        chatRepository.ungroupMessages(selectedMsgs)
+                        onSelectionChange(emptySet())
+                    }
+                }) {
+                    Icon(Icons.Default.CallSplit, contentDescription = "Uncombine")
+                }
+            }
+
+            // 7. Share
+            IconButton(onClick = {
+                val uris = selectedIds.mapNotNull { id ->
+                    val msg = messages.find { it.id == id }
+                    val fileName = msg?.content ?: ""
+                    val localFile = chatRepository.getLocalFile(id, fileName)
+                    if (localFile.exists()) {
+                        try {
+                            val authority = "${context.packageName}.fileprovider"
+                            androidx.core.content.FileProvider.getUriForFile(context, authority, localFile)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    } else {
+                        msg?.remoteUrl?.let { chatRepository.resolveUrl(it)?.let { url -> Uri.parse(url) } }
+                    }
+                }
+                if (uris.isNotEmpty()) {
+                    shareMediaMultiple(context, uris)
+                }
+            }) {
+                Icon(Icons.Default.Share, contentDescription = "Share")
+            }
+
+            // 移出隐私空间（仅在隐私模式下显示）
+            if (isPrivacyMode) {
+                IconButton(onClick = {
+                    scope.launch {
+                        chatRepository.toggleHideMessages(selectedIds)
+                        onSelectionChange(emptySet())
+                        android.widget.Toast.makeText(context, "已移出隐私空间", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.LockOpen,
+                        contentDescription = "移出隐私空间",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // 8. 生成日记（多选）
+            IconButton(onClick = {
+                onGenerateDiary(selectedIds)
+                onSelectionChange(emptySet())
+            }) {
+                Icon(Icons.Default.MenuBook, contentDescription = "生成日记")
+            }
+
+            // 删除图标：短按确认删除；长按移入隐私空间
+            Box(
+                modifier = Modifier
+                    .minimumInteractiveComponentSize()
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = { _ ->
+                                var longPressHandled = false
+                                try {
+                                    withTimeout(800L) {
+                                        tryAwaitRelease()
+                                    }
+                                } catch (e: TimeoutCancellationException) {
+                                    longPressHandled = true
+                                    scope.launch {
+                                        chatRepository.toggleHideMessages(selectedIds)
+                                        onSelectionChange(emptySet())
+                                    }
+                                }
+                                if (!longPressHandled) {
+                                    onDelete()
+                                }
+                            }
+                        )
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    dragModifier: Modifier,
+    chatUiItems: List<ChatUiItem>,
+    isDiaryTemplate: Boolean,
+    diaryDateGroups: Map<String, String>,
+    chatRepository: ChatRepository,
+    context: android.content.Context,
+    currentConfig: com.cloudchat.model.ServerConfig?,
+    uploadProgress: Map<String, Int>,
+    downloadProgress: Map<String, Int>,
+    activeDownloadIds: Set<String>,
+    autoDownloadLimit: Long,
+    playingMessageId: String?,
+    mediaMessages: List<com.cloudchat.model.ChatMessage>,
+    selectedIds: Set<String>,
+    onSelectionChange: (Set<String>) -> Unit,
+    onMediaPagerIndexChange: (Int?) -> Unit,
+    onEnterFolder: (String) -> Unit,
+    onPlayAudio: (com.cloudchat.model.ChatMessage) -> Unit
+) {
+    LazyColumn(
+        state = listState,
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .then(dragModifier),
+        reverseLayout = true,
+        contentPadding = PaddingValues(8.dp)
+    ) {
+        items(chatUiItems.asReversed(), key = { it.id }) { uiItem ->
+            if (isDiaryTemplate) {
+                val headerLabel = diaryDateGroups[uiItem.id]
+                if (headerLabel != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(modifier = Modifier.weight(1f).height(0.5.dp).background(Color(0xFFCCCCCC)))
+                        Text(
+                            text = headerLabel,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = Color(0xFF999999),
+                            modifier = Modifier.padding(horizontal = 10.dp)
+                        )
+                        Box(modifier = Modifier.weight(1f).height(0.5.dp).background(Color(0xFFCCCCCC)))
+                    }
+                }
+            }
+
+            when (uiItem) {
+                is ChatUiItem.SingleMessage -> {
+                    val message = uiItem.message
+                    val progress = uploadProgress[message.id] ?: downloadProgress[message.id]
+                    val isDownloading = activeDownloadIds.contains(message.id)
+
+                    val onMediaClickHandler: (com.cloudchat.model.ChatMessage) -> Unit = { clickedMsg ->
+                        if (selectedIds.isNotEmpty()) {
+                            onSelectionChange(
+                                if (selectedIds.contains(clickedMsg.id)) selectedIds - clickedMsg.id
+                                else selectedIds + clickedMsg.id
+                            )
+                        } else {
+                            when (clickedMsg.type) {
+                                MessageType.IMAGE, MessageType.VIDEO -> {
+                                    val index = mediaMessages.indexOfFirst { it.id == clickedMsg.id }
+                                    if (index != -1) onMediaPagerIndexChange(index)
+                                }
+                                MessageType.AUDIO -> onPlayAudio(clickedMsg)
+                                MessageType.FOLDER -> onEnterFolder(clickedMsg.id)
+                                MessageType.FILE -> openFileWithDefaultApp(context, chatRepository, clickedMsg)
+                                else -> {}
+                            }
+                        }
+                    }
+                    val onLongClickHandler: () -> Unit = {
+                        if (selectedIds.isEmpty()) onSelectionChange(setOf(message.id))
+                    }
+
+                    if (isDiaryTemplate) {
+                        DiaryBubble(
+                            message = message,
+                            progress = progress,
+                            chatRepository = chatRepository,
+                            isSelected = selectedIds.contains(message.id),
+                            autoDownloadLimit = autoDownloadLimit,
+                            downloadProgress = downloadProgress,
+                            isDownloading = isDownloading,
+                            playingMessageId = playingMessageId,
+                            onPlayAudio = onPlayAudio,
+                            onMediaClick = onMediaClickHandler,
+                            onLongClick = onLongClickHandler
+                        )
+                    } else {
+                        ChatBubble(
+                            message = message,
+                            progress = progress,
+                            chatRepository = chatRepository,
+                            isSelected = selectedIds.contains(message.id),
+                            autoDownloadLimit = autoDownloadLimit,
+                            downloadProgress = downloadProgress,
+                            isDownloading = isDownloading,
+                            playingMessageId = playingMessageId,
+                            onPlayAudio = onPlayAudio,
+                            onMediaClick = onMediaClickHandler,
+                            onLongClick = onLongClickHandler
+                        )
+                    }
+                }
+                is ChatUiItem.ImageGroup -> {
+                    ImageGroupBubble(
+                        group = uiItem,
+                        chatRepository = chatRepository,
+                        selectedIds = selectedIds,
+                        template = currentConfig?.messageTemplate ?: "default",
+                        downloadProgress = downloadProgress,
+                        playingMessageId = playingMessageId,
+                        onPlayAudio = onPlayAudio,
+                        onFileClick = { openFileWithDefaultApp(context, chatRepository, it) },
+                        onSelectToggle = { clickedMsg ->
+                            onSelectionChange(
+                                if (selectedIds.contains(clickedMsg.id)) selectedIds - clickedMsg.id
+                                else selectedIds + clickedMsg.id
+                            )
+                        },
+                        onMediaClick = { clickedMsg ->
+                            val index = mediaMessages.indexOfFirst { it.id == clickedMsg.id }
+                            if (index != -1) onMediaPagerIndexChange(index)
+                        },
+                        onLongClick = { clickedMsg ->
+                            if (selectedIds.isEmpty()) onSelectionChange(setOf(clickedMsg.id))
+                        },
+                        onClickGroup = {
+                            if (selectedIds.isNotEmpty()) {
+                                val groupIds = uiItem.messages.map { it.id }.toSet()
+                                onSelectionChange(
+                                    if (selectedIds.containsAll(groupIds)) selectedIds - groupIds
+                                    else selectedIds + groupIds
+                                )
+                            }
+                        },
+                        onLongClickGroup = {
+                            val groupIds = uiItem.messages.map { it.id }.toSet()
+                            onSelectionChange(
+                                if (selectedIds.containsAll(groupIds)) selectedIds - groupIds
+                                else selectedIds + groupIds
+                            )
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun androidx.compose.foundation.layout.RowScope.TopBarActionsContent(
+    isSearchActive: Boolean,
+    searchQuery: String,
+    syncInterval: Long,
+    isServerConnected: Boolean,
+    isPrivacyMode: Boolean,
+    viewOnlyPrivacyItems: Boolean,
+    currentFolderId: String?,
+    isSyncing: Boolean,
+    chatRepository: ChatRepository,
+    scope: kotlinx.coroutines.CoroutineScope,
+    searchFocusRequester: androidx.compose.ui.focus.FocusRequester,
+    messages: List<com.cloudchat.model.ChatMessage>,
+    onSearchQueryChange: (String) -> Unit,
+    onSearchActiveChange: (Boolean) -> Unit,
+    onViewOnlyPrivacyItemsChange: (Boolean) -> Unit,
+    onShowChangePrivacyPasswordDialog: () -> Unit,
+    onPrivacyModeChange: (Boolean) -> Unit,
+    onShowCalendarDialog: () -> Unit,
+    onRenameFolder: (String, String) -> Unit,
+    onGenerateFolderDiary: (String) -> Unit
+) {
+    if (isSearchActive) {
+        LaunchedEffect(Unit) {
+            searchFocusRequester.requestFocus()
+        }
+        TextField(
+            value = searchQuery,
+            onValueChange = onSearchQueryChange,
+            placeholder = { Text("Search messages...") },
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp)
+                .focusRequester(searchFocusRequester),
+            singleLine = true,
+            colors = TextFieldDefaults.textFieldColors(containerColor = Color.Transparent)
+        )
+        IconButton(modifier = Modifier.size(40.dp), onClick = {
+            onSearchActiveChange(false)
+            onSearchQueryChange("")
+        }) {
+            Icon(Icons.Default.Close, contentDescription = "Close Search")
+        }
+    } else if (isPrivacyMode) {
+        IconButton(modifier = Modifier.size(40.dp), onClick = { onViewOnlyPrivacyItemsChange(!viewOnlyPrivacyItems) }) {
+            Icon(
+                imageVector = if (viewOnlyPrivacyItems) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                contentDescription = "只查看隐私条目",
+                tint = if (viewOnlyPrivacyItems) Color(0xFFFFC107) else Color.Gray
+            )
+        }
+        IconButton(modifier = Modifier.size(40.dp), onClick = { onShowChangePrivacyPasswordDialog() }) {
+            Icon(Icons.Default.Lock, contentDescription = "修改密码")
+        }
+        IconButton(modifier = Modifier.size(40.dp), onClick = {
+            onPrivacyModeChange(false)
+            onViewOnlyPrivacyItemsChange(false)
+        }) {
+            Icon(Icons.Default.Logout, contentDescription = "退出隐私模式")
+        }
+    } else {
+        val isFast = syncInterval == 1000L
+        IconButton(modifier = Modifier.size(40.dp), onClick = {
+            scope.launch { chatRepository.refreshHistoryFromCloud() }
+        }) {
+            Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
+                if (isSyncing) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                    )
+                }
+                val infiniteTransition = rememberInfiniteTransition(label = "syncSpin")
+                val syncRotation by infiniteTransition.animateFloat(
+                    initialValue = 0f,
+                    targetValue = if (isSyncing) 360f else 0f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1000, easing = LinearEasing),
+                        repeatMode = RepeatMode.Restart
+                    ),
+                    label = "syncRotation"
+                )
+                Icon(
+                    imageVector = Icons.Default.Sync,
+                    contentDescription = "立即刷新",
+                    tint = if (isSyncing) MaterialTheme.colorScheme.primary
+                    else if (isServerConnected) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(22.dp).then(
+                        if (isSyncing) Modifier.graphicsLayer { rotationZ = syncRotation } else Modifier
+                    )
+                )
+            }
+        }
+
+        IconButton(modifier = Modifier.size(40.dp), onClick = {
+            chatRepository.setSyncInterval(if (isFast) 5000L else 1000L)
+        }) {
+            Icon(
+                imageVector = Icons.Default.Bolt,
+                contentDescription = if (isFast) "快速同步" else "普通同步",
+                tint = if (isServerConnected) (if (isFast) Color(0xFFFFC107) else Color.Gray) else MaterialTheme.colorScheme.error
+            )
+        }
+
+        IconButton(modifier = Modifier.size(40.dp), onClick = { onSearchActiveChange(true) }) {
+            Icon(Icons.Default.Search, contentDescription = "Search")
+        }
+
+        IconButton(modifier = Modifier.size(40.dp), onClick = { onShowCalendarDialog() }) {
+            Icon(Icons.Default.DateRange, contentDescription = "日历视图")
+        }
+
+        if (currentFolderId != null) {
+            IconButton(modifier = Modifier.size(40.dp), onClick = {
+                val name = messages.find { it.id == currentFolderId }?.content ?: ""
+                onRenameFolder(currentFolderId, name)
+            }) {
+                Icon(Icons.Default.Edit, contentDescription = "重命名文件夹")
+            }
+            IconButton(modifier = Modifier.size(40.dp), onClick = {
+                onGenerateFolderDiary(currentFolderId)
+            }) {
+                Icon(Icons.Default.MenuBook, contentDescription = "生成日记")
             }
         }
     }
