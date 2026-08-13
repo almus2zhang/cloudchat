@@ -608,40 +608,74 @@ class WebDavStorageProvider(
     }
 
     override suspend fun deleteDirectory(dirPath: String): Boolean = withContext(Dispatchers.IO) {
-        // 纵深防御：只允许删除 "diary/<单段目录名>" 形式的子目录，
-        // 拒绝空路径、路径穿越（..）、绝对路径、非法字符，防止误删上一级目录或数据根目录。
+        // 安全策略：目录永不物理删除，只移动到 .trash 回收站（非空目录也一并移入），
+        // 需要彻底删除时由用户手动在后台清理 .trash。
+        return@withContext moveDirectoryToTrash(dirPath)
+    }
+
+    // 将目录（含其全部内容，无论是否为空）移动到 .trash 回收站
+    private suspend fun moveDirectoryToTrash(dirPath: String): Boolean {
+        // 纵深防御：只允许移动 "diary/<单段目录名>" 形式的子目录，
+        // 拒绝空路径、路径穿越（..）、绝对路径、非法字符、以及数据根目录本身。
         val safePath = dirPath.trim('/')
         if (safePath.isBlank() ||
             safePath == "." || safePath == ".." ||
             safePath.startsWith("/") || safePath.startsWith("\\") ||
             safePath.split('/').any { it == "" || it == "." || it == ".." || it.any { c -> c == '\\' || c == '?' || c == '#' || c == '%' || c == '\u0000' } }
         ) {
-            Log.e("WebDavStorage", "Refusing to delete unsafe directory path: '$dirPath'")
-            return@withContext false
+            Log.e("WebDavStorage", "Refusing to move unsafe directory path: '$dirPath'")
+            return false
         }
         try {
-            runWithRetry { currentBaseUrl ->
-                val encoded = encodePath(dirPath)
-                val url = "$currentBaseUrl$encoded/"
-                val request = Request.Builder()
-                    .url(url)
-                    .addHeader("Authorization", auth)
-                    .delete()
-                    .build()
-                client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful || response.code == 404) {
-                        // 成功（一些服务器支持递归删除集合）
-                        return@runWithRetry true
-                    }
-                    Log.w("WebDavStorage", "DELETE directory ${response.code}, trying recursive delete")
+            return runWithRetry { currentBaseUrl ->
+                val baseName = safePath.substringAfterLast('/')
+                // 确保 .trash 目录存在（MKCOL）
+                val recycleBinUrl = "${currentBaseUrl}.trash/"
+                try {
+                    val mkcolRequest = Request.Builder()
+                        .url(recycleBinUrl)
+                        .addHeader("Authorization", auth)
+                        .method("MKCOL", null)
+                        .build()
+                    client.newCall(mkcolRequest).execute().use { }
+                } catch (e: Exception) {
+                    // ignore，.trash 可能已存在
                 }
-                // 递归删除：列出子项逐个删除
-                recursiveDelete(currentBaseUrl, dirPath)
-                true
+
+                val sourceUrl = "$currentBaseUrl${encodePath(safePath)}/"
+                // 绝对禁止移动数据根目录本身
+                if (sourceUrl.trimEnd('/') == currentBaseUrl.trimEnd('/')) {
+                    Log.e("WebDavStorage", "Refusing to move the data root directory: $sourceUrl")
+                    return@runWithRetry false
+                }
+                val recycledName = "${System.currentTimeMillis()}_$baseName"
+                val destUrl = "${recycleBinUrl}${java.net.URLEncoder.encode(recycledName, "UTF-8").replace("+", "%20")}/"
+
+                val moveRequest = Request.Builder()
+                    .url(sourceUrl)
+                    .addHeader("Authorization", auth)
+                    .addHeader("Destination", destUrl)
+                    .method("MOVE", null)
+                    .build()
+
+                try {
+                    client.newCall(moveRequest).execute().use { response ->
+                        if (response.isSuccessful || response.code == 404) {
+                            Log.i("WebDavStorage", "Moved directory to trash: $safePath -> .trash/$recycledName")
+                            true
+                        } else {
+                            Log.e("WebDavStorage", "MOVE directory to trash failed: ${response.code}")
+                            false
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("WebDavStorage", "MOVE directory to trash exception", e)
+                    false
+                }
             }
         } catch (e: Exception) {
-            Log.e("WebDavStorage", "deleteDirectory failed for $dirPath", e)
-            false
+            Log.e("WebDavStorage", "moveDirectoryToTrash failed for $dirPath", e)
+            return false
         }
     }
 
@@ -670,77 +704,6 @@ class WebDavStorageProvider(
         } catch (e: Exception) {
             Log.e("WebDavStorage", "copyRemoteFile failed for $srcPath", e)
             false
-        }
-    }
-
-    // 递归删除目录内容（先删子项，再删目录）
-    private suspend fun recursiveDelete(currentBaseUrl: String, dirPath: String) {
-        val encoded = encodePath(dirPath)
-        val url = "$currentBaseUrl$encoded/"
-        val children = mutableListOf<String>()
-        try {
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("Authorization", auth)
-                .method("PROPFIND", null)
-                .header("Depth", "1")
-                .build()
-            client.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    val xml = response.body?.string() ?: ""
-                    val regex = Regex("<[^>]*href[^>]*>([^<]+)</[^>]*href[^>]*>", RegexOption.IGNORE_CASE)
-                    regex.findAll(xml).forEach { m ->
-                        val href = m.groupValues[1].trim()
-                        val decoded = try { java.net.URLDecoder.decode(href, "UTF-8") } catch (e: Exception) { href }
-                        val clean = decoded.trimEnd('/')
-                        val dirClean = dirPath.trimEnd('/')
-                        if (clean != dirClean && clean.startsWith(dirClean)) {
-                            children.add(clean)
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.w("WebDavStorage", "recursiveDelete PROPFIND failed", e)
-        }
-
-        // 先删除文件（非集合），再删目录
-        val dirs = mutableListOf<String>()
-        for (child in children) {
-            val isDir = child.endsWith("/")
-            val cleanChild = child.trimEnd('/')
-            if (isDir) {
-                dirs.add(cleanChild)
-            } else {
-                deleteSingle(currentBaseUrl, cleanChild)
-            }
-        }
-        for (d in dirs) {
-            recursiveDelete(currentBaseUrl, d)
-        }
-        // 最后删除目录本身
-        try {
-            val delReq = Request.Builder()
-                .url("$currentBaseUrl${encodePath(dirPath)}/")
-                .addHeader("Authorization", auth)
-                .delete()
-                .build()
-            client.newCall(delReq).execute().use { }
-        } catch (e: Exception) {
-            Log.w("WebDavStorage", "recursiveDelete final DELETE failed", e)
-        }
-    }
-
-    private fun deleteSingle(currentBaseUrl: String, filePath: String) {
-        try {
-            val request = Request.Builder()
-                .url("$currentBaseUrl${encodePath(filePath)}")
-                .addHeader("Authorization", auth)
-                .delete()
-                .build()
-            client.newCall(request).execute().use { }
-        } catch (e: Exception) {
-            Log.w("WebDavStorage", "deleteSingle failed for $filePath", e)
         }
     }
 
