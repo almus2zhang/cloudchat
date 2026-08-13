@@ -903,7 +903,8 @@ fun MainScreen(
                 onNavigateTo = { targetId ->
                     val idx = folderStack.indexOf(targetId)
                     if (idx >= 0) folderStack = folderStack.take(idx + 1)
-                }
+                },
+                onNavigateHome = { folderStack = emptyList() }
             )
 
             val chatUiItems = remember(displayedMessages) {
@@ -4105,7 +4106,8 @@ fun FolderTreeNode(
 fun FolderBreadcrumb(
     folderStack: List<String>,
     messages: List<com.cloudchat.model.ChatMessage>,
-    onNavigateTo: (String) -> Unit
+    onNavigateTo: (String) -> Unit,
+    onNavigateHome: () -> Unit
 ) {
     if (folderStack.isEmpty()) return
     val breadcrumbNames = folderStack.map { id ->
@@ -4131,11 +4133,16 @@ fun FolderBreadcrumb(
                 .padding(horizontal = 12.dp, vertical = 6.dp)
                 .horizontalScroll(rememberScrollState())
         ) {
+            // 回到 Home（根目录）的入口
             Icon(
-                imageVector = Icons.Default.Folder,
-                contentDescription = null,
+                imageVector = Icons.Default.Home,
+                contentDescription = "回到主界面",
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier
+                    .size(20.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { onNavigateHome() }
+                    .padding(2.dp)
             )
             Spacer(modifier = Modifier.width(6.dp))
             displayItems.forEachIndexed { index, (label, targetId) ->
