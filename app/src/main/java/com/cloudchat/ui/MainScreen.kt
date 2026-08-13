@@ -4035,12 +4035,12 @@ fun FolderTreeNode(
     selectedFolderId: String?,
     onSelect: (String) -> Unit,
     depth: Int,
-    visited: MutableSet<String> = remember { mutableSetOf() }
+    ancestorIds: Set<String> = emptySet()
 ) {
     var expanded by remember { mutableStateOf(false) }
-    // 防循环嵌套：过滤掉已访问过的后代文件夹
+    // 防循环嵌套：纯过滤（无副作用），排除祖先链上已出现的文件夹
     val children = allMessages.filter {
-        it.type == MessageType.FOLDER && !it.isDeleted && it.folderId == folder.id && visited.add(it.id)
+        it.type == MessageType.FOLDER && !it.isDeleted && it.folderId == folder.id && it.id !in ancestorIds
     }
     val isSelected = selectedFolderId == folder.id
 
@@ -4087,6 +4087,7 @@ fun FolderTreeNode(
         }
         if (expanded && children.isNotEmpty()) {
             Column(modifier = Modifier.padding(start = 16.dp)) {
+                val childAncestors = ancestorIds + folder.id
                 children.forEach { child ->
                     FolderTreeNode(
                         folder = child,
@@ -4094,7 +4095,7 @@ fun FolderTreeNode(
                         selectedFolderId = selectedFolderId,
                         onSelect = onSelect,
                         depth = depth + 1,
-                        visited = visited
+                        ancestorIds = childAncestors
                     )
                 }
             }
