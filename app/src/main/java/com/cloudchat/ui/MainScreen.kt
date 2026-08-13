@@ -1187,37 +1187,68 @@ fun MainScreen(
             )
 
 
-            ChatInputBar(
-                context = context,
-                chatRepository = chatRepository,
-                scope = scope,
-                keyboardController = keyboardController,
-                focusManager = focusManager,
-                sharedPrefs = sharedPrefs,
-                currentFolderId = currentFolderId,
-                inputText = inputText,
-                onInputTextChange = { inputText = it },
-                isVoiceMode = isVoiceMode,
-                onVoiceModeChange = { isVoiceMode = it },
-                isAttachmentPanelVisible = isAttachmentPanelVisible,
-                onAttachmentPanelVisibleChange = { isAttachmentPanelVisible = it },
-                attachLocationEnabled = attachLocationEnabled,
-                onAttachLocationEnabledChange = { attachLocationEnabled = it },
-                hasAudioPermission = hasAudioPermission,
-                hasLocationPermission = hasLocationPermission,
-                deleteSourceAfterSend = deleteSourceAfterSend,
-                onDeleteSourceAfterSendChange = { deleteSourceAfterSend = it },
-                privacyPin = privacyPin,
-                onPrivacyModeChange = { isPrivacyMode = it },
-                onViewOnlyPrivacyItemsChange = { viewOnlyPrivacyItems = it },
-                audioPermissionLauncher = audioPermissionLauncher,
-                locationPermissionLauncher = locationPermissionLauncher,
-                filePickerLauncher = filePickerLauncher,
-                onShowImagePicker = { showImagePicker = true },
-                startVoiceRecording = ::startVoiceRecording,
-                stopAndSendVoice = ::stopAndSendVoice,
-                cancelVoiceRecording = ::cancelVoiceRecording
-            )
+            if (selectedIds.isEmpty()) {
+                ChatInputBar(
+                    context = context,
+                    chatRepository = chatRepository,
+                    scope = scope,
+                    keyboardController = keyboardController,
+                    focusManager = focusManager,
+                    sharedPrefs = sharedPrefs,
+                    currentFolderId = currentFolderId,
+                    inputText = inputText,
+                    onInputTextChange = { inputText = it },
+                    isVoiceMode = isVoiceMode,
+                    onVoiceModeChange = { isVoiceMode = it },
+                    isAttachmentPanelVisible = isAttachmentPanelVisible,
+                    onAttachmentPanelVisibleChange = { isAttachmentPanelVisible = it },
+                    attachLocationEnabled = attachLocationEnabled,
+                    onAttachLocationEnabledChange = { attachLocationEnabled = it },
+                    hasAudioPermission = hasAudioPermission,
+                    hasLocationPermission = hasLocationPermission,
+                    deleteSourceAfterSend = deleteSourceAfterSend,
+                    onDeleteSourceAfterSendChange = { deleteSourceAfterSend = it },
+                    privacyPin = privacyPin,
+                    onPrivacyModeChange = { isPrivacyMode = it },
+                    onViewOnlyPrivacyItemsChange = { viewOnlyPrivacyItems = it },
+                    audioPermissionLauncher = audioPermissionLauncher,
+                    locationPermissionLauncher = locationPermissionLauncher,
+                    filePickerLauncher = filePickerLauncher,
+                    onShowImagePicker = { showImagePicker = true },
+                    startVoiceRecording = ::startVoiceRecording,
+                    stopAndSendVoice = ::stopAndSendVoice,
+                    cancelVoiceRecording = ::cancelVoiceRecording
+                )
+            } else {
+                // Selection Toolbar replaces the input bar during multi-select
+                SelectionToolbar(
+                    selectedIds = selectedIds,
+                    messages = messages,
+                    currentFolderId = currentFolderId,
+                    isPrivacyMode = isPrivacyMode,
+                    context = context,
+                    chatRepository = chatRepository,
+                    scope = scope,
+                    onSelectionChange = { selectedIds = it },
+                    onRenameFolder = { id, name -> renameTargetFolderId = id; renameFolderText = name; showRenameFolderDialog = true },
+                    onEditMessage = { msg ->
+                        editingTargetMessage = msg
+                        if (msg.type == MessageType.TEXT) showEditTextDialog = true else showEditCaptionDialog = true
+                    },
+                    onPackFolder = { existingFolderName ->
+                        folderAnnotation = existingFolderName
+                        showPackFolderDialog = true
+                    },
+                    onChooseParentFolder = { showChooseParentFolderDialog = true },
+                    onUnpack = { showUnpackFolderConfirmDialog = true },
+                    onMoveIntoFolder = { showMoveIntoFolderDialog = true },
+                    onGenerateDiary = { ids ->
+                        diaryGenerateTargetIds = ids
+                        showDiaryGenerateDialog = true
+                    },
+                    onDelete = { showDeleteMessagesConfirmDialog = true }
+                )
+            }
         }
 
         // WeChat Style Media Pager
@@ -1244,35 +1275,6 @@ fun MainScreen(
                 )
             }
         }
-
-        // Selection Toolbar (Bottom floating pill bar)
-        SelectionToolbar(
-            selectedIds = selectedIds,
-            messages = messages,
-            currentFolderId = currentFolderId,
-            isPrivacyMode = isPrivacyMode,
-            context = context,
-            chatRepository = chatRepository,
-            scope = scope,
-            onSelectionChange = { selectedIds = it },
-            onRenameFolder = { id, name -> renameTargetFolderId = id; renameFolderText = name; showRenameFolderDialog = true },
-            onEditMessage = { msg ->
-                editingTargetMessage = msg
-                if (msg.type == MessageType.TEXT) showEditTextDialog = true else showEditCaptionDialog = true
-            },
-            onPackFolder = { existingFolderName ->
-                folderAnnotation = existingFolderName
-                showPackFolderDialog = true
-            },
-            onChooseParentFolder = { showChooseParentFolderDialog = true },
-            onUnpack = { showUnpackFolderConfirmDialog = true },
-            onMoveIntoFolder = { showMoveIntoFolderDialog = true },
-            onGenerateDiary = { ids ->
-                diaryGenerateTargetIds = ids
-                showDiaryGenerateDialog = true
-            },
-            onDelete = { showDeleteMessagesConfirmDialog = true }
-        )
 
         if (isRecordingVoiceState) {
             Box(
@@ -4491,7 +4493,7 @@ fun ChatInputBar(
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun androidx.compose.foundation.layout.BoxScope.SelectionToolbar(
+fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
     selectedIds: Set<String>,
     messages: List<com.cloudchat.model.ChatMessage>,
     currentFolderId: String?,
@@ -4512,17 +4514,17 @@ fun androidx.compose.foundation.layout.BoxScope.SelectionToolbar(
     if (selectedIds.isEmpty()) return
     Surface(
         modifier = Modifier
-            .align(Alignment.BottomCenter)
-            .padding(bottom = 64.dp)
-            .navigationBarsPadding()
-            .wrapContentWidth(),
-        shape = CircleShape,
+            .fillMaxWidth()
+            .navigationBarsPadding(),
+        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         tonalElevation = 8.dp,
         shadowElevation = 8.dp
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
@@ -4648,7 +4650,6 @@ fun androidx.compose.foundation.layout.BoxScope.SelectionToolbar(
                     scope.launch {
                         chatRepository.toggleHideMessages(selectedIds)
                         onSelectionChange(emptySet())
-                        android.widget.Toast.makeText(context, "已移出隐私空间", android.widget.Toast.LENGTH_SHORT).show()
                     }
                 }) {
                     Icon(
