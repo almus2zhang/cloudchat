@@ -38,6 +38,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -3982,10 +3983,22 @@ fun MoveIntoFolderDialog(
     val allMessages by chatRepository.messages.collectAsState()
     var selectedFolderId by remember { mutableStateOf<String?>(null) }
 
-    // 列出"本级"下的所有文件夹：即 folderId == 当前文件夹 id（顶层为 null）
-    val siblings = allMessages.filter {
-        it.type == MessageType.FOLDER && !it.isDeleted &&
-            (it.folderId == currentFolderId || (currentFolderId == null && it.folderId.isNullOrEmpty()))
+    // 从 home（根目录）列出完整文件夹树：顶层文件夹 folderId 为空
+    val rootFolders = allMessages.filter {
+        it.type == MessageType.FOLDER && !it.isDeleted && it.folderId.isNullOrEmpty()
+    }
+
+    // 不能移入的目标：选中项中的文件夹自身 + 它们的全部后代（防循环嵌套）
+    val disabledIds = remember(allMessages, selectedIds) {
+        val movingFolderIds = allMessages.filter {
+            it.type == MessageType.FOLDER && it.id in selectedIds
+        }.map { it.id }.toSet()
+        val disabled = mutableSetOf<String>()
+        movingFolderIds.forEach { fid ->
+            disabled += fid
+            disabled += chatRepository.collectDescendantFolderIds(fid)
+        }
+        disabled
     }
 
     AlertDialog(
@@ -3993,20 +4006,21 @@ fun MoveIntoFolderDialog(
         title = { Text("移入文件夹") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (siblings.isEmpty()) {
+                if (rootFolders.isEmpty()) {
                     Text(
-                        "当前层级下没有可移入的文件夹。",
+                        "还没有任何文件夹，请先打包创建文件夹。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    siblings.forEach { folder ->
+                    rootFolders.forEach { folder ->
                         FolderTreeNode(
                             folder = folder,
                             allMessages = allMessages,
                             selectedFolderId = selectedFolderId,
                             onSelect = { selectedFolderId = it },
-                            depth = 0
+                            depth = 0,
+                            disabledIds = disabledIds
                         )
                     }
                 }
@@ -4035,7 +4049,8 @@ fun FolderTreeNode(
     selectedFolderId: String?,
     onSelect: (String) -> Unit,
     depth: Int,
-    ancestorIds: Set<String> = emptySet()
+    ancestorIds: Set<String> = emptySet(),
+    disabledIds: Set<String> = emptySet()
 ) {
     var expanded by remember { mutableStateOf(false) }
     // 防循环嵌套：纯过滤（无副作用），排除祖先链上已出现的文件夹
@@ -4043,6 +4058,7 @@ fun FolderTreeNode(
         it.type == MessageType.FOLDER && !it.isDeleted && it.folderId == folder.id && it.id !in ancestorIds
     }
     val isSelected = selectedFolderId == folder.id
+    val isDisabled = folder.id in disabledIds
 
     Column {
         Row(
@@ -4054,7 +4070,10 @@ fun FolderTreeNode(
                     if (isSelected) MaterialTheme.colorScheme.primaryContainer
                     else MaterialTheme.colorScheme.surface
                 )
-                .clickable { onSelect(folder.id) }
+                .then(
+                    if (isDisabled) Modifier.alpha(0.4f)
+                    else Modifier.clickable { onSelect(folder.id) }
+                )
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             if (children.isNotEmpty()) {
@@ -4095,7 +4114,8 @@ fun FolderTreeNode(
                         selectedFolderId = selectedFolderId,
                         onSelect = onSelect,
                         depth = depth + 1,
-                        ancestorIds = childAncestors
+                        ancestorIds = childAncestors,
+                        disabledIds = disabledIds
                     )
                 }
             }
