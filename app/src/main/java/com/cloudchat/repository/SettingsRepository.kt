@@ -89,6 +89,27 @@ class SettingsRepository(private val context: Context) {
         list.find { it.id == id }
     }
 
+    // 校验「设定的用户目录」合法性：目录各段只能包含数字、字母、下划线、连字符。
+    // 返回 null 表示合法；否则返回错误提示文案。
+    fun validateUserDir(config: ServerConfig): String? {
+        val segments = buildList {
+            val root = config.serverPath.trim().removePrefix("/").removeSuffix("/")
+            if (root.isNotEmpty()) addAll(root.split('/').filter { it.isNotEmpty() })
+            val dir = config.saveDir.trim().removePrefix("/").removeSuffix("/")
+            if (dir.isNotEmpty()) addAll(dir.split('/').filter { it.isNotEmpty() })
+        }
+        if (segments.isEmpty()) {
+            return "存储目录不能为空，请填写目录名"
+        }
+        val valid = Regex("^[a-zA-Z0-9_-]+$")
+        for (seg in segments) {
+            if (seg.length > 255) return "目录层级「$seg」过长（最多 255 字符）"
+            if (seg == "." || seg == "..") return "目录层级不能为「$seg」"
+            if (!valid.matches(seg)) return "目录层级「$seg」含非法字符，只能使用数字、字母、下划线(_)、连字符(-)"
+        }
+        return null
+    }
+
     suspend fun saveAccount(config: ServerConfig) {
         context.dataStore.edit { prefs ->
             val mode = try {

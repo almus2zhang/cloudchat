@@ -476,6 +476,11 @@ fun SettingsScreen(onBack: () -> Unit) {
 
                     Button(
                         onClick = {
+                            val dirError = settingsRepository.validateUserDir(config)
+                            if (dirError != null) {
+                                android.widget.Toast.makeText(context, dirError, android.widget.Toast.LENGTH_LONG).show()
+                                return@Button
+                            }
                             coroutineScope.launch {
                                 var finalConfig = config
                                 val uriToUpload = pendingAvatarUri
