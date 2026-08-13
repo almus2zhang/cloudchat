@@ -1,5 +1,6 @@
 package com.cloudchat.storage
 
+import android.util.Log
 import com.amazonaws.auth.BasicAWSCredentials
 import com.amazonaws.services.s3.AmazonS3Client
 import com.amazonaws.services.s3.model.ObjectMetadata
@@ -84,6 +85,14 @@ class S3StorageProvider(
     }
 
     override suspend fun deleteFile(fileName: String): Unit = withContext(Dispatchers.IO) {
+        val name = fileName.trim()
+        if (name.isBlank() || name == "." || name == ".." ||
+            name.startsWith("/") || name.startsWith("\\") ||
+            name.any { it == '/' || it == '\\' || it == '?' || it == '#' || it == '%' || it == '\u0000' }
+        ) {
+            Log.e("S3Storage", "Refusing to delete unsafe fileName: '$fileName'")
+            return@withContext
+        }
         try {
             s3Client.deleteObject(config.bucket, "$userPrefix$fileName")
         } catch (e: Exception) {

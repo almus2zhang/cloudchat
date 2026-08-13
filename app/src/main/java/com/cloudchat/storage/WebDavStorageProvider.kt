@@ -608,6 +608,17 @@ class WebDavStorageProvider(
     }
 
     override suspend fun deleteDirectory(dirPath: String): Boolean = withContext(Dispatchers.IO) {
+        // 纵深防御：只允许删除 "diary/<单段目录名>" 形式的子目录，
+        // 拒绝空路径、路径穿越（..）、绝对路径、非法字符，防止误删上一级目录或数据根目录。
+        val safePath = dirPath.trim('/')
+        if (safePath.isBlank() ||
+            safePath == "." || safePath == ".." ||
+            safePath.startsWith("/") || safePath.startsWith("\\") ||
+            safePath.split('/').any { it == "" || it == "." || it == ".." || it.any { c -> c == '\\' || c == '?' || c == '#' || c == '%' || c == '\u0000' } }
+        ) {
+            Log.e("WebDavStorage", "Refusing to delete unsafe directory path: '$dirPath'")
+            return@withContext false
+        }
         try {
             runWithRetry { currentBaseUrl ->
                 val encoded = encodePath(dirPath)

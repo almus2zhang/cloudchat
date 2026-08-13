@@ -2257,6 +2257,17 @@ class ChatRepository(private val context: Context) {
     suspend fun deleteDiaryFile(fileName: String): Boolean = withContext(Dispatchers.IO) {
         val provider = storageProvider ?: return@withContext false
         val cleanName = fileName.removeSuffix("/index.html").trim('/')
+        // 安全校验：cleanName 必须是单个合法目录名，禁止路径穿越（..）、绝对路径、非法字符。
+        // 防止恶意 fileName（如 "../../x"）导致删除 diary 的上一级目录。
+        if (cleanName.isBlank() ||
+            cleanName.length > 255 ||
+            cleanName == "." || cleanName == ".." ||
+            cleanName.startsWith("/") || cleanName.startsWith("\\") ||
+            cleanName.any { it == '/' || it == '\\' || it == '?' || it == '#' || it == '%' || it == '\u0000' }
+        ) {
+            Log.e("ChatRepository", "Refusing to delete unsafe diary name: '$fileName'")
+            return@withContext false
+        }
         val diaryDir = "diary/$cleanName"
         try {
             // 删除整个日记目录（含 assets 等静态资源）
