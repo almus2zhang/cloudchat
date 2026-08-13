@@ -699,7 +699,7 @@ fun MainScreen(
     val searchFocusRequester = remember { FocusRequester() }
 
     // Inject search and sync icons into TopAppBar
-    LaunchedEffect(isSearchActive, searchQuery, syncInterval, isServerConnected, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId, isSyncing, isMediaSyncing, mediaSyncProgress) {
+    LaunchedEffect(isSearchActive, searchQuery, syncInterval, isServerConnected, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId, isSyncing) {
         setTopBarActions {
             TopBarActionsContent(
                 isSearchActive = isSearchActive,
