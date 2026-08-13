@@ -1769,7 +1769,8 @@ class ChatRepository(private val context: Context) {
 
     suspend fun groupSelectedMessages(messageIds: Set<String>, newGroupId: String) {
         _messages.update { list ->
-            val selected = list.filter { messageIds.contains(it.id) }
+            // 过滤掉文件夹，文件夹不参与合并
+            val selected = list.filter { messageIds.contains(it.id) && it.type != com.cloudchat.model.MessageType.FOLDER }
             val selectedIds = selected.map { it.id }.toSet()
 
             if (selectedIds.isEmpty()) return@update list

@@ -4491,7 +4491,7 @@ fun ChatInputBar(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
     selectedIds: Set<String>,
@@ -4521,21 +4521,21 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
         tonalElevation = 8.dp,
         shadowElevation = 8.dp
     ) {
-        Row(
+        FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
+                .padding(horizontal = 6.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            IconButton(onClick = { onSelectionChange(emptySet()) }) {
-                Icon(Icons.Default.Close, contentDescription = "Cancel")
+            ToolbarAction(icon = Icons.Default.Close, contentDescription = "Cancel") {
+                onSelectionChange(emptySet())
             }
 
             // 1. Copy (only for text messages)
             if (selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.TEXT }) {
                 val clipboardManager = LocalClipboardManager.current
-                IconButton(onClick = {
+                ToolbarAction(icon = Icons.Default.ContentCopy, contentDescription = "Copy") {
                     val textToCopy = selectedIds.mapNotNull { id ->
                         messages.find { it.id == id }
                     }.sortedBy { it.timestamp }
@@ -4543,8 +4543,6 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
                     clipboardManager.setText(AnnotatedString(textToCopy))
                     android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
                     onSelectionChange(emptySet())
-                }) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "Copy")
                 }
             }
 
@@ -4553,20 +4551,18 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
                 val firstId = selectedIds.firstOrNull()
                 val singleMsg = if (firstId != null) messages.find { it.id == firstId } else null
                 if (singleMsg != null) {
-                    IconButton(onClick = {
+                    ToolbarAction(icon = Icons.Default.Edit, contentDescription = "Edit") {
                         if (singleMsg.type == MessageType.FOLDER) {
                             onRenameFolder(singleMsg.id, singleMsg.content)
                         } else {
                             onEditMessage(singleMsg)
                         }
-                    }) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit")
                     }
                 }
             }
 
             // 3. Pack Folder
-            IconButton(onClick = {
+            ToolbarAction(icon = Icons.Default.Folder, contentDescription = "Pack Folder") {
                 val selectedMessages = messages.filter { selectedIds.contains(it.id) }
                 val folderMsgs = selectedMessages.filter { it.type == MessageType.FOLDER }
                 if (folderMsgs.size >= 2) {
@@ -4576,52 +4572,46 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
                         ?: if (currentFolderId != null) messages.find { it.id == currentFolderId } else null
                     onPackFolder(existingFolder?.content ?: "")
                 }
-            }) {
-                Icon(Icons.Default.Folder, contentDescription = "Pack Folder")
             }
 
             // 4. Unpack Folder / Move out of folder
             val hasFolderToUnpack = selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.FOLDER }
             val hasItemsInFolder = currentFolderId != null || selectedIds.any { id -> messages.find { it.id == id }?.folderId != null }
             if (hasFolderToUnpack || hasItemsInFolder) {
-                IconButton(onClick = { onUnpack() }) {
-                    Icon(Icons.Default.FolderOff, contentDescription = "Unpack Folder")
+                ToolbarAction(icon = Icons.Default.FolderOff, contentDescription = "Unpack Folder") {
+                    onUnpack()
                 }
             }
 
             // 4b. Move into folder (移入文件夹)
-            IconButton(onClick = { onMoveIntoFolder() }) {
-                Icon(Icons.Default.DriveFileMove, contentDescription = "移入文件夹")
+            ToolbarAction(icon = Icons.Default.DriveFileMove, contentDescription = "移入文件夹") {
+                onMoveIntoFolder()
             }
 
-            // 5. Combine / Merge
-            if (selectedIds.size >= 2) {
-                IconButton(onClick = {
+            // 5. Combine / Merge（过滤文件夹）
+            if (selectedIds.count { id -> messages.find { it.id == id }?.type != MessageType.FOLDER } >= 2) {
+                ToolbarAction(icon = Icons.Default.GroupWork, contentDescription = "Combine") {
                     val newGroupId = "group_${System.currentTimeMillis()}"
                     scope.launch {
                         chatRepository.groupSelectedMessages(selectedIds, newGroupId)
                         onSelectionChange(emptySet())
                     }
-                }) {
-                    Icon(Icons.Default.GroupWork, contentDescription = "Combine")
                 }
             }
 
             // 6. Split / Ungroup
             if (selectedIds.any { id -> !messages.find { it.id == id }?.groupId.isNullOrEmpty() }) {
-                IconButton(onClick = {
+                ToolbarAction(icon = Icons.Default.CallSplit, contentDescription = "Uncombine") {
                     scope.launch {
                         val selectedMsgs = messages.filter { selectedIds.contains(it.id) }
                         chatRepository.ungroupMessages(selectedMsgs)
                         onSelectionChange(emptySet())
                     }
-                }) {
-                    Icon(Icons.Default.CallSplit, contentDescription = "Uncombine")
                 }
             }
 
             // 7. Share
-            IconButton(onClick = {
+            ToolbarAction(icon = Icons.Default.Share, contentDescription = "Share") {
                 val uris = selectedIds.mapNotNull { id ->
                     val msg = messages.find { it.id == id }
                     val fileName = msg?.content ?: ""
@@ -4640,38 +4630,31 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
                 if (uris.isNotEmpty()) {
                     shareMediaMultiple(context, uris)
                 }
-            }) {
-                Icon(Icons.Default.Share, contentDescription = "Share")
             }
 
             // 移出隐私空间（仅在隐私模式下显示）
             if (isPrivacyMode) {
-                IconButton(onClick = {
+                ToolbarAction(
+                    icon = Icons.Default.LockOpen,
+                    contentDescription = "移出隐私空间",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                ) {
                     scope.launch {
                         chatRepository.toggleHideMessages(selectedIds)
                         onSelectionChange(emptySet())
                     }
-                }) {
-                    Icon(
-                        imageVector = Icons.Default.LockOpen,
-                        contentDescription = "移出隐私空间",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
 
             // 8. 生成日记（多选）
-            IconButton(onClick = {
+            ToolbarAction(icon = Icons.Default.MenuBook, contentDescription = "生成日记") {
                 onGenerateDiary(selectedIds)
                 onSelectionChange(emptySet())
-            }) {
-                Icon(Icons.Default.MenuBook, contentDescription = "生成日记")
             }
 
             // 删除图标：短按确认删除；长按移入隐私空间
             Box(
                 modifier = Modifier
-                    .minimumInteractiveComponentSize()
                     .size(40.dp)
                     .clip(CircleShape)
                     .pointerInput(Unit) {
@@ -4700,10 +4683,35 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
                 Icon(
                     imageVector = Icons.Default.Delete,
                     contentDescription = "Delete",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp)
                 )
             }
         }
+    }
+}
+
+// 紧凑工具栏按钮：40dp 触摸区域，22dp 图标，带涟漪反馈
+@Composable
+private fun ToolbarAction(
+    icon: ImageVector,
+    contentDescription: String,
+    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 
