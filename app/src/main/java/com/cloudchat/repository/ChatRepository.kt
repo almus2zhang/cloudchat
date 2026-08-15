@@ -2069,7 +2069,7 @@ class ChatRepository(private val context: Context) {
     private fun collectFolderTree(folderId: String, visited: MutableSet<String>): FolderNode {
         val folderMsg = _messages.value.find { it.id == folderId }
         val name = folderMsg?.content?.ifBlank { "文件夹" } ?: "文件夹"
-        val children = _messages.value.filter { !it.isDeleted && it.folderId == folderId }
+        val children = _messages.value.filter { !it.isDeleted && !it.isHidden && it.folderId == folderId }
         val messages = children.filter { it.type != com.cloudchat.model.MessageType.FOLDER }
         val subFolders = children.filter { it.type == com.cloudchat.model.MessageType.FOLDER }
             .filter { visited.add(it.id) }   // 跳过已访问（防循环嵌套）
