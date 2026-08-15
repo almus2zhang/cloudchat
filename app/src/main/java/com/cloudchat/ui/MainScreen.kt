@@ -297,13 +297,22 @@ fun MainScreen(
                 }) { Text("用本地覆盖服务器") }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    // 清空本地记录
-                    historyConflictEvent = null
-                    scope.launch {
-                        chatRepository.clearLocalHistory()
-                    }
-                }) { Text("清空本地记录") }
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = {
+                        // 重新检查服务器记录
+                        historyConflictEvent = null
+                        scope.launch {
+                            chatRepository.refreshHistoryFromCloud()
+                        }
+                    }) { Text("重新检查") }
+                    TextButton(onClick = {
+                        // 清空本地记录
+                        historyConflictEvent = null
+                        scope.launch {
+                            chatRepository.clearLocalHistory()
+                        }
+                    }) { Text("清空本地记录") }
+                }
             }
         )
     }
