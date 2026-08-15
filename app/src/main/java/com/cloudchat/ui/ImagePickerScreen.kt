@@ -65,6 +65,20 @@ fun ImagePickerScreen(
                         Icon(Icons.Default.ArrowBack, "Back")
                     }
                 },
+                actions = {
+                    if (currentAlbum != null) {
+                        // 全选 / 取消全选当前文件夹
+                        val allSelected = imagesInAlbum.isNotEmpty() && imagesInAlbum.all { selectedImages.contains(it) }
+                        TextButton(onClick = {
+                            selectedImages = if (allSelected) emptySet() else imagesInAlbum.toSet()
+                        }) {
+                            Text(
+                                text = if (allSelected) "取消全选" else "全选",
+                                color = Color.White
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Color(0xFF1E1E1E),
                     titleContentColor = Color.White,
@@ -123,14 +137,26 @@ fun ImagePickerScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(albums) { album ->
-                        AlbumItem(album) {
-                            currentAlbum = album
-                            scope.launch {
-                                isLoading = true
-                                imagesInAlbum = mediaRepository.getImagesInAlbum(album.id)
-                                isLoading = false
+                        AlbumItem(
+                            album = album,
+                            onClick = {
+                                currentAlbum = album
+                                scope.launch {
+                                    isLoading = true
+                                    imagesInAlbum = mediaRepository.getImagesInAlbum(album.id)
+                                    isLoading = false
+                                }
+                            },
+                            onSelectAll = {
+                                currentAlbum = album
+                                scope.launch {
+                                    isLoading = true
+                                    imagesInAlbum = mediaRepository.getImagesInAlbum(album.id)
+                                    selectedImages = imagesInAlbum.toSet()
+                                    isLoading = false
+                                }
                             }
-                        }
+                        )
                     }
                 }
             } else {
@@ -223,29 +249,46 @@ fun ImagePickerScreen(
 }
 
 @Composable
-fun AlbumItem(album: MediaAlbum, onClick: () -> Unit) {
+fun AlbumItem(album: MediaAlbum, onClick: () -> Unit, onSelectAll: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .aspectRatio(1f)
-            .clickable(onClick = onClick),
+            .aspectRatio(1f),
         colors = CardDefaults.cardColors(containerColor = Color(0xFF2D2D2D))
     ) {
-        Column {
-            AsyncImage(
-                model = album.coverUri,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            )
-            Text(
-                text = "${album.name} (${album.count}张)",
-                color = Color.White,
-                modifier = Modifier.padding(8.dp).align(Alignment.CenterHorizontally),
-                style = MaterialTheme.typography.bodyMedium
-            )
+                    .fillMaxSize()
+                    .clickable(onClick = onClick)
+            ) {
+                AsyncImage(
+                    model = album.coverUri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                )
+                Text(
+                    text = "${album.name} (${album.count}张)",
+                    color = Color.White,
+                    modifier = Modifier.padding(8.dp).align(Alignment.CenterHorizontally),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+            // 全选该文件夹按钮（右下角）
+            TextButton(
+                onClick = onSelectAll,
+                modifier = Modifier.align(Alignment.BottomEnd),
+                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+            ) {
+                Text(
+                    text = "全选",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelSmall
+                )
+            }
         }
     }
 }

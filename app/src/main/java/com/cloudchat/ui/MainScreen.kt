@@ -132,6 +132,9 @@ fun MainScreen(
     var searchQuery by remember { mutableStateOf("") }
     var mediaPagerIndex by remember { mutableStateOf<Int?>(null) }
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    // 范围选择（Shift 模式）：激活后点击任意条目，全选「锚点到该条目」之间
+    var rangeSelectActive by remember { mutableStateOf(false) }
+    var rangeAnchorId by remember { mutableStateOf<String?>(null) }
     var isAttachmentPanelVisible by remember { mutableStateOf(false) }
     var attachLocationEnabled by remember { mutableStateOf(false) }
     var isPrivacyMode by remember { mutableStateOf(false) }
@@ -214,7 +217,16 @@ fun MainScreen(
                 advanceSourceDelete()
             }
             "content" -> {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // 有「所有文件访问权限」时直接删除，跳过系统删除确认框
+                val hasAllFilesAccess = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                    android.os.Environment.isExternalStorageManager()
+                if (hasAllFilesAccess) {
+                    val realUri = resolveMediaStoreUri(uri)
+                    try { context.contentResolver.delete(realUri, null, null) }
+                    catch (e: Exception) { Log.w("MainScreen", "Failed to delete source (content)", e) }
+                    sourceDeleteQueue.removeAt(0)
+                    advanceSourceDelete()
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     val realUri = resolveMediaStoreUri(uri)
                     try {
                         val req = MediaStore.createWriteRequest(context.contentResolver, listOf(realUri))
@@ -465,6 +477,8 @@ fun MainScreen(
     BackHandler(enabled = selectedIds.isNotEmpty() || isAttachmentPanelVisible || isTextSelected || currentFolderId != null || isPrivacyMode) {
         if (selectedIds.isNotEmpty()) {
             selectedIds = emptySet()
+            rangeSelectActive = false
+            rangeAnchorId = null
         } else if (isTextSelected) {
             textSelectionClearKey++
             isTextSelected = false
@@ -767,6 +781,41 @@ fun MainScreen(
 
     val mediaMessages = remember(displayedMessages) {
         displayedMessages.filter { (it.type == MessageType.IMAGE || it.type == MessageType.VIDEO) && !it.isDeleted }
+    }
+
+    // —— 范围选择逻辑 ——
+    fun toggleRangeSelect() {
+        if (rangeSelectActive) {
+            rangeSelectActive = false
+            rangeAnchorId = null
+            return
+        }
+        if (selectedIds.isEmpty()) return
+        val anchor = displayedMessages.firstOrNull { selectedIds.contains(it.id) }
+        if (anchor == null) return
+        rangeAnchorId = anchor.id
+        rangeSelectActive = true
+    }
+
+    fun selectRangeTo(targetId: String) {
+        val anchorId = rangeAnchorId
+        if (anchorId == null) {
+            rangeSelectActive = false
+            selectedIds = if (selectedIds.contains(targetId)) selectedIds - targetId else selectedIds + targetId
+            return
+        }
+        val anchorIdx = displayedMessages.indexOfFirst { it.id == anchorId }
+        val targetIdx = displayedMessages.indexOfFirst { it.id == targetId }
+        if (anchorIdx == -1 || targetIdx == -1) {
+            rangeSelectActive = false
+            rangeAnchorId = null
+            return
+        }
+        val lo = minOf(anchorIdx, targetIdx)
+        val hi = maxOf(anchorIdx, targetIdx)
+        selectedIds = displayedMessages.subList(lo, hi + 1).map { it.id }.toSet()
+        rangeSelectActive = false
+        rangeAnchorId = null
     }
 
 
@@ -1183,7 +1232,9 @@ fun MainScreen(
                 onSelectionChange = { selectedIds = it },
                 onMediaPagerIndexChange = { mediaPagerIndex = it },
                 onEnterFolder = { folderStack = folderStack + it },
-                onPlayAudio = { playAudioMessage(it) }
+                onPlayAudio = { playAudioMessage(it) },
+                rangeSelectActive = rangeSelectActive,
+                onRangeSelect = { targetId -> selectRangeTo(targetId) }
             )
 
 
@@ -1246,7 +1297,9 @@ fun MainScreen(
                         diaryGenerateTargetIds = ids
                         showDiaryGenerateDialog = true
                     },
-                    onDelete = { showDeleteMessagesConfirmDialog = true }
+                    onDelete = { showDeleteMessagesConfirmDialog = true },
+                    rangeSelectActive = rangeSelectActive,
+                    onToggleRangeSelect = { toggleRangeSelect() }
                 )
             }
         }
@@ -4509,7 +4562,9 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
     onUnpack: () -> Unit,
     onMoveIntoFolder: () -> Unit,
     onGenerateDiary: (Set<String>) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    rangeSelectActive: Boolean = false,
+    onToggleRangeSelect: () -> Unit = {}
 ) {
     if (selectedIds.isEmpty()) return
     Surface(
@@ -4530,6 +4585,27 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
         ) {
             ToolbarAction(icon = Icons.Default.Close, contentDescription = "Cancel") {
                 onSelectionChange(emptySet())
+            }
+
+            // 范围选择（Shift 模式）：全选「第一条到最后一条」之间
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (rangeSelectActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                        else Color.Transparent
+                    )
+                    .clickable(onClick = onToggleRangeSelect),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.SelectAll,
+                    contentDescription = "范围选择",
+                    tint = if (rangeSelectActive) MaterialTheme.colorScheme.primary
+                           else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp)
+                )
             }
 
             // 1. Copy (only for text messages)
@@ -4736,7 +4812,9 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
     onSelectionChange: (Set<String>) -> Unit,
     onMediaPagerIndexChange: (Int?) -> Unit,
     onEnterFolder: (String) -> Unit,
-    onPlayAudio: (com.cloudchat.model.ChatMessage) -> Unit
+    onPlayAudio: (com.cloudchat.model.ChatMessage) -> Unit,
+    rangeSelectActive: Boolean = false,
+    onRangeSelect: (String) -> Unit = {}
 ) {
     LazyColumn(
         state = listState,
@@ -4774,7 +4852,9 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                     val isDownloading = activeDownloadIds.contains(message.id)
 
                     val onMediaClickHandler: (com.cloudchat.model.ChatMessage) -> Unit = { clickedMsg ->
-                        if (selectedIds.isNotEmpty()) {
+                        if (rangeSelectActive) {
+                            onRangeSelect(clickedMsg.id)
+                        } else if (selectedIds.isNotEmpty()) {
                             onSelectionChange(
                                 if (selectedIds.contains(clickedMsg.id)) selectedIds - clickedMsg.id
                                 else selectedIds + clickedMsg.id
@@ -4793,7 +4873,11 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                         }
                     }
                     val onLongClickHandler: () -> Unit = {
-                        if (selectedIds.isEmpty()) onSelectionChange(setOf(message.id))
+                        if (rangeSelectActive) {
+                            onRangeSelect(message.id)
+                        } else if (selectedIds.isEmpty()) {
+                            onSelectionChange(setOf(message.id))
+                        }
                     }
 
                     if (isDiaryTemplate) {
@@ -4837,17 +4921,25 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                         onPlayAudio = onPlayAudio,
                         onFileClick = { openFileWithDefaultApp(context, chatRepository, it) },
                         onSelectToggle = { clickedMsg ->
-                            onSelectionChange(
-                                if (selectedIds.contains(clickedMsg.id)) selectedIds - clickedMsg.id
-                                else selectedIds + clickedMsg.id
-                            )
+                            if (rangeSelectActive) {
+                                onRangeSelect(clickedMsg.id)
+                            } else {
+                                onSelectionChange(
+                                    if (selectedIds.contains(clickedMsg.id)) selectedIds - clickedMsg.id
+                                    else selectedIds + clickedMsg.id
+                                )
+                            }
                         },
                         onMediaClick = { clickedMsg ->
                             val index = mediaMessages.indexOfFirst { it.id == clickedMsg.id }
                             if (index != -1) onMediaPagerIndexChange(index)
                         },
                         onLongClick = { clickedMsg ->
-                            if (selectedIds.isEmpty()) onSelectionChange(setOf(clickedMsg.id))
+                            if (rangeSelectActive) {
+                                onRangeSelect(clickedMsg.id)
+                            } else if (selectedIds.isEmpty()) {
+                                onSelectionChange(setOf(clickedMsg.id))
+                            }
                         },
                         onClickGroup = {
                             if (selectedIds.isNotEmpty()) {
