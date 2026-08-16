@@ -299,6 +299,10 @@ fun MainScreen(
             dismissButton = {
                 Column(horizontalAlignment = Alignment.End) {
                     TextButton(onClick = {
+                        // 忽略冲突，保持现状
+                        historyConflictEvent = null
+                    }) { Text("忽略") }
+                    TextButton(onClick = {
                         // 重新检查服务器记录
                         historyConflictEvent = null
                         scope.launch {

@@ -139,11 +139,14 @@ class ChatRepository(private val context: Context) {
 
     // Track active upload jobs to support cancellation
     private val activeUploadJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
+    // 记录每条消息「真正开始上传」的时间（进入上传锁之后），用于超时检测
+    private val uploadStartedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val uploadMutex = kotlinx.coroutines.sync.Mutex()
 
     fun cancelUpload(messageId: String) {
         activeUploadJobs[messageId]?.cancel()
         activeUploadJobs.remove(messageId)
+        uploadStartedAt.remove(messageId)
         _uploadProgress.update { it - messageId }
         scope.launch {
             updateMessageStatus(messageId, com.cloudchat.model.MessageStatus.FAILED)
@@ -567,13 +570,21 @@ class ChatRepository(private val context: Context) {
             while (isActive) {
                 delay(_syncInterval.value)
                 try {
-                    // SENDING 超时检测：超过 30 秒自动标记 FAILED
+                    // SENDING 超时检测：仅对「真正开始上传」的消息计时，
+                    // 排队等待上传锁的消息不计时，避免被误判 FAILED。
                     val now = System.currentTimeMillis()
-                    _messages.update { list ->
-                        list.map { msg ->
-                            if (msg.status == MessageStatus.SENDING && (now - msg.timestamp) > 30_000) {
-                                msg.copy(status = MessageStatus.FAILED)
-                            } else msg
+                    val timedOutIds = uploadStartedAt.entries
+                        .filter { now - it.value > 30_000L }
+                        .map { it.key }
+                        .toSet()
+                    if (timedOutIds.isNotEmpty()) {
+                        uploadStartedAt.keys.removeAll(timedOutIds)
+                        _messages.update { list ->
+                            list.map { msg ->
+                                if (msg.status == MessageStatus.SENDING && msg.id in timedOutIds) {
+                                    msg.copy(status = MessageStatus.FAILED)
+                                } else msg
+                            }
                         }
                     }
                     if (storageProvider != null && currentConfig != null) {
@@ -710,6 +721,8 @@ class ChatRepository(private val context: Context) {
                 if (currentJob != null) {
                     activeUploadJobs[newMessage.id] = currentJob
                 }
+                // 拿到上传锁，真正开始上传时才计时
+                uploadStartedAt[newMessage.id] = System.currentTimeMillis()
             try {
                 if (localUri != null && fileName != null) {
                     try {
@@ -900,6 +913,7 @@ class ChatRepository(private val context: Context) {
                 config.id.let { saveLocalHistory(it) }
             } finally {
                 activeUploadJobs.remove(newMessage.id)
+                uploadStartedAt.remove(newMessage.id)
             }
           }
         }
@@ -952,6 +966,7 @@ class ChatRepository(private val context: Context) {
                 if (currentJob != null) {
                     activeUploadJobs[messageId] = currentJob
                 }
+                uploadStartedAt[messageId] = System.currentTimeMillis()
                 try {
                     val fileName = msg.content
                     if (msg.type == com.cloudchat.model.MessageType.TEXT) {
@@ -1000,6 +1015,7 @@ class ChatRepository(private val context: Context) {
                     currentConfig?.id?.let { saveLocalHistory(it) }
                 } finally {
                     activeUploadJobs.remove(messageId)
+                    uploadStartedAt.remove(messageId)
                 }
             }
         }
