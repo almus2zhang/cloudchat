@@ -299,12 +299,14 @@ fun MainScreen(
             dismissButton = {
                 Column(horizontalAlignment = Alignment.End) {
                     TextButton(onClick = {
-                        // 忽略冲突，保持现状
+                        // 忽略冲突，本次会话内不再重复提示
                         historyConflictEvent = null
+                        chatRepository.suppressHistoryConflict()
                     }) { Text("忽略") }
                     TextButton(onClick = {
-                        // 重新检查服务器记录
+                        // 重新检查服务器记录（先清除忽略标志）
                         historyConflictEvent = null
+                        chatRepository.clearHistoryConflictSuppression()
                         scope.launch {
                             chatRepository.refreshHistoryFromCloud()
                         }

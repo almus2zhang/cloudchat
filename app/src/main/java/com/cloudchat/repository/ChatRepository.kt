@@ -141,12 +141,17 @@ class ChatRepository(private val context: Context) {
     private val activeUploadJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     // 记录每条消息「真正开始上传」的时间（进入上传锁之后），用于超时检测
     private val uploadStartedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    // 记录每条消息「进入 SENDING 状态」的时间，用于排队兜底超时
+    private val sendStartedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    // 用户选择「忽略」服务器为空冲突后，本次会话内不再重复弹窗
+    private val conflictSuppressed = java.util.concurrent.atomic.AtomicBoolean(false)
     private val uploadMutex = kotlinx.coroutines.sync.Mutex()
 
     fun cancelUpload(messageId: String) {
         activeUploadJobs[messageId]?.cancel()
         activeUploadJobs.remove(messageId)
         uploadStartedAt.remove(messageId)
+        sendStartedAt.remove(messageId)
         _uploadProgress.update { it - messageId }
         scope.launch {
             updateMessageStatus(messageId, com.cloudchat.model.MessageStatus.FAILED)
@@ -570,15 +575,22 @@ class ChatRepository(private val context: Context) {
             while (isActive) {
                 delay(_syncInterval.value)
                 try {
-                    // SENDING 超时检测：仅对「真正开始上传」的消息计时，
-                    // 排队等待上传锁的消息不计时，避免被误判 FAILED。
+                    // SENDING 超时检测（两级）：
+                    // 1) 正在上传（uploadStartedAt 有记录）：30 秒未完成 → FAILED
+                    // 2) 排队兜底（sendStartedAt 有记录但 uploadStartedAt 无记录）：3 分钟仍未开始 → FAILED
                     val now = System.currentTimeMillis()
-                    val timedOutIds = uploadStartedAt.entries
-                        .filter { now - it.value > 30_000L }
-                        .map { it.key }
-                        .toSet()
+                    val timedOutIds = mutableSetOf<String>()
+                    uploadStartedAt.entries.forEach { (id, start) ->
+                        if (now - start > 30_000L) timedOutIds.add(id)
+                    }
+                    sendStartedAt.entries.forEach { (id, start) ->
+                        if (now - start > 180_000L && !uploadStartedAt.containsKey(id)) {
+                            timedOutIds.add(id)
+                        }
+                    }
                     if (timedOutIds.isNotEmpty()) {
                         uploadStartedAt.keys.removeAll(timedOutIds)
+                        sendStartedAt.keys.removeAll(timedOutIds)
                         _messages.update { list ->
                             list.map { msg ->
                                 if (msg.status == MessageStatus.SENDING && msg.id in timedOutIds) {
@@ -700,6 +712,7 @@ class ChatRepository(private val context: Context) {
         localUri?.let { uriStr ->
             transientLocalUris[newMessage.id] = uriStr
         }
+        sendStartedAt[newMessage.id] = System.currentTimeMillis()
         _messages.update { it + newMessage }
         // 立即同步写本地缓存，防止 scope 取消后消息丢失
         try {
@@ -914,6 +927,7 @@ class ChatRepository(private val context: Context) {
             } finally {
                 activeUploadJobs.remove(newMessage.id)
                 uploadStartedAt.remove(newMessage.id)
+                sendStartedAt.remove(newMessage.id)
             }
           }
         }
@@ -959,6 +973,7 @@ class ChatRepository(private val context: Context) {
         val provider = storageProvider ?: return
         
         updateMessageStatus(messageId, MessageStatus.SENDING)
+        sendStartedAt[messageId] = System.currentTimeMillis()
 
         withContext(Dispatchers.IO) {
             uploadMutex.withLock {
@@ -1016,6 +1031,7 @@ class ChatRepository(private val context: Context) {
                 } finally {
                     activeUploadJobs.remove(messageId)
                     uploadStartedAt.remove(messageId)
+                    sendStartedAt.remove(messageId)
                 }
             }
         }
@@ -1268,6 +1284,7 @@ class ChatRepository(private val context: Context) {
                 shardNames.forEach { shardName ->
                     val tempFile = File(context.cacheDir, "merge_$shardName")
                     var cloudList: List<ChatMessage> = emptyList()
+                    var downloadFailed = false
                     try {
                         provider.downloadFile(shardName, tempFile)
                         if (tempFile.exists()) {
@@ -1275,8 +1292,17 @@ class ChatRepository(private val context: Context) {
                             val rawList: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
                             cloudList = rawList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
                         }
-                    } catch (e: Exception) {}
-                    
+                    } catch (e: Exception) {
+                        // 下载失败（网络抖动/超时），不能当作「shard 为空」处理，否则会用空列表覆盖服务器数据
+                        downloadFailed = true
+                        Log.w("ChatRepository", "Download shard failed, skip merge: $shardName", e)
+                    }
+
+                    if (downloadFailed) {
+                        // 本次下载失败，跳过该 shard 的合并与上传，避免误覆盖服务器数据
+                        return@forEach
+                    }
+
                     val cloudMap = cloudList.associateBy { it.id }.toMutableMap()
                     var shardChanged = false
                     
@@ -1291,7 +1317,7 @@ class ChatRepository(private val context: Context) {
                         }
                     }
                     
-                    if (shardChanged || cloudList.isEmpty()) {
+                    if (shardChanged) {
                         val mergedList = cloudMap.values.sortedBy { it.timestamp }
                         provider.uploadText(gson.toJson(mergedList), shardName)
                         indexChanged = true
@@ -1521,6 +1547,16 @@ class ChatRepository(private val context: Context) {
         return bytes
     }
 
+    // 用户选择「忽略」服务器为空冲突：本次会话内不再重复弹窗
+    fun suppressHistoryConflict() {
+        conflictSuppressed.set(true)
+    }
+
+    // 清除冲突忽略标志（用于「重新检查」或服务器恢复时重新提示）
+    fun clearHistoryConflictSuppression() {
+        conflictSuppressed.set(false)
+    }
+
     suspend fun refreshHistoryFromCloud() = withContext(Dispatchers.IO) {
         if (!isRefreshingFromCloud.compareAndSet(false, true)) return@withContext
         _isSyncing.value = true
@@ -1547,12 +1583,14 @@ class ChatRepository(private val context: Context) {
                     _isServerConnected.value = true
                     _isSyncing.value = false
                     isRefreshingFromCloud.set(false)
-                    historyConflict.tryEmit(HistoryConflictEvent(
-                        reason = "not_found",
-                        message = "服务器上未找到聊天记录，可能是首次使用或记录被意外清空。\n\n" +
-                                "• 用本地记录覆盖服务器：将本机聊天记录上传到服务器\n" +
-                                "• 清空本地记录：清除本机所有记录，从零开始"
-                    ))
+                    if (!conflictSuppressed.get()) {
+                        historyConflict.tryEmit(HistoryConflictEvent(
+                            reason = "not_found",
+                            message = "服务器上未找到聊天记录，可能是首次使用或记录被意外清空。\n\n" +
+                                    "• 用本地记录覆盖服务器：将本机聊天记录上传到服务器\n" +
+                                    "• 清空本地记录：清除本机所有记录，从零开始"
+                        ))
+                    }
                     return@withContext
                 }
             }
@@ -1586,18 +1624,22 @@ class ChatRepository(private val context: Context) {
                     // 云端 index 存在但 shard 全为空 → 服务器记录被清空，通知用户选择
                     Log.w("ChatRepository", "Cloud index exists but all shards empty")
                     isRefreshingFromCloud.set(false)
-                    historyConflict.tryEmit(HistoryConflictEvent(
-                        reason = "empty",
-                        message = "服务器上的聊天记录为空（可能是被其他人清空了）。\n\n" +
-                                "• 用本地记录覆盖服务器：将本机聊天记录上传到服务器\n" +
-                                "• 清空本地记录：清除本机所有记录，与服务器保持一致"
-                    ))
+                    if (!conflictSuppressed.get()) {
+                        historyConflict.tryEmit(HistoryConflictEvent(
+                            reason = "empty",
+                            message = "服务器上的聊天记录为空（可能是被其他人清空了）。\n\n" +
+                                    "• 用本地记录覆盖服务器：将本机聊天记录上传到服务器\n" +
+                                    "• 清空本地记录：清除本机所有记录，与服务器保持一致"
+                        ))
+                    }
                     return@withContext
                 }
             }
 
             saveLocalHistory(config.id)
             _isServerConnected.value = true
+            // 服务器已恢复正常，重置冲突忽略标志，后续如再次为空会重新提示
+            conflictSuppressed.set(false)
         } catch (e: Exception) {
             Log.e("ChatRepository", "Cloud refresh failed", e)
             _isServerConnected.value = provider.isReachable()
