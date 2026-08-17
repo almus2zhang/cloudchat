@@ -1315,24 +1315,18 @@ class ChatRepository(private val context: Context) {
         var indexChanged = false
 
         shardNames.forEach { shardName ->
-            val tempFile = File(context.cacheDir, "merge_$shardName")
             var cloudList: List<ChatMessage> = emptyList()
-            var downloadFailed = false
             try {
-                provider.downloadFile(shardName, tempFile)
-                if (tempFile.exists()) {
-                    val json = tempFile.readText()
+                // 用 downloadText：shard 不存在(404)返回 null（正常首次上传），
+                // 只有网络错误才抛异常（此时跳过，避免误覆盖服务器数据）。
+                val json = provider.downloadText(shardName)
+                if (json != null) {
                     val rawList: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
                     cloudList = rawList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
                 }
             } catch (e: Exception) {
-                // 下载失败（网络抖动/超时），不能当作「shard 为空」处理，否则会用空列表覆盖服务器数据
-                downloadFailed = true
+                // 下载失败（网络抖动/超时），跳过该 shard 的合并与上传，避免误覆盖服务器数据
                 Log.w("ChatRepository", "Download shard failed, skip merge: $shardName", e)
-            }
-
-            if (downloadFailed) {
-                // 本次下载失败，跳过该 shard 的合并与上传，避免误覆盖服务器数据
                 return@forEach
             }
 
