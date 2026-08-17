@@ -146,6 +146,10 @@ class ChatRepository(private val context: Context) {
     // 用户选择「忽略」服务器为空冲突后，本次会话内不再重复弹窗
     private val conflictSuppressed = java.util.concurrent.atomic.AtomicBoolean(false)
     private val uploadMutex = kotlinx.coroutines.sync.Mutex()
+    // history 同步串行锁：保证同一时刻只有一个 history 上传在跑，避免并发覆盖 chat_index/shard
+    private val historySyncMutex = kotlinx.coroutines.sync.Mutex()
+    // history 同步防抖：已有一个待执行/执行中的同步时，新请求只置位不重复排队
+    private val historySyncRequested = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun cancelUpload(messageId: String) {
         activeUploadJobs[messageId]?.cancel()
@@ -591,6 +595,10 @@ class ChatRepository(private val context: Context) {
                     if (timedOutIds.isNotEmpty()) {
                         uploadStartedAt.keys.removeAll(timedOutIds)
                         sendStartedAt.keys.removeAll(timedOutIds)
+                        // 取消仍在进行的上传，避免上传完成后把 FAILED 状态覆盖回 SUCCESS
+                        timedOutIds.forEach { id ->
+                            activeUploadJobs.remove(id)?.cancel()
+                        }
                         _messages.update { list ->
                             list.map { msg ->
                                 if (msg.status == MessageStatus.SENDING && msg.id in timedOutIds) {
@@ -1255,86 +1263,106 @@ class ChatRepository(private val context: Context) {
     private fun syncHistory(excludeIds: List<String> = emptyList()) {
         val config = currentConfig ?: return
         val currentList = _messages.value
+        // 本地缓存立即保存（保留完整状态：SENDING/FAILED/SUCCESS，用于界面显示与重发）
         context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE).edit().putString("history_${config.id}", gson.toJson(currentList)).apply()
         getLocalHistoryFile(config.id).writeText(gson.toJson(currentList))
 
-        GlobalScope.launch(Dispatchers.IO) {
+        // 服务器同步：串行 + 防抖，避免大量消息同时成功时并发覆盖 chat_index/shard
+        if (!historySyncRequested.compareAndSet(false, true)) {
+            // 已有一个同步在执行/待执行，本次只需等待其合并最新状态，不重复排队
+            return
+        }
+        scope.launch(Dispatchers.IO) {
             try {
-                val provider = storageProvider ?: return@launch
-                
-                var indexJson = provider.downloadText("chat_index.json")
-                val shardNames = mutableSetOf<String>()
-                if (indexJson != null) {
+                historySyncMutex.withLock {
                     try {
-                        val list: List<String> = gson.fromJson(indexJson, object : TypeToken<List<String>>() {}.type)
-                        shardNames.addAll(list)
-                    } catch (e: Exception) {}
-                }
-                
-                val shardsData = mutableMapOf<String, MutableList<ChatMessage>>()
-                currentList.forEach { msg ->
-                    val shardName = getMonthShardName(msg.timestamp)
-                    shardNames.add(shardName)
-                    if (shardsData[shardName] == null) shardsData[shardName] = mutableListOf()
-                    shardsData[shardName]?.add(msg)
-                }
-                
-                var indexChanged = false
-                
-                shardNames.forEach { shardName ->
-                    val tempFile = File(context.cacheDir, "merge_$shardName")
-                    var cloudList: List<ChatMessage> = emptyList()
-                    var downloadFailed = false
-                    try {
-                        provider.downloadFile(shardName, tempFile)
-                        if (tempFile.exists()) {
-                            val json = tempFile.readText()
-                            val rawList: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
-                            cloudList = rawList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
-                        }
-                    } catch (e: Exception) {
-                        // 下载失败（网络抖动/超时），不能当作「shard 为空」处理，否则会用空列表覆盖服务器数据
-                        downloadFailed = true
-                        Log.w("ChatRepository", "Download shard failed, skip merge: $shardName", e)
-                    }
-
-                    if (downloadFailed) {
-                        // 本次下载失败，跳过该 shard 的合并与上传，避免误覆盖服务器数据
-                        return@forEach
-                    }
-
-                    val cloudMap = cloudList.associateBy { it.id }.toMutableMap()
-                    var shardChanged = false
-                    
-                    val localShardMsgs = shardsData[shardName] ?: emptyList()
-                    localShardMsgs.forEach { localMsg ->
-                        if (localMsg.status == MessageStatus.SUCCESS) {
-                            val cloudMsg = cloudMap[localMsg.id]
-                            if (cloudMsg == null || localMsg.lastModified > cloudMsg.lastModified) {
-                                cloudMap[localMsg.id] = localMsg
-                                shardChanged = true
-                            }
-                        }
-                    }
-                    
-                    if (shardChanged) {
-                        val mergedList = cloudMap.values.sortedBy { it.timestamp }
-                        provider.uploadText(gson.toJson(mergedList), shardName)
-                        indexChanged = true
+                        // 取最新消息列表（防抖合并后，覆盖所有期间的新变化）
+                        val latestList = _messages.value
+                        doSyncHistoryLocked(latestList)
+                    } finally {
+                        historySyncRequested.set(false)
                     }
                 }
-                
-                if (indexChanged || indexJson == null) {
-                    provider.uploadText(gson.toJson(shardNames.toList()), "chat_index.json")
-                }
-                
-                lastKnownCloudTime = provider.getLastModified("chat_index.json")
-                _isServerConnected.value = true
             } catch (e: Exception) {
                 Log.e("ChatRepository", "Cloud sync failed", e)
                 _isServerConnected.value = storageProvider?.isReachable() ?: false
+                historySyncRequested.set(false)
             }
         }
+    }
+
+    // 在 historySyncMutex 保护下执行的真正同步逻辑（串行，不会并发）
+    private suspend fun doSyncHistoryLocked(currentList: List<ChatMessage>) {
+        val provider = storageProvider ?: return
+
+        var indexJson = provider.downloadText("chat_index.json")
+        val shardNames = mutableSetOf<String>()
+        if (indexJson != null) {
+            try {
+                val list: List<String> = gson.fromJson(indexJson, object : TypeToken<List<String>>() {}.type)
+                shardNames.addAll(list)
+            } catch (e: Exception) {}
+        }
+
+        val shardsData = mutableMapOf<String, MutableList<ChatMessage>>()
+        currentList.forEach { msg ->
+            val shardName = getMonthShardName(msg.timestamp)
+            shardNames.add(shardName)
+            if (shardsData[shardName] == null) shardsData[shardName] = mutableListOf()
+            shardsData[shardName]?.add(msg)
+        }
+
+        var indexChanged = false
+
+        shardNames.forEach { shardName ->
+            val tempFile = File(context.cacheDir, "merge_$shardName")
+            var cloudList: List<ChatMessage> = emptyList()
+            var downloadFailed = false
+            try {
+                provider.downloadFile(shardName, tempFile)
+                if (tempFile.exists()) {
+                    val json = tempFile.readText()
+                    val rawList: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
+                    cloudList = rawList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
+                }
+            } catch (e: Exception) {
+                // 下载失败（网络抖动/超时），不能当作「shard 为空」处理，否则会用空列表覆盖服务器数据
+                downloadFailed = true
+                Log.w("ChatRepository", "Download shard failed, skip merge: $shardName", e)
+            }
+
+            if (downloadFailed) {
+                // 本次下载失败，跳过该 shard 的合并与上传，避免误覆盖服务器数据
+                return@forEach
+            }
+
+            val cloudMap = cloudList.associateBy { it.id }.toMutableMap()
+            var shardChanged = false
+
+            val localShardMsgs = shardsData[shardName] ?: emptyList()
+            localShardMsgs.forEach { localMsg ->
+                if (localMsg.status == MessageStatus.SUCCESS) {
+                    val cloudMsg = cloudMap[localMsg.id]
+                    if (cloudMsg == null || localMsg.lastModified > cloudMsg.lastModified) {
+                        cloudMap[localMsg.id] = localMsg
+                        shardChanged = true
+                    }
+                }
+            }
+
+            if (shardChanged) {
+                val mergedList = cloudMap.values.sortedBy { it.timestamp }
+                provider.uploadText(gson.toJson(mergedList), shardName)
+                indexChanged = true
+            }
+        }
+
+        if (indexChanged || indexJson == null) {
+            provider.uploadText(gson.toJson(shardNames.toList()), "chat_index.json")
+        }
+
+        lastKnownCloudTime = provider.getLastModified("chat_index.json")
+        _isServerConnected.value = true
     }
 
     private fun getVideoDuration(uri: Uri): Long {
