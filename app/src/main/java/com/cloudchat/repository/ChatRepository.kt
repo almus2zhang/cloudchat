@@ -1587,6 +1587,12 @@ class ChatRepository(private val context: Context) {
 
     suspend fun refreshHistoryFromCloud() = withContext(Dispatchers.IO) {
         if (!isRefreshingFromCloud.compareAndSet(false, true)) return@withContext
+        // 有正在上传的任务时跳过本次刷新，避免「拉取」与「推送」竞态，
+        // 否则会把刚发送成功、尚未上传完的消息覆盖删除。等上传完成后再刷新。
+        if (activeUploadJobs.isNotEmpty() || historySyncRequested.get()) {
+            isRefreshingFromCloud.set(false)
+            return@withContext
+        }
         _isSyncing.value = true
         val provider = storageProvider ?: run { _isSyncing.value = false; isRefreshingFromCloud.set(false); return@withContext }
         val config = currentConfig ?: run { isRefreshingFromCloud.set(false); return@withContext }
@@ -1642,11 +1648,14 @@ class ChatRepository(private val context: Context) {
             // - shard 有数据：合并云端 + 本地 pending
             // - shard 全为空（服务器被清空）：保留本地 pending，清空已成功的
             _messages.update { current ->
-                val pendingOrFailed = current.filter { it.status != MessageStatus.SUCCESS && it.id !in cloudIds }
+                // 保留「本地有、云端没有」的消息：
+                // 1) 非 SUCCESS（pending/failed，本地待处理）
+                // 2) SUCCESS 但云端还没有（刚发成功、history 尚未上传完成），避免被旧云端数据覆盖删除
+                val localOnly = current.filter { it.id !in cloudIds }
                 if (allCloudMsgs.isNotEmpty()) {
                     val merged = allCloudMsgs.map { cloudMsg ->
                         current.find { it.id == cloudMsg.id }?.let { if (it.lastModified > cloudMsg.lastModified) it else cloudMsg } ?: cloudMsg
-                    } + pendingOrFailed
+                    } + localOnly
                     merged.sortedBy { it.timestamp }
                 } else {
                     // 云端 index 存在但 shard 全为空 → 服务器记录被清空，通知用户选择
