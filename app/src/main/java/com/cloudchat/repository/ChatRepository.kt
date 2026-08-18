@@ -15,7 +15,10 @@ import com.cloudchat.utils.NetworkUtils
 import com.google.gson.Gson
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Typeface
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
@@ -275,7 +278,54 @@ class ChatRepository(private val context: Context) {
         } catch (e: Exception) {
             Log.w("ChatRepository", "Failed to download avatar $avatarName", e)
         }
+
+        // 兜底：如果服务器下载 404 或无记录，自动生成首字母 Canvas Bitmap 存到本地并尝试静默上传补全
+        try {
+            val fallbackName = avatarName.replace(Regex("^avatar_*"), "").replace(".jpg", "").ifEmpty { "User" }
+            val fallbackBmp = generateInitialAvatarBitmap(fallbackName)
+            localFile.outputStream().use { out ->
+                fallbackBmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            storageProvider?.uploadFile(localFile.inputStream(), safeName, "image/jpeg", localFile.length(), null)
+            return@withContext "file://${localFile.absolutePath}"
+        } catch (e: Exception) {
+            Log.w("ChatRepository", "Failed to generate fallback avatar", e)
+        }
+
         null
+    }
+
+    private fun generateInitialAvatarBitmap(name: String): Bitmap {
+        val initial = (name.trim().firstOrNull() ?: 'U').uppercaseChar().toString()
+        val bitmap = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+
+        val colors = listOf(
+            0xFF4F46E5.toInt(), 0xFF0284C7.toInt(), 0xFF059669.toInt(),
+            0xFFD97706.toInt(), 0xFF7C3AED.toInt(), 0xFFDB2777.toInt(),
+            0xFF2563EB.toInt(), 0xFF0D9488.toInt()
+        )
+        val colorIdx = Math.abs(name.hashCode()) % colors.size
+        val bgColor = colors[colorIdx]
+
+        val bgPaint = Paint().apply {
+            color = bgColor
+            isAntiAlias = true
+        }
+        canvas.drawRect(0f, 0f, 128f, 128f, bgPaint)
+
+        val textPaint = Paint().apply {
+            color = android.graphics.Color.WHITE
+            textSize = 56f
+            typeface = Typeface.DEFAULT_BOLD
+            textAlign = Paint.Align.CENTER
+            isAntiAlias = true
+        }
+        val fontMetrics = textPaint.fontMetrics
+        val baseline = (128f - fontMetrics.bottom - fontMetrics.top) / 2f
+        canvas.drawText(initial, 64f, baseline, textPaint)
+
+        return bitmap
     }
 
     suspend fun uploadCustomAvatar(config: ServerConfig, imageUri: Uri): String? = withContext(Dispatchers.IO) {
@@ -561,6 +611,52 @@ class ChatRepository(private val context: Context) {
             _messages.value = emptyList()
             try { getLocalHistoryFile(config.id).delete() } catch (e: Exception) {}
             conflictSuppressed.set(true) // 切换目录时抑制冲突对话框，让 refreshHistoryFromCloud 自动初始化
+            
+            // 路径改变时：校验并自动给新存储路径补发头像文件
+            val avatarName = config.avatarUrl
+            if (avatarName.isNotBlank() && !avatarName.startsWith("content://") && !avatarName.startsWith("file://") && !avatarName.startsWith("http")) {
+                scope.launch(Dispatchers.IO) {
+                    try {
+                        val safeName = avatarName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                        val avatarDir = File(context.cacheDir, "avatars")
+                        val localFile = File(avatarDir, safeName)
+                        val provider = storageProvider
+                        if (provider != null) {
+                            var downloaded = false
+                            val checkTmp = File(avatarDir, "check_${safeName}.tmp")
+                            if (checkTmp.exists()) checkTmp.delete()
+                            try {
+                                provider.downloadFile(avatarName, checkTmp, null)
+                                if (checkTmp.exists() && checkTmp.length() > 0) {
+                                    downloaded = true
+                                    checkTmp.delete()
+                                }
+                            } catch (e: Exception) {
+                                downloaded = false
+                            }
+                            
+                            if (!downloaded) {
+                                // 新路径服务器无此头像，从本地缓存或生成首字母补发
+                                if (localFile.exists() && localFile.length() > 0) {
+                                    provider.uploadFile(localFile.inputStream(), avatarName, "image/jpeg", localFile.length(), null)
+                                    Log.i("ChatRepository", "Avatar auto re-uploaded to new server path: $avatarName")
+                                } else {
+                                    val fallbackBmp = generateInitialAvatarBitmap(config.username.ifEmpty { "User" })
+                                    localFile.parentFile?.mkdirs()
+                                    localFile.outputStream().use { out ->
+                                        fallbackBmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                                    }
+                                    provider.uploadFile(localFile.inputStream(), avatarName, "image/jpeg", localFile.length(), null)
+                                    Log.i("ChatRepository", "Generated & uploaded fallback avatar: $avatarName")
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w("ChatRepository", "Failed to check/reupload avatar on path change", e)
+                    }
+                }
+            }
+
             scope.launch { refreshHistoryFromCloud() }
         } else {
             // 位置未变（仅修改服务器地址/用户名/密码/证书等）：保留本地缓存，离线也能看
