@@ -4839,6 +4839,7 @@ fun BoxScope.FastScrollbar(
     if (totalItemsCount <= 3) return
 
     var isDragging by remember { mutableStateOf(false) }
+    var draggedTopOffsetPx by remember { mutableFloatStateOf(0f) }
     var isVisible by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
 
@@ -4861,51 +4862,52 @@ fun BoxScope.FastScrollbar(
     BoxWithConstraints(
         modifier = modifier
             .fillMaxHeight()
-            .width(40.dp)
+            .width(64.dp)
             .graphicsLayer { this.alpha = alpha }
     ) {
+        val density = LocalDensity.current
         val heightPx = constraints.maxHeight.toFloat()
+        val thumbSizePx = with(density) { 56.dp.toPx() }
+        val availableHeight = (heightPx - thumbSizePx).coerceAtLeast(1f)
+
         val firstVisibleIndex = listState.firstVisibleItemIndex
         val visibleItemsCount = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-
         val maxScrollIndex = (totalItemsCount - visibleItemsCount).coerceAtLeast(1)
         val scrollFraction = (firstVisibleIndex.toFloat() / maxScrollIndex.toFloat()).coerceIn(0f, 1f)
-        val thumbHeightPx = (heightPx * (visibleItemsCount.toFloat() / totalItemsCount.toFloat())).coerceIn(120f, heightPx * 0.35f)
-        val topOffsetPx = ((1f - scrollFraction) * (heightPx - thumbHeightPx)).coerceIn(0f, heightPx - thumbHeightPx)
 
-        val density = LocalDensity.current
+        val calculatedTopOffsetPx = ((1f - scrollFraction) * availableHeight).coerceIn(0f, availableHeight)
+        val activeTopOffsetPx = if (isDragging) draggedTopOffsetPx else calculatedTopOffsetPx
 
         Box(
             modifier = Modifier
-                .offset { IntOffset(x = 0, y = topOffsetPx.roundToInt()) }
+                .offset { IntOffset(x = 0, y = activeTopOffsetPx.roundToInt()) }
                 .align(Alignment.TopEnd)
-                .width(32.dp)
-                .height(with(density) { thumbHeightPx.toDp() })
-                .padding(end = 4.dp, top = 2.dp, bottom = 2.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .size(56.dp)
+                .padding(end = 6.dp)
+                .clip(CircleShape)
                 .background(
-                    if (isDragging) Color(0xFF6366F1) else Color(0xBB334155)
+                    if (isDragging) Color(0xFF6366F1) else Color(0xEE334155)
                 )
                 .border(
-                    width = 1.dp,
-                    color = if (isDragging) Color(0xFF818CF8) else Color(0x6694A3B8),
-                    shape = RoundedCornerShape(16.dp)
+                    width = 2.dp,
+                    color = if (isDragging) Color(0xFFA5B4FC) else Color(0x9994A3B8),
+                    shape = CircleShape
                 )
-                .pointerInput(totalItemsCount) {
+                .pointerInput(totalItemsCount, availableHeight) {
                     detectVerticalDragGestures(
-                        onDragStart = { isDragging = true },
+                        onDragStart = {
+                            isDragging = true
+                            draggedTopOffsetPx = calculatedTopOffsetPx
+                        },
                         onDragEnd = { isDragging = false },
                         onDragCancel = { isDragging = false },
                         onVerticalDrag = { change, dragAmount ->
                             change.consume()
-                            val availableHeight = heightPx - thumbHeightPx
-                            if (availableHeight > 0) {
-                                val deltaFraction = dragAmount / availableHeight
-                                val newFraction = (scrollFraction - deltaFraction).coerceIn(0f, 1f)
-                                val targetIndex = ((1f - newFraction) * maxScrollIndex).roundToInt().coerceIn(0, totalItemsCount - 1)
-                                coroutineScope.launch {
-                                    listState.scrollToItem(targetIndex)
-                                }
+                            draggedTopOffsetPx = (draggedTopOffsetPx + dragAmount).coerceIn(0f, availableHeight)
+                            val yFraction = draggedTopOffsetPx / availableHeight
+                            val targetIndex = ((1f - yFraction) * maxScrollIndex).roundToInt().coerceIn(0, totalItemsCount - 1)
+                            coroutineScope.launch {
+                                listState.scrollToItem(targetIndex)
                             }
                         }
                     )
@@ -4916,7 +4918,7 @@ fun BoxScope.FastScrollbar(
                 imageVector = Icons.Default.UnfoldMore,
                 contentDescription = "Fast Scroll",
                 tint = Color.White,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(30.dp)
             )
         }
     }
