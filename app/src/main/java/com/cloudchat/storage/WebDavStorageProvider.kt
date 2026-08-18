@@ -331,7 +331,12 @@ class WebDavStorageProvider(
                         .build()
 
                     client.newCall(request).execute().use { response ->
-                        if (!response.isSuccessful) throw Exception("Upload failed: ${response.code}")
+                        if (!response.isSuccessful) {
+                            if (response.code == 404 || response.code == 409) {
+                                mkCol(currentBaseUrl)
+                            }
+                            throw Exception("Upload failed: ${response.code}")
+                        }
                     }
                 }
                 url

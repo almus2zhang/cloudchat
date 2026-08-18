@@ -607,57 +607,116 @@ class ChatRepository(private val context: Context) {
             oldConfig.fullModePath != config.fullModePath
 
         if (locationChanged) {
-            // 更改存储路径配置：丢掉本地缓存文件与内存消息，从云端新路径重新拉取
+            // 更改存储路径配置：彻底清空本地缓存（内存、历史文件、SharedPreferences），防止旧消息误上传到新目录
             _messages.value = emptyList()
             try { getLocalHistoryFile(config.id).delete() } catch (e: Exception) {}
+            if (oldConfig != null) {
+                try { getLocalHistoryFile(oldConfig.id).delete() } catch (e: Exception) {}
+            }
+            val prefs = context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE)
+            prefs.edit().remove("history_${config.id}").apply()
+            if (oldConfig != null) {
+                prefs.edit().remove("history_${oldConfig.id}").apply()
+            }
+            saveLocalHistory(config.id) // 写入空数组覆盖本地，确保不会被并发读取恢复
             conflictSuppressed.set(true) // 切换目录时抑制冲突对话框，让 refreshHistoryFromCloud 自动初始化
-            
-            // 路径改变时：校验并自动给新存储路径补发头像文件
-            val avatarName = config.avatarUrl
-            if (avatarName.isNotBlank() && !avatarName.startsWith("content://") && !avatarName.startsWith("file://") && !avatarName.startsWith("http")) {
-                scope.launch(Dispatchers.IO) {
-                    try {
-                        val safeName = avatarName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+
+            scope.launch(Dispatchers.IO) {
+                val provider = storageProvider ?: return@launch
+
+                // 1. 确保新路径的远程目录结构已建立 (MKCOL)
+                try {
+                    provider.testConnection()
+                } catch (e: Exception) {
+                    Log.w("ChatRepository", "testConnection on new path failed: ${e.message}")
+                }
+
+                // 2. 校验并给新存储路径上传/补发头像文件
+                try {
+                    var avatarName = config.avatarUrl
+                    val safeUsername = config.username.ifEmpty { "User" }
+
+                    // 如果头像 URL 为空，或为 content://, file://, http(s):// 等临时/本地/预设 URL
+                    if (avatarName.isBlank() || avatarName.startsWith("content://") || avatarName.startsWith("file://") || avatarName.startsWith("http")) {
+                        val newFileName = "avatar____${System.currentTimeMillis()}.jpg"
                         val avatarDir = File(context.cacheDir, "avatars")
-                        val localFile = File(avatarDir, safeName)
-                        val provider = storageProvider
-                        if (provider != null) {
-                            var downloaded = false
-                            val checkTmp = File(avatarDir, "check_${safeName}.tmp")
-                            if (checkTmp.exists()) checkTmp.delete()
+                        if (!avatarDir.exists()) avatarDir.mkdirs()
+                        val localFile = File(avatarDir, newFileName)
+
+                        var bmp: Bitmap? = null
+                        if (avatarName.startsWith("content://") || avatarName.startsWith("file://")) {
                             try {
-                                provider.downloadFile(avatarName, checkTmp, null)
-                                if (checkTmp.exists() && checkTmp.length() > 0) {
-                                    downloaded = true
-                                    checkTmp.delete()
-                                }
-                            } catch (e: Exception) {
-                                downloaded = false
-                            }
-                            
-                            if (!downloaded) {
-                                // 新路径服务器无此头像，从本地缓存或生成首字母补发
-                                if (localFile.exists() && localFile.length() > 0) {
-                                    provider.uploadFile(localFile.inputStream(), avatarName, "image/jpeg", localFile.length(), null)
-                                    Log.i("ChatRepository", "Avatar auto re-uploaded to new server path: $avatarName")
-                                } else {
-                                    val fallbackBmp = generateInitialAvatarBitmap(config.username.ifEmpty { "User" })
-                                    localFile.parentFile?.mkdirs()
-                                    localFile.outputStream().use { out ->
-                                        fallbackBmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
-                                    }
-                                    provider.uploadFile(localFile.inputStream(), avatarName, "image/jpeg", localFile.length(), null)
-                                    Log.i("ChatRepository", "Generated & uploaded fallback avatar: $avatarName")
-                                }
+                                val isStream = context.contentResolver.openInputStream(Uri.parse(avatarName))
+                                bmp = isStream?.use { BitmapFactory.decodeStream(it) }
+                            } catch (e: Exception) {}
+                        } else if (avatarName.startsWith("http")) {
+                            try {
+                                val conn = java.net.URL(avatarName).openConnection()
+                                conn.connectTimeout = 5000
+                                conn.readTimeout = 5000
+                                bmp = conn.getInputStream().use { BitmapFactory.decodeStream(it) }
+                            } catch (e: Exception) {}
+                        }
+
+                        if (bmp == null) {
+                            bmp = generateInitialAvatarBitmap(safeUsername)
+                        }
+
+                        val maxSide = 128
+                        val side = Math.min(bmp.width, bmp.height)
+                        val sx = (bmp.width - side) / 2
+                        val sy = (bmp.height - side) / 2
+                        val cropped = Bitmap.createBitmap(bmp, sx, sy, side, side)
+                        val scaled = Bitmap.createScaledBitmap(cropped, maxSide, maxSide, true)
+
+                        localFile.outputStream().use { out ->
+                            scaled.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                        }
+
+                        avatarName = newFileName
+                        val updated = currentConfig?.copy(avatarUrl = avatarName)
+                        if (updated != null) {
+                            currentConfig = updated
+                            try {
+                                com.cloudchat.repository.SettingsRepository(context).saveAccount(updated)
+                            } catch (e: Exception) {}
+                        }
+                    }
+
+                    // 检查新服务器上是否存在该头像，不存在则上传
+                    val safeName = avatarName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                    val avatarDir = File(context.cacheDir, "avatars")
+                    val localFile = File(avatarDir, safeName)
+                    val checkTmp = File(avatarDir, "check_${safeName}.tmp")
+                    if (checkTmp.exists()) checkTmp.delete()
+
+                    var existsOnServer = false
+                    try {
+                        provider.downloadFile(avatarName, checkTmp, null)
+                        if (checkTmp.exists() && checkTmp.length() > 0) {
+                            existsOnServer = true
+                            checkTmp.delete()
+                        }
+                    } catch (e: Exception) {}
+
+                    if (!existsOnServer) {
+                        if (!localFile.exists() || localFile.length() == 0L) {
+                            val fallbackBmp = generateInitialAvatarBitmap(safeUsername)
+                            localFile.parentFile?.mkdirs()
+                            localFile.outputStream().use { out ->
+                                fallbackBmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
                             }
                         }
-                    } catch (e: Exception) {
-                        Log.w("ChatRepository", "Failed to check/reupload avatar on path change", e)
+                        provider.uploadFile(localFile.inputStream(), avatarName, "image/jpeg", localFile.length(), null)
+                        Log.i("ChatRepository", "Avatar auto uploaded to new server path: $avatarName")
                     }
+                } catch (e: Exception) {
+                    Log.w("ChatRepository", "Failed to check/upload avatar to new path", e)
                 }
-            }
 
-            scope.launch { refreshHistoryFromCloud() }
+                // 3. 从云端新路径拉取历史记录（服务器为空则触发 dummy 初始化，有记录则下载）
+                refreshHistoryFromCloud()
+            }
         } else {
             // 位置未变（仅修改服务器地址/用户名/密码/证书等）：保留本地缓存，离线也能看
             loadLocalHistory(config.id)
