@@ -31,6 +31,15 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollScope
+import androidx.compose.foundation.gestures.ScrollableDefaults
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.platform.LocalDensity
+import kotlin.math.roundToInt
+import kotlin.math.abs
+
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -4806,6 +4815,110 @@ private fun ToolbarAction(
     }
 }
 
+@Composable
+fun rememberFastFlingBehavior(): FlingBehavior {
+    val defaultFling = ScrollableDefaults.flingBehavior()
+    return remember(defaultFling) {
+        object : FlingBehavior {
+            override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+                return with(defaultFling) { performFling(initialVelocity * 1.5f) }
+            }
+        }
+    }
+}
+
+@Composable
+fun BoxScope.FastScrollbar(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    totalItemsCount: Int,
+    modifier: Modifier = Modifier
+) {
+    if (totalItemsCount <= 3) return
+
+    var isDragging by remember { mutableStateOf(false) }
+    var isVisible by remember { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+
+    LaunchedEffect(listState.isScrollInProgress, isDragging) {
+        if (listState.isScrollInProgress || isDragging) {
+            isVisible = true
+        } else {
+            kotlinx.coroutines.delay(1200)
+            isVisible = false
+        }
+    }
+
+    val alpha by animateFloatAsState(
+        targetValue = if (isVisible) 1f else 0f,
+        animationSpec = tween(300), label = "alpha"
+    )
+
+    if (alpha <= 0.01f && !isVisible) return
+
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxHeight()
+            .width(40.dp)
+            .graphicsLayer { this.alpha = alpha }
+    ) {
+        val heightPx = constraints.maxHeight.toFloat()
+        val firstVisibleIndex = listState.firstVisibleItemIndex
+        val visibleItemsCount = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+
+        val maxScrollIndex = (totalItemsCount - visibleItemsCount).coerceAtLeast(1)
+        val scrollFraction = (firstVisibleIndex.toFloat() / maxScrollIndex.toFloat()).coerceIn(0f, 1f)
+        val thumbHeightPx = (heightPx * (visibleItemsCount.toFloat() / totalItemsCount.toFloat())).coerceIn(120f, heightPx * 0.35f)
+        val topOffsetPx = ((1f - scrollFraction) * (heightPx - thumbHeightPx)).coerceIn(0f, heightPx - thumbHeightPx)
+
+        val density = LocalDensity.current
+
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(x = 0, y = topOffsetPx.roundToInt()) }
+                .align(Alignment.TopEnd)
+                .width(32.dp)
+                .height(with(density) { thumbHeightPx.toDp() })
+                .padding(end = 4.dp, top = 2.dp, bottom = 2.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(
+                    if (isDragging) Color(0xFF6366F1) else Color(0xBB334155)
+                )
+                .border(
+                    width = 1.dp,
+                    color = if (isDragging) Color(0xFF818CF8) else Color(0x6694A3B8),
+                    shape = RoundedCornerShape(16.dp)
+                )
+                .pointerInput(totalItemsCount) {
+                    detectVerticalDragGestures(
+                        onDragStart = { isDragging = true },
+                        onDragEnd = { isDragging = false },
+                        onDragCancel = { isDragging = false },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            val availableHeight = heightPx - thumbHeightPx
+                            if (availableHeight > 0) {
+                                val deltaFraction = dragAmount / availableHeight
+                                val newFraction = (scrollFraction - deltaFraction).coerceIn(0f, 1f)
+                                val targetIndex = ((1f - newFraction) * maxScrollIndex).roundToInt().coerceIn(0, totalItemsCount - 1)
+                                coroutineScope.launch {
+                                    listState.scrollToItem(targetIndex)
+                                }
+                            }
+                        }
+                    )
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Default.UnfoldMore,
+                contentDescription = "Fast Scroll",
+                tint = Color.White,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
@@ -4831,15 +4944,22 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
     rangeSelectActive: Boolean = false,
     onRangeSelect: (String) -> Unit = {}
 ) {
-    LazyColumn(
-        state = listState,
+    val customFling = rememberFastFlingBehavior()
+
+    Box(
         modifier = Modifier
             .weight(1f)
             .fillMaxWidth()
-            .then(dragModifier),
-        reverseLayout = true,
-        contentPadding = PaddingValues(8.dp)
     ) {
+        LazyColumn(
+            state = listState,
+            flingBehavior = customFling,
+            modifier = Modifier
+                .fillMaxSize()
+                .then(dragModifier),
+            reverseLayout = true,
+            contentPadding = PaddingValues(8.dp)
+        ) {
         items(chatUiItems.asReversed(), key = { it.id }) { uiItem ->
             if (isDiaryTemplate) {
                 val headerLabel = diaryDateGroups[uiItem.id]
@@ -4976,6 +5096,13 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                 }
             }
         }
+        }
+
+        FastScrollbar(
+            listState = listState,
+            totalItemsCount = chatUiItems.size,
+            modifier = Modifier.align(Alignment.CenterEnd)
+        )
     }
 }
 
