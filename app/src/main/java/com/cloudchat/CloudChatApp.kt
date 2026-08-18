@@ -4,7 +4,6 @@ import android.app.Application
 import android.util.Log
 import coil.ImageLoader
 import coil.ImageLoaderFactory
-import coil.util.DebugLogger
 import com.cloudchat.utils.NetworkUtils
 
 import coil.decode.VideoFrameDecoder
@@ -85,14 +84,19 @@ class CloudChatApp : Application(), ImageLoaderFactory {
                 add(VideoFrameDecoder.Factory())
                 add(SvgDecoder.Factory())
             }
+            .memoryCache {
+                coil.memory.MemoryCache.Builder(this)
+                    .maxSizePercent(0.25)   // 内存缓存 25%，减少滚动时重复解码
+                    .build()
+            }
             .diskCache {
                 DiskCache.Builder()
                     .directory(this.cacheDir.resolve("image_cache"))
-                    .maxSizePercent(0.02)
+                    .maxSizePercent(0.25)   // 磁盘缓存 25%（原 2% 太小，滚动时命中率低导致卡顿）
                     .build()
             }
-            .logger(DebugLogger())
-            .crossfade(true)
+            // 生产环境不开启 Debug 日志（每图打日志会拖慢滚动）
+            .crossfade(300)
             .build()
     }
 }
