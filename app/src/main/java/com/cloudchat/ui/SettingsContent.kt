@@ -26,69 +26,69 @@ fun SettingsContent(
         OutlinedTextField(
             value = config.username,
             onValueChange = { onConfigChange(config.copy(username = it)) },
-            label = { Text("Username") },
+            label = { Text("聊天昵称") },
             modifier = Modifier.fillMaxWidth()
         )
         
         Spacer(modifier = Modifier.height(16.dp))
-        Text("Storage Back-end", style = MaterialTheme.typography.titleMedium)
+        Text("存储引擎", style = MaterialTheme.typography.titleMedium)
         
         Row {
-            RadioButton(
-                selected = config.type == StorageType.S3,
-                onClick = { onConfigChange(config.copy(type = StorageType.S3)) }
-            )
-            Text("S3", modifier = Modifier.padding(top = 12.dp))
-            Spacer(modifier = Modifier.width(16.dp))
             RadioButton(
                 selected = config.type == StorageType.WEBDAV,
                 onClick = { onConfigChange(config.copy(type = StorageType.WEBDAV)) }
             )
             Text("WebDAV", modifier = Modifier.padding(top = 12.dp))
+            Spacer(modifier = Modifier.width(16.dp))
+            RadioButton(
+                selected = config.type == StorageType.S3,
+                onClick = { onConfigChange(config.copy(type = StorageType.S3)) }
+            )
+            Text("S3", modifier = Modifier.padding(top = 12.dp))
         }
 
         if (config.type == StorageType.S3) {
             OutlinedTextField(
                 value = config.endpoint,
                 onValueChange = { onConfigChange(config.copy(endpoint = it)) },
-                label = { Text("Endpoint (optional)") },
+                label = { Text("S3 Endpoint 服务地址 (可选)") },
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = config.bucket,
                 onValueChange = { onConfigChange(config.copy(bucket = it)) },
-                label = { Text("Bucket Name") },
+                label = { Text("S3 存储桶名称 (Bucket)") },
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = config.accessKey,
                 onValueChange = { onConfigChange(config.copy(accessKey = it)) },
-                label = { Text("Access Key") },
+                label = { Text("Access Key ID") },
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = config.secretKey,
                 onValueChange = { onConfigChange(config.copy(secretKey = it)) },
-                label = { Text("Secret Key") },
+                label = { Text("Secret Access Key") },
                 modifier = Modifier.fillMaxWidth()
             )
         } else {
             OutlinedTextField(
                 value = config.webDavUrl,
                 onValueChange = { onConfigChange(config.copy(webDavUrl = it)) },
-                label = { Text("WebDAV URL") },
+                label = { Text("WebDAV 服务器 URL") },
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = config.webDavUser,
                 onValueChange = { onConfigChange(config.copy(webDavUser = it)) },
-                label = { Text("WebDAV Username") },
+                label = { Text("WebDAV 用户名") },
                 modifier = Modifier.fillMaxWidth()
             )
             OutlinedTextField(
                 value = config.webDavPass,
                 onValueChange = { onConfigChange(config.copy(webDavPass = it)) },
-                label = { Text("WebDAV Password") },
+                label = { Text("WebDAV 密码") },
                 modifier = Modifier.fillMaxWidth()
             )
             Row(

@@ -9,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -308,70 +309,129 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
 
                 if (appMode == com.cloudchat.model.AppMode.SELF_BUILT) {
+                    val isJianguoyun = config.webDavUrl == "https://dav.jianguoyun.com/dav/" || config.serverPath == "CloudChat" && config.type == StorageType.WEBDAV && config.webDavFallbackUrl.isEmpty() && config.diaryBaseUrl.isEmpty()
+                    
                     Spacer(modifier = Modifier.height(8.dp))
                     TextField(
                         value = config.saveDir,
                         onValueChange = { editingConfig = config.copy(saveDir = it) },
-                        label = { Text("存储目录/用户ID (Save Directory)") },
+                        label = { Text("存储目录 / 用户ID (Save Directory)") },
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("唯一标识，如 user_ken") }
                     )
                     
                     TextField(
-                        value = config.serverPath,
-                        onValueChange = { editingConfig = config.copy(serverPath = it) },
-                        label = { Text("服务器根路径 (Server Root Path)") },
+                        value = if (isJianguoyun) "CloudChat" else config.serverPath,
+                        onValueChange = { if (!isJianguoyun) editingConfig = config.copy(serverPath = it) },
+                        enabled = !isJianguoyun,
+                        label = { Text(if (isJianguoyun) "服务器根路径 (坚果云固定锁定为 CloudChat)" else "服务器根路径 (Server Root Path)") },
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("例如 /cloudchat") }
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = config.type == StorageType.WEBDAV, onClick = { editingConfig = config.copy(type = StorageType.WEBDAV) })
+                        val selectedPreset = if (isJianguoyun) "JIANGUOYUN" else if (config.type == StorageType.S3) "S3" else "WEBDAV"
+
+                        RadioButton(
+                            selected = selectedPreset == "WEBDAV", 
+                            onClick = { 
+                                editingConfig = config.copy(type = StorageType.WEBDAV, webDavUrl = if (config.webDavUrl == "https://dav.jianguoyun.com/dav/") "" else config.webDavUrl) 
+                            }
+                        )
                         Text("WebDAV")
-                        Spacer(modifier = Modifier.width(16.dp))
-                        RadioButton(selected = config.type == StorageType.S3, onClick = { editingConfig = config.copy(type = StorageType.S3) })
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        RadioButton(
+                            selected = selectedPreset == "S3", 
+                            onClick = { editingConfig = config.copy(type = StorageType.S3) }
+                        )
                         Text("S3")
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        RadioButton(
+                            selected = selectedPreset == "JIANGUOYUN", 
+                            onClick = { 
+                                editingConfig = config.copy(
+                                    type = StorageType.WEBDAV,
+                                    webDavUrl = "https://dav.jianguoyun.com/dav/",
+                                    serverPath = "CloudChat",
+                                    webDavFallbackUrl = "",
+                                    diaryBaseUrl = ""
+                                ) 
+                            }
+                        )
+                        Text("坚果云")
                     }
 
                     TextField(
-                        value = if (config.type == StorageType.WEBDAV) config.webDavUrl else config.endpoint,
+                        value = if (config.type == StorageType.S3) config.endpoint else config.webDavUrl,
                         onValueChange = { 
-                            editingConfig = if (config.type == StorageType.WEBDAV) config.copy(webDavUrl = it) else config.copy(endpoint = it)
+                            if (!isJianguoyun) {
+                                editingConfig = if (config.type == StorageType.WEBDAV) config.copy(webDavUrl = it) else config.copy(endpoint = it)
+                            }
                         },
-                        label = { Text(if (config.type == StorageType.S3) "S3 Endpoint" else "WebDAV URL (Primary)") },
+                        enabled = !isJianguoyun,
+                        label = { Text(if (config.type == StorageType.S3) "S3 Endpoint 地址" else if (isJianguoyun) "WebDAV 服务器 URL (坚果云专用)" else "WebDAV 服务器 URL") },
                         modifier = Modifier.fillMaxWidth()
                     )
 
                     if (config.type == StorageType.WEBDAV) {
                         Spacer(modifier = Modifier.height(8.dp))
                         TextField(
-                            value = config.webDavFallbackUrl,
-                            onValueChange = { editingConfig = config.copy(webDavFallbackUrl = it) },
-                            label = { Text("WebDAV Fallback URL (Optional)") },
+                            value = if (isJianguoyun) "" else config.webDavFallbackUrl,
+                            onValueChange = { if (!isJianguoyun) editingConfig = config.copy(webDavFallbackUrl = it) },
+                            enabled = !isJianguoyun,
+                            label = { Text(if (isJianguoyun) "WebDAV 局域网回退 URL (坚果云模式不可用)" else "WebDAV 局域网/回退 URL (可选)") },
                             modifier = Modifier.fillMaxWidth()
                         )
                         Spacer(modifier = Modifier.height(8.dp))
                         TextField(
-                            value = config.diaryBaseUrl,
-                            onValueChange = { editingConfig = config.copy(diaryBaseUrl = it) },
-                            label = { Text("日记对外访问根 URL (Diary Base URL)") },
+                            value = if (isJianguoyun) "" else config.diaryBaseUrl,
+                            onValueChange = { if (!isJianguoyun) editingConfig = config.copy(diaryBaseUrl = it) },
+                            enabled = !isJianguoyun,
+                            label = { Text(if (isJianguoyun) "日记对外访问根 URL (坚果云模式不可用)" else "日记对外访问根 URL (Diary Base URL)") },
                             placeholder = { Text("例如: https://diary.example.com") },
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
 
                     if (config.type == StorageType.WEBDAV) {
+                        if (isJianguoyun) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                color = Color(0x25F59E0B),
+                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                            ) {
+                                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+                                    Icon(
+                                        imageVector = androidx.compose.material.icons.Icons.Default.Info,
+                                        contentDescription = null,
+                                        tint = Color(0xFFF59E0B),
+                                        modifier = Modifier.size(18.dp).padding(top = 2.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = "请按照此步骤获取应用密码：① 下载并安装坚果客户端；② 登录后前往 “设置” → “第三方应用管理” 进行关联获取密码。",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFFFBBF24)
+                                    )
+                                }
+                            }
+                        }
+
                         TextField(
                             value = config.webDavUser,
                             onValueChange = { editingConfig = config.copy(webDavUser = it) },
-                            label = { Text("Username") },
+                            label = { Text(if (isJianguoyun) "坚果云账号 (邮箱)" else "WebDAV 用户名") },
+                            placeholder = { if (isJianguoyun) Text("your_email@domain.com") },
                             modifier = Modifier.fillMaxWidth()
                         )
                         TextField(
                             value = config.webDavPass,
                             onValueChange = { editingConfig = config.copy(webDavPass = it) },
-                            label = { Text("Password") },
+                            label = { Text(if (isJianguoyun) "坚果云应用密码" else "WebDAV 密码") },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -386,7 +446,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                                 val mb = it.toLongOrNull() ?: 0L
                                 editingConfig = config.copy(webDavChunkSize = mb * 1024 * 1024L)
                             },
-                            label = { Text("WebDAV Chunk Size (MB, 0 to disable)") },
+                            label = { Text("WebDAV 分块传输大小 (MB, 0 表示禁用分块)") },
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                                 keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
                             ),
@@ -396,13 +456,13 @@ fun SettingsScreen(onBack: () -> Unit) {
                         TextField(
                             value = config.accessKey,
                             onValueChange = { editingConfig = config.copy(accessKey = it) },
-                            label = { Text("Access Key") },
+                            label = { Text("Access Key ID") },
                             modifier = Modifier.fillMaxWidth()
                         )
                         TextField(
                             value = config.secretKey,
                             onValueChange = { editingConfig = config.copy(secretKey = it) },
-                            label = { Text("Secret Key") },
+                            label = { Text("Secret Access Key") },
                             visualTransformation = PasswordVisualTransformation(),
                             modifier = Modifier.fillMaxWidth()
                         )
@@ -410,7 +470,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("Auto-download Limit (MB)", style = MaterialTheme.typography.titleMedium)
+                Text("大文件自动下载限制 (MB)", style = MaterialTheme.typography.titleMedium)
                 TextField(
                     value = (config.autoDownloadLimit / (1024 * 1024)).toString(),
                     onValueChange = { 
@@ -422,7 +482,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                     singleLine = true,
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number)
                 )
-                Text("Files larger than this will only show thumbnails.", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
+                Text("超过此限制的文件在浏览聊天时仅显示缩略图，点击后手动下载。", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
 
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("消息展示模板 (Message Template)", style = MaterialTheme.typography.titleMedium)
