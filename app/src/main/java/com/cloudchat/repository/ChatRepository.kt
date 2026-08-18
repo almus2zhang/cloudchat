@@ -547,25 +547,22 @@ class ChatRepository(private val context: Context) {
             storageProvider?.testConnection()
         }
 
-        // 判断存储位置/账号是否发生变化。若变化（例如仅调整了 serverPath/saveDir，
-        // 但 config.id 不变），旧的本地缓存历史已失效，必须按云端（新位置）重新加载，
-        // 否则会错误地显示上一个位置的消息。
+        // 判断存储位置是否发生变化。修改地址(webDavUrl)、用户名(username)、密码(webDavPass)不算改变存储位置，保留本地缓存。
+        // 仅当调整 serverPath / saveDir / bucket / fullModePath 时，才算更改配置（清空本地缓存并从云端新路径重新加载）。
         val locationChanged = oldConfig == null || oldConfig.id != config.id ||
             oldConfig.type != config.type ||
-            oldConfig.webDavUrl != config.webDavUrl ||
             oldConfig.serverPath != config.serverPath ||
             oldConfig.saveDir != config.saveDir ||
-            oldConfig.username != config.username ||
             oldConfig.bucket != config.bucket ||
             oldConfig.fullModePath != config.fullModePath
 
         if (locationChanged) {
-            // 切换配置：清空当前消息，从新配置的本地缓存加载，然后异步从云端刷新
+            // 更改存储路径配置：丢掉本地缓存文件与内存消息，从云端新路径重新拉取
             _messages.value = emptyList()
-            loadLocalHistory(config.id)
+            try { getLocalHistoryFile(config.id).delete() } catch (e: Exception) {}
             scope.launch { refreshHistoryFromCloud() }
         } else {
-            // 位置未变（仅修改证书/分块等设置）：保留本地缓存，离线也能看
+            // 位置未变（仅修改服务器地址/用户名/密码/证书等）：保留本地缓存，离线也能看
             loadLocalHistory(config.id)
             if (_messages.value.isEmpty()) {
                 scope.launch { refreshHistoryFromCloud() }
@@ -1640,10 +1637,30 @@ class ChatRepository(private val context: Context) {
                     try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
                     indexJson = gson.toJson(shards.keys.toList())
                 } else {
-                    // 服务器没有任何 history 文件：异常状态（正常不会为空），通知用户选择
+                    // 服务器没有任何 history 文件
                     _isServerConnected.value = true
                     _isSyncing.value = false
                     isRefreshingFromCloud.set(false)
+
+                    if (_messages.value.isEmpty()) {
+                        Log.i("ChatRepository", "Server has no records and local messages are empty. Creating initial dummy record.")
+                        val dummyMsg = ChatMessage(
+                            id = "msg_dummy_${System.currentTimeMillis()}",
+                            sender = config.username,
+                            senderName = config.username,
+                            senderAvatar = config.avatarUrl,
+                            content = "存储路径初始化成功",
+                            type = com.cloudchat.model.MessageType.TEXT,
+                            isOutgoing = false,
+                            status = MessageStatus.SUCCESS,
+                            timestamp = System.currentTimeMillis()
+                        )
+                        _messages.value = listOf(dummyMsg)
+                        saveLocalHistory(config.id)
+                        scope.launch { syncHistory() }
+                        return@withContext
+                    }
+
                     if (!conflictSuppressed.get()) {
                         historyConflict.tryEmit(HistoryConflictEvent(
                             reason = "not_found",
