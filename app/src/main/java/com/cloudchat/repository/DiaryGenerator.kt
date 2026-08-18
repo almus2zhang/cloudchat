@@ -207,8 +207,13 @@ object DiaryGenerator {
                     contentBlock = renderSubItem(item.messages[0])
                 }
                 val avatar = resolver.resolveAvatar(item.messages[0], "")
+                val nameChar = (item.senderName ?: item.sender ?: authorStr).take(1).uppercase()
+                val fallbackSvg = "data:image/svg+xml;charset=utf-8," + java.net.URLEncoder.encode(
+                    """<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#212c3d"/><text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-size="90" font-weight="bold" fill="#818cf8">${nameChar}</text></svg>""",
+                    "UTF-8"
+                )
                 "<div class=\"wechat-item\">" +
-                    "<img src=\"$avatar\" class=\"wechat-avatar\" alt=\"Avatar\"/>" +
+                    "<img src=\"$avatar\" class=\"wechat-avatar\" alt=\"Avatar\" onerror=\"this.onerror=null;this.src='${fallbackSvg}';\"/>" +
                     "<div class=\"wechat-body\"><div class=\"wechat-nickname\">${escapeHtml(item.senderName ?: item.sender ?: authorStr)}</div>" +
                     contentBlock +
                     "<div class=\"wechat-footer\"><span class=\"wechat-time\">${date.full}</span></div>" +

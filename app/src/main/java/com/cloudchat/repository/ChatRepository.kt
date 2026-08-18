@@ -213,6 +213,39 @@ class ChatRepository(private val context: Context) {
         return getTransientUri(messageId, fileName) != null
     }
 
+    // 将本地头像（file:// 或 content://）读取为 base64 data URI，用于日记 HTML 内嵌，避免裂图
+    private suspend fun avatarToDataUri(avatar: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val bytes: ByteArray
+            val mime: String
+            if (avatar.startsWith("content://")) {
+                val uri = android.net.Uri.parse(avatar)
+                val stream = context.contentResolver.openInputStream(uri) ?: return@withContext null
+                bytes = stream.readBytes()
+                stream.close()
+                mime = context.contentResolver.getType(uri) ?: "image/jpeg"
+            } else if (avatar.startsWith("file://")) {
+                val file = File(android.net.Uri.parse(avatar).path ?: return@withContext null)
+                if (!file.exists()) return@withContext null
+                bytes = file.readBytes()
+                mime = when (file.extension.lowercase()) {
+                    "png" -> "image/png"
+                    "gif" -> "image/gif"
+                    "webp" -> "image/webp"
+                    else -> "image/jpeg"
+                }
+            } else {
+                return@withContext null
+            }
+            if (bytes.isEmpty()) return@withContext null
+            val encoded = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            "data:$mime;base64,$encoded"
+        } catch (e: Exception) {
+            Log.w("ChatRepository", "avatarToDataUri failed", e)
+            null
+        }
+    }
+
     suspend fun resolveAvatarPath(avatarName: String?): String? = withContext(Dispatchers.IO) {
         if (avatarName.isNullOrEmpty()) return@withContext null
         if (avatarName.startsWith("http://") || avatarName.startsWith("https://") || avatarName.startsWith("content://") || avatarName.startsWith("file://") || avatarName.startsWith("data:")) {
@@ -1988,13 +2021,16 @@ class ChatRepository(private val context: Context) {
 
         if (existingFolderId == null) {
             val config = currentConfig ?: return
+            val firstMsg = messages.find { it.type != com.cloudchat.model.MessageType.FOLDER } ?: messages.firstOrNull()
             val folderMsg = com.cloudchat.model.ChatMessage(
                 id = folderId,
-                sender = config.username,
+                sender = firstMsg?.sender ?: config.username,
+                senderName = firstMsg?.senderName ?: firstMsg?.sender ?: config.username,
+                senderAvatar = firstMsg?.senderAvatar,
                 content = annotation,
                 type = com.cloudchat.model.MessageType.FOLDER,
                 timestamp = now,
-                isOutgoing = true,
+                isOutgoing = firstMsg?.isOutgoing ?: true,
                 status = com.cloudchat.model.MessageStatus.SUCCESS,
                 // 新文件夹归属 parentFolderId（即当前所在文件夹），实现嵌套
                 folderId = parentFolderId,
@@ -2500,14 +2536,15 @@ class ChatRepository(private val context: Context) {
         for (avatarName in distinctAvatars) {
             val ext = avatarName.substringAfterLast('.', "png")
             val cleanAvatar = "avatar_${avatarName.hashCode().toUInt()}.$ext"
+            val webdavPath = if (avatarName.contains("/")) avatarName else "${config.saveDir}/$avatarName"
             var uploadedAvatar = false
-            // 优先 WebDAV 远程 COPY（头像在根目录，直接复制到 assets）
-            uploadedAvatar = provider.copyRemoteFile(avatarName, "$targetAssetsDir/$cleanAvatar")
+            // 优先 WebDAV 远程 COPY（头像在 saveDir 目录，直接复制到 assets）
+            uploadedAvatar = provider.copyRemoteFile(webdavPath, "$targetAssetsDir/$cleanAvatar")
             // COPY 失败则回退：下载到本地再上传
             if (!uploadedAvatar) {
-                val tempAvatar = File(context.cacheDir, "avatar_tmp_${System.currentTimeMillis()}_$avatarName")
+                val tempAvatar = File(context.cacheDir, "avatar_tmp_${System.currentTimeMillis()}_${cleanAvatar}")
                 try {
-                    provider.downloadFile(avatarName, tempAvatar)
+                    provider.downloadFile(webdavPath, tempAvatar)
                     if (tempAvatar.exists() && tempAvatar.length() > 0) {
                         val contentType = when (ext.lowercase()) {
                             "jpg", "jpeg" -> "image/jpeg"
@@ -2526,6 +2563,21 @@ class ChatRepository(private val context: Context) {
             }
             if (uploadedAvatar) {
                 avatarUrlMap[avatarName] = "assets/$cleanAvatar"
+            }
+        }
+
+        // 处理本地路径头像（file:// / content://）：读取为 base64 data URI 存入 map，避免日记 HTML 引用本地路径导致裂图
+        val localAvatars = effectiveMessages.mapNotNull { it.senderAvatar }
+            .filter { it.startsWith("file://") || it.startsWith("content://") }
+            .distinct()
+        for (localAvatar in localAvatars) {
+            try {
+                val dataUri = avatarToDataUri(localAvatar)
+                if (dataUri != null) {
+                    avatarUrlMap[localAvatar] = dataUri
+                }
+            } catch (e: Exception) {
+                Log.w("ChatRepository", "Failed to convert local avatar $localAvatar", e)
             }
         }
 
@@ -2567,19 +2619,28 @@ class ChatRepository(private val context: Context) {
                 return msg.remoteUrl ?: msg.content
             }
             override fun resolveAvatar(msg: ChatMessage, default: String): String {
-                val displayName = msg.senderName?.ifEmpty { msg.sender } ?: msg.sender ?: authorStr
-                val fallback = "https://api.dicebear.com/7.x/bottts/png?seed=${java.net.URLEncoder.encode(displayName, "UTF-8")}"
                 val raw = msg.senderAvatar
-                if (raw.isNullOrEmpty()) return fallback
-                // 完整 URL 直接使用
-                if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("data:") ||
-                    raw.startsWith("file://") || raw.startsWith("content://")) {
+                val senderName = msg.senderName ?: msg.sender ?: "User"
+                val svgDefault = "data:image/svg+xml;charset=utf-8," + java.net.URLEncoder.encode(
+                    """<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#212c3d"/><text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-size="90" font-weight="bold" fill="#818cf8">${senderName.take(1).uppercase()}</text></svg>""",
+                    "UTF-8"
+                )
+                val fallbackDefault = if (default.isNotEmpty()) default else svgDefault
+
+                if (raw.isNullOrEmpty()) return fallbackDefault
+                // data:/http(s) 直接使用
+                if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("data:")) {
                     return raw
+                }
+                // file:// / content:// 本地路径：优先使用已转成的 data URI（避免裂图）
+                if (raw.startsWith("file://") || raw.startsWith("content://")) {
+                    avatarUrlMap[raw]?.let { return it }
+                    return fallbackDefault
                 }
                 // 优先使用已上传到 assets 的头像相对路径
                 avatarUrlMap[raw]?.let { return it }
-                // fallback：解析为服务器完整 URL
-                return provider.getFullUrl(raw) ?: fallback
+                // fallback：解析为服务器完整 URL，都没有则用默认占位
+                return provider.getFullUrl(raw) ?: fallbackDefault
             }
         }
 
