@@ -4870,37 +4870,22 @@ fun BoxScope.FastScrollbar(
     if (totalItemsCount <= 3) return
 
     var isDragging by remember { mutableStateOf(false) }
+    var wasDragging by remember { mutableStateOf(false) }
     var draggedTopOffsetPx by remember { mutableFloatStateOf(0f) }
     var isVisible by remember { mutableStateOf(false) }
-    var startScrollIndex by remember { mutableStateOf<Int?>(null) }
-    var startScrollOffset by remember { mutableStateOf<Int?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(listState.isScrollInProgress, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isDragging) {
+    LaunchedEffect(listState.isScrollInProgress, isDragging) {
         if (isDragging) {
+            wasDragging = true
             isVisible = true
         } else if (listState.isScrollInProgress) {
-            if (startScrollIndex == null) {
-                startScrollIndex = listState.firstVisibleItemIndex
-                startScrollOffset = listState.firstVisibleItemScrollOffset
-            }
-            val visibleItems = listState.layoutInfo.visibleItemsInfo
-            val viewportHeight = listState.layoutInfo.viewportSize.height.toFloat().coerceAtLeast(100f)
-            val avgItemHeight = if (visibleItems.isNotEmpty()) visibleItems.sumOf { it.size }.toFloat() / visibleItems.size else 200f
-
-            val indexDiff = kotlin.math.abs(listState.firstVisibleItemIndex - (startScrollIndex ?: listState.firstVisibleItemIndex))
-            val offsetDiff = (listState.firstVisibleItemScrollOffset - (startScrollOffset ?: listState.firstVisibleItemScrollOffset)).toFloat()
-            val totalDistancePx = kotlin.math.abs(indexDiff * avgItemHeight + offsetDiff)
-
-            // Trigger visible only when scrolled >= 1.5 screens (1.5 * viewport height)
-            if (totalDistancePx >= viewportHeight * 1.5f) {
-                isVisible = true
-            }
+            isVisible = true
         } else {
-            startScrollIndex = null
-            startScrollOffset = null
-            kotlinx.coroutines.delay(500)
+            val hideDelay = if (wasDragging) 500L else 1000L
+            kotlinx.coroutines.delay(hideDelay)
             isVisible = false
+            wasDragging = false
         }
     }
 
