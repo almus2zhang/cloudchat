@@ -2226,9 +2226,13 @@ private fun openFileWithDefaultApp(context: android.content.Context, chatReposit
                         addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     
-                    val chooser = android.content.Intent.createChooser(intent, "使用第三方应用打开 ${file.name}")
-                    chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                    context.startActivity(chooser)
+                    try {
+                        context.startActivity(intent)
+                    } catch (e: android.content.ActivityNotFoundException) {
+                        val chooser = android.content.Intent.createChooser(intent, "选择打开方式 ${file.name}")
+                        chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(chooser)
+                    }
                 } catch (e: Exception) {
                     Log.e("MainScreen", "Crash opening file", e)
                     android.widget.Toast.makeText(context, "打开文件失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
