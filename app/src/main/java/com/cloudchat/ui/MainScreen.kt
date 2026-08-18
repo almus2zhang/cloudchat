@@ -327,6 +327,7 @@ fun MainScreen(
                     TextButton(onClick = {
                         // 清空本地记录
                         historyConflictEvent = null
+                        chatRepository.suppressHistoryConflict()
                         scope.launch {
                             chatRepository.clearLocalHistory()
                         }

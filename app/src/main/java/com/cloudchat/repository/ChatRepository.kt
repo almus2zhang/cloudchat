@@ -1724,11 +1724,19 @@ class ChatRepository(private val context: Context) {
         try {
             val allMessages = _messages.value
             // 过滤已删除的条目
-            val messages = allMessages.filter { !it.isDeleted }
-            if (messages.isEmpty()) {
-                _uploadProgressPercent.value = -1
-                isRefreshingFromCloud.set(false)
-                return@withContext
+            val rawMessages = allMessages.filter { !it.isDeleted }
+            val messages = if (rawMessages.isEmpty()) {
+                listOf(ChatMessage(
+                    id = "msg_dummy_init",
+                    sender = "system",
+                    content = "",
+                    timestamp = System.currentTimeMillis(),
+                    type = com.cloudchat.model.MessageType.TEXT,
+                    status = com.cloudchat.model.MessageStatus.SUCCESS,
+                    isDeleted = true
+                ))
+            } else {
+                rawMessages
             }
             val total = messages.size
             
@@ -1815,15 +1823,35 @@ class ChatRepository(private val context: Context) {
         _uploadProgressText.value = ""
     }
 
-    // 用户选择「清空本地记录」：清除 _messages 和本地缓存
+    // 用户选择「清空本地记录」：清除 _messages 和本地缓存，并在服务器生成隐藏 dummy 索引
     suspend fun clearLocalHistory() {
         val config = currentConfig ?: return
+        conflictSuppressed.set(true)
         _messages.value = emptyList()
         withContext(Dispatchers.IO) {
             try {
                 getLocalHistoryFile(config.id).delete()
                 context.getSharedPreferences("chat_prefs", Context.MODE_PRIVATE).edit()
                     .remove("history_${config.id}").apply()
+
+                // 在服务器写入带有 dummy 隐藏标记的消息与索引，防止以后轮询再次弹出「服务器为空」
+                val provider = storageProvider
+                if (provider != null) {
+                    val dummyMsg = ChatMessage(
+                        id = "msg_dummy_init",
+                        sender = "system",
+                        content = "",
+                        timestamp = System.currentTimeMillis(),
+                        type = com.cloudchat.model.MessageType.TEXT,
+                        status = com.cloudchat.model.MessageStatus.SUCCESS,
+                        isDeleted = true
+                    )
+                    val shardName = getMonthShardName(dummyMsg.timestamp)
+                    val shardJson = gson.toJson(listOf(dummyMsg))
+                    val indexJson = gson.toJson(listOf(shardName))
+                    provider.uploadText(shardJson, shardName)
+                    provider.uploadText(indexJson, "chat_index.json")
+                }
             } catch (e: Exception) {
                 Log.e("ChatRepository", "clearLocalHistory failed", e)
             }
