@@ -560,6 +560,7 @@ class ChatRepository(private val context: Context) {
             // 更改存储路径配置：丢掉本地缓存文件与内存消息，从云端新路径重新拉取
             _messages.value = emptyList()
             try { getLocalHistoryFile(config.id).delete() } catch (e: Exception) {}
+            conflictSuppressed.set(true) // 切换目录时抑制冲突对话框，让 refreshHistoryFromCloud 自动初始化
             scope.launch { refreshHistoryFromCloud() }
         } else {
             // 位置未变（仅修改服务器地址/用户名/密码/证书等）：保留本地缓存，离线也能看

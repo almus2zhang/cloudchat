@@ -4964,7 +4964,11 @@ fun BoxScope.FastScrollbar(
             wasDragging = true
             isVisible = true
         } else if (listState.isScrollInProgress) {
-            isVisible = true
+            // 仅当滚动超过 1.5 屏时才显示快速滚动滑块
+            val visibleCount = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+            if (listState.firstVisibleItemIndex > visibleCount * 1.5f) {
+                isVisible = true
+            }
         } else {
             val hideDelay = if (wasDragging) 500L else 1000L
             kotlinx.coroutines.delay(hideDelay)
