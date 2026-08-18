@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.FlingBehavior
 import androidx.compose.foundation.gestures.ScrollScope
@@ -4864,6 +4865,42 @@ fun BoxScope.FastScrollbar(
             .fillMaxHeight()
             .width(64.dp)
             .graphicsLayer { this.alpha = alpha }
+            .pointerInput(totalItemsCount) {
+                detectVerticalDragGestures(
+                    onDragStart = { offset ->
+                        isDragging = true
+                        val heightPx = size.height.toFloat()
+                        val thumbSizePx = 56.dp.toPx()
+                        val availableHeight = (heightPx - thumbSizePx).coerceAtLeast(1f)
+                        draggedTopOffsetPx = (offset.y - thumbSizePx / 2f).coerceIn(0f, availableHeight)
+
+                        val visibleItemsCount = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+                        val maxScrollIndex = (totalItemsCount - visibleItemsCount).coerceAtLeast(1)
+                        val yFraction = draggedTopOffsetPx / availableHeight
+                        val targetIndex = ((1f - yFraction) * maxScrollIndex).roundToInt().coerceIn(0, totalItemsCount - 1)
+                        coroutineScope.launch {
+                            listState.scrollToItem(targetIndex)
+                        }
+                    },
+                    onDragEnd = { isDragging = false },
+                    onDragCancel = { isDragging = false },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        val heightPx = size.height.toFloat()
+                        val thumbSizePx = 56.dp.toPx()
+                        val availableHeight = (heightPx - thumbSizePx).coerceAtLeast(1f)
+                        draggedTopOffsetPx = (draggedTopOffsetPx + dragAmount).coerceIn(0f, availableHeight)
+
+                        val visibleItemsCount = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
+                        val maxScrollIndex = (totalItemsCount - visibleItemsCount).coerceAtLeast(1)
+                        val yFraction = draggedTopOffsetPx / availableHeight
+                        val targetIndex = ((1f - yFraction) * maxScrollIndex).roundToInt().coerceIn(0, totalItemsCount - 1)
+                        coroutineScope.launch {
+                            listState.scrollToItem(targetIndex)
+                        }
+                    }
+                )
+            }
     ) {
         val density = LocalDensity.current
         val heightPx = constraints.maxHeight.toFloat()
@@ -4892,26 +4929,7 @@ fun BoxScope.FastScrollbar(
                     width = 2.dp,
                     color = if (isDragging) Color(0xFFA5B4FC) else Color(0x9994A3B8),
                     shape = CircleShape
-                )
-                .pointerInput(totalItemsCount, availableHeight) {
-                    detectVerticalDragGestures(
-                        onDragStart = {
-                            isDragging = true
-                            draggedTopOffsetPx = calculatedTopOffsetPx
-                        },
-                        onDragEnd = { isDragging = false },
-                        onDragCancel = { isDragging = false },
-                        onVerticalDrag = { change, dragAmount ->
-                            change.consume()
-                            draggedTopOffsetPx = (draggedTopOffsetPx + dragAmount).coerceIn(0f, availableHeight)
-                            val yFraction = draggedTopOffsetPx / availableHeight
-                            val targetIndex = ((1f - yFraction) * maxScrollIndex).roundToInt().coerceIn(0, totalItemsCount - 1)
-                            coroutineScope.launch {
-                                listState.scrollToItem(targetIndex)
-                            }
-                        }
-                    )
-                },
+                ),
             contentAlignment = Alignment.Center
         ) {
             Icon(
