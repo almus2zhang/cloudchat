@@ -4884,17 +4884,22 @@ fun BoxScope.FastScrollbar(
                 startScrollIndex = listState.firstVisibleItemIndex
                 startScrollOffset = listState.firstVisibleItemScrollOffset
             }
-            val indexDiff = kotlin.math.abs(listState.firstVisibleItemIndex - (startScrollIndex ?: listState.firstVisibleItemIndex))
-            val offsetDiff = kotlin.math.abs(listState.firstVisibleItemScrollOffset - (startScrollOffset ?: listState.firstVisibleItemScrollOffset))
+            val visibleItems = listState.layoutInfo.visibleItemsInfo
+            val viewportHeight = listState.layoutInfo.viewportSize.height.toFloat().coerceAtLeast(100f)
+            val avgItemHeight = if (visibleItems.isNotEmpty()) visibleItems.sumOf { it.size }.toFloat() / visibleItems.size else 200f
 
-            // Only trigger visible after scrolling larger distance (>=2 items or >250px)
-            if (indexDiff >= 2 || offsetDiff > 250) {
+            val indexDiff = kotlin.math.abs(listState.firstVisibleItemIndex - (startScrollIndex ?: listState.firstVisibleItemIndex))
+            val offsetDiff = (listState.firstVisibleItemScrollOffset - (startScrollOffset ?: listState.firstVisibleItemScrollOffset)).toFloat()
+            val totalDistancePx = kotlin.math.abs(indexDiff * avgItemHeight + offsetDiff)
+
+            // Trigger visible only when scrolled >= 1.5 screens (1.5 * viewport height)
+            if (totalDistancePx >= viewportHeight * 1.5f) {
                 isVisible = true
             }
         } else {
             startScrollIndex = null
             startScrollOffset = null
-            kotlinx.coroutines.delay(1000)
+            kotlinx.coroutines.delay(500)
             isVisible = false
         }
     }
