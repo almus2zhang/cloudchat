@@ -4872,13 +4872,29 @@ fun BoxScope.FastScrollbar(
     var isDragging by remember { mutableStateOf(false) }
     var draggedTopOffsetPx by remember { mutableFloatStateOf(0f) }
     var isVisible by remember { mutableStateOf(false) }
+    var startScrollIndex by remember { mutableStateOf<Int?>(null) }
+    var startScrollOffset by remember { mutableStateOf<Int?>(null) }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(listState.isScrollInProgress, isDragging) {
-        if (listState.isScrollInProgress || isDragging) {
+    LaunchedEffect(listState.isScrollInProgress, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, isDragging) {
+        if (isDragging) {
             isVisible = true
+        } else if (listState.isScrollInProgress) {
+            if (startScrollIndex == null) {
+                startScrollIndex = listState.firstVisibleItemIndex
+                startScrollOffset = listState.firstVisibleItemScrollOffset
+            }
+            val indexDiff = kotlin.math.abs(listState.firstVisibleItemIndex - (startScrollIndex ?: listState.firstVisibleItemIndex))
+            val offsetDiff = kotlin.math.abs(listState.firstVisibleItemScrollOffset - (startScrollOffset ?: listState.firstVisibleItemScrollOffset))
+
+            // Only trigger visible after scrolling larger distance (>=2 items or >250px)
+            if (indexDiff >= 2 || offsetDiff > 250) {
+                isVisible = true
+            }
         } else {
-            kotlinx.coroutines.delay(1200)
+            startScrollIndex = null
+            startScrollOffset = null
+            kotlinx.coroutines.delay(1000)
             isVisible = false
         }
     }
