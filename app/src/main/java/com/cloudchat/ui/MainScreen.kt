@@ -7,6 +7,7 @@ import android.provider.MediaStore
 import android.provider.DocumentsContract
 import android.content.ContentUris
 import android.os.Build
+import android.os.Environment
 import android.webkit.MimeTypeMap
 import androidx.core.content.FileProvider
 import androidx.compose.ui.input.pointer.pointerInput
@@ -2063,26 +2064,116 @@ private fun shareMedia(context: android.content.Context, chatRepository: ChatRep
     }
 }
 
-private fun shareMediaMultiple(context: android.content.Context, uris: List<Uri>) {
-    val intent = android.content.Intent(if (uris.size > 1) android.content.Intent.ACTION_SEND_MULTIPLE else android.content.Intent.ACTION_SEND).apply {
-        if (uris.size > 1) {
-            putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, ArrayList(uris))
-        } else {
-            putExtra(android.content.Intent.EXTRA_STREAM, uris[0])
+private fun shareSelectedMessages(
+    context: android.content.Context,
+    chatRepository: ChatRepository,
+    allMessages: List<ChatMessage>,
+    selectedIds: Set<String>
+) {
+    val scope = kotlinx.coroutines.MainScope()
+    scope.launch(Dispatchers.IO) {
+        val selectedMsgs = allMessages.filter { it.id in selectedIds }
+        if (selectedMsgs.isEmpty()) return@launch
+
+        val textParts = selectedMsgs.filter { it.type == com.cloudchat.model.MessageType.TEXT || (it.content.isNotBlank() && it.type == com.cloudchat.model.MessageType.TEXT) }
+            .map { it.content }
+            .filter { it.isNotBlank() }
+
+        val fileUris = ArrayList<Uri>()
+        val authority = "${context.packageName}.fileprovider"
+
+        selectedMsgs.filter { it.type != com.cloudchat.model.MessageType.TEXT && it.type != com.cloudchat.model.MessageType.FOLDER }.forEach { msg ->
+            val localFile = if (msg.remoteUrl != null) {
+                chatRepository.downloadFileToCache(msg.id, msg.content, msg.remoteUrl!!)
+            } else {
+                val f = chatRepository.getLocalFile(msg.id, msg.content)
+                if (f.exists()) f else null
+            }
+            if (localFile != null && localFile.exists() && localFile.length() > 0) {
+                try {
+                    fileUris.add(androidx.core.content.FileProvider.getUriForFile(context, authority, localFile))
+                } catch (e: Exception) {
+                    Log.e("MainScreen", "Failed to get URI for share", e)
+                }
+            }
         }
-        type = "*/*"
-        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+        withContext(Dispatchers.Main) {
+            try {
+                if (fileUris.isNotEmpty()) {
+                    val intent = android.content.Intent(if (fileUris.size > 1) android.content.Intent.ACTION_SEND_MULTIPLE else android.content.Intent.ACTION_SEND).apply {
+                        if (fileUris.size > 1) {
+                            putParcelableArrayListExtra(android.content.Intent.EXTRA_STREAM, fileUris)
+                        } else {
+                            putExtra(android.content.Intent.EXTRA_STREAM, fileUris[0])
+                        }
+                        if (textParts.isNotEmpty()) {
+                            putExtra(android.content.Intent.EXTRA_TEXT, textParts.joinToString("\n\n"))
+                        }
+                        type = "*/*"
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    context.startActivity(android.content.Intent.createChooser(intent, "分享至..."))
+                } else if (textParts.isNotEmpty()) {
+                    val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(android.content.Intent.EXTRA_TEXT, textParts.joinToString("\n\n"))
+                    }
+                    context.startActivity(android.content.Intent.createChooser(intent, "分享文字"))
+                } else {
+                    android.widget.Toast.makeText(context, "准备分享文件失败，请稍后重试", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                Log.e("MainScreen", "Failed to start share chooser", e)
+                android.widget.Toast.makeText(context, "分享失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
     }
-    context.startActivity(android.content.Intent.createChooser(intent, "Share Media"))
+}
+
+private fun saveFileToDownloadDir(context: android.content.Context, chatRepository: ChatRepository, message: ChatMessage) {
+    val scope = kotlinx.coroutines.MainScope()
+    scope.launch(Dispatchers.IO) {
+        try {
+            val fileName = message.content
+            val localFile = if (message.remoteUrl != null) {
+                chatRepository.downloadFileToCache(message.id, fileName, message.remoteUrl!!)
+            } else {
+                val cached = chatRepository.getLocalFile(message.id, fileName)
+                if (cached.exists()) cached else null
+            }
+
+            if (localFile != null && localFile.exists()) {
+                val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "CloudChat")
+                if (!downloadsDir.exists()) downloadsDir.mkdirs()
+
+                val cleanName = fileName.replace("^\\d+_".toRegex(), "")
+                val targetFile = File(downloadsDir, cleanName)
+                localFile.copyTo(targetFile, overwrite = true)
+
+                android.media.MediaScannerConnection.scanFile(context, arrayOf(targetFile.absolutePath), null, null)
+
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "已保存至 Download/CloudChat/${targetFile.name}", android.widget.Toast.LENGTH_LONG).show()
+                }
+            } else {
+                withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "文件未能就绪，请先等待下载", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("MainScreen", "Failed to save file to Download/CloudChat", e)
+            withContext(Dispatchers.Main) {
+                android.widget.Toast.makeText(context, "保存失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 }
 
 private fun openFileWithDefaultApp(context: android.content.Context, chatRepository: ChatRepository, message: ChatMessage) {
     val scope = kotlinx.coroutines.MainScope()
-    scope.launch {
+    scope.launch(Dispatchers.IO) {
         Log.d("MainScreen", "Attempting to open file: ${message.content}")
-        val toast = android.widget.Toast.makeText(context, "Preparing file...", android.widget.Toast.LENGTH_SHORT)
-        toast.show()
-        
         val file = if (message.remoteUrl != null) {
             chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
         } else {
@@ -2101,57 +2192,50 @@ private fun openFileWithDefaultApp(context: android.content.Context, chatReposit
             }
         }
 
-        if (file != null && file.exists()) {
-            try {
-                val authority = "${context.packageName}.fileprovider"
-                val contentUri = androidx.core.content.FileProvider.getUriForFile(context, authority, file)
-                
-                // 1. Try to get MIME from extension
-                val extension = file.extension.lowercase()
-                var mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-                
-                // 2. Manual overrides for common types
-                if (mimeType == null) {
-                    mimeType = when (extension) {
-                        "pdf" -> "application/pdf"
-                        "jpg", "jpeg" -> "image/jpeg"
-                        "png" -> "image/png"
-                        "mp4" -> "video/mp4"
-                        "txt" -> "text/plain"
-                        else -> context.contentResolver.getType(contentUri)
+        withContext(Dispatchers.Main) {
+            if (file != null && file.exists()) {
+                try {
+                    val authority = "${context.packageName}.fileprovider"
+                    val contentUri = androidx.core.content.FileProvider.getUriForFile(context, authority, file)
+                    
+                    val extension = file.extension.lowercase()
+                    var mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                    
+                    if (mimeType == null) {
+                        mimeType = when (extension) {
+                            "pdf" -> "application/pdf"
+                            "jpg", "jpeg" -> "image/jpeg"
+                            "png" -> "image/png"
+                            "mp4" -> "video/mp4"
+                            "txt" -> "text/plain"
+                            "doc", "docx" -> "application/msword"
+                            "xls", "xlsx" -> "application/vnd.ms-excel"
+                            "apk" -> "application/vnd.android.package-archive"
+                            "zip", "rar", "7z" -> "application/zip"
+                            else -> context.contentResolver.getType(contentUri)
+                        }
                     }
-                }
-                
-                // 3. Last resort
-                if (mimeType == null || mimeType == "application/octet-stream") {
-                    mimeType = "*/*"
-                }
+                    
+                    if (mimeType == null || mimeType == "application/octet-stream") {
+                        mimeType = "*/*"
+                    }
 
-                Log.d("MainScreen", "Resolved File: ${file.absolutePath}, Name: ${file.name}, Ext: $extension, MIME: $mimeType")
-
-                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                    setDataAndType(contentUri, mimeType)
-                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                        setDataAndType(contentUri, mimeType)
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    
+                    val chooser = android.content.Intent.createChooser(intent, "使用第三方应用打开 ${file.name}")
+                    chooser.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(chooser)
+                } catch (e: Exception) {
+                    Log.e("MainScreen", "Crash opening file", e)
+                    android.widget.Toast.makeText(context, "打开文件失败: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
                 }
-                
-                // Check if any app can handle it
-                val packageManager = context.packageManager
-                if (intent.resolveActivity(packageManager) != null) {
-                    context.startActivity(intent)
-                } else {
-                    // Try with */* if specific MIME failed
-                    Log.w("MainScreen", "Specific MIME failed, trying */*")
-                    intent.setDataAndType(contentUri, "*/*")
-                    context.startActivity(android.content.Intent.createChooser(intent, "Open with..."))
-                }
-            } catch (e: Exception) {
-                Log.e("MainScreen", "Crash opening file", e)
-                android.widget.Toast.makeText(context, "Error opening ${file.name}: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+            } else {
+                android.widget.Toast.makeText(context, "文件未能就绪或下载失败", android.widget.Toast.LENGTH_SHORT).show()
             }
-        } else {
-            Log.e("MainScreen", "File not found at cache path")
-            android.widget.Toast.makeText(context, "File not ready or failed to download", android.widget.Toast.LENGTH_SHORT).show()
         }
     }
 }
@@ -4745,26 +4829,21 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
                 }
             }
 
-            // 7. Share
-            ToolbarAction(icon = Icons.Default.Share, contentDescription = "Share") {
-                val uris = selectedIds.mapNotNull { id ->
-                    val msg = messages.find { it.id == id }
-                    val fileName = msg?.content ?: ""
-                    val localFile = chatRepository.getLocalFile(id, fileName)
-                    if (localFile.exists()) {
-                        try {
-                            val authority = "${context.packageName}.fileprovider"
-                            androidx.core.content.FileProvider.getUriForFile(context, authority, localFile)
-                        } catch (e: Exception) {
-                            null
+            // 6b. Download to Download/CloudChat
+            if (selectedIds.any { id -> messages.find { it.id == id }?.type != MessageType.TEXT && messages.find { it.id == id }?.type != MessageType.FOLDER }) {
+                ToolbarAction(icon = Icons.Default.Download, contentDescription = "保存到 Download/CloudChat") {
+                    selectedIds.forEach { id ->
+                        val msg = messages.find { it.id == id }
+                        if (msg != null && msg.type != MessageType.TEXT && msg.type != MessageType.FOLDER) {
+                            saveFileToDownloadDir(context, chatRepository, msg)
                         }
-                    } else {
-                        msg?.remoteUrl?.let { chatRepository.resolveUrl(it)?.let { url -> Uri.parse(url) } }
                     }
                 }
-                if (uris.isNotEmpty()) {
-                    shareMediaMultiple(context, uris)
-                }
+            }
+
+            // 7. Share
+            ToolbarAction(icon = Icons.Default.Share, contentDescription = "分享消息与文件") {
+                shareSelectedMessages(context, chatRepository, messages, selectedIds)
             }
 
             // 移出隐私空间（仅在隐私模式下显示）
