@@ -2223,13 +2223,13 @@ fun rememberAvatarUrl(
     rawAvatar: String?,
     senderName: String?,
     isOutgoing: Boolean,
-    chatRepository: ChatRepository
-): String {
-    val displayName = senderName?.ifEmpty { "User" } ?: "User"
-    val fallback = "https://api.dicebear.com/7.x/bottts/png?seed=${Uri.encode(displayName)}"
-
+    chatRepository: ChatRepository,
+    currentConfig: com.cloudchat.model.ServerConfig? = null
+): String? {
     val avatarName = rawAvatar?.ifEmpty { null }
-    if (avatarName == null) return fallback
+        ?: if (isOutgoing) currentConfig?.avatarUrl?.ifEmpty { null } else null
+
+    if (avatarName == null) return null
     if (avatarName.startsWith("http://") || avatarName.startsWith("https://") || avatarName.startsWith("file://") || avatarName.startsWith("data:") || avatarName.startsWith("content://")) {
         return avatarName
     }
@@ -2239,7 +2239,45 @@ fun rememberAvatarUrl(
         val path = chatRepository.resolveAvatarPath(avatarName)
         resolvedUrl = path
     }
-    return resolvedUrl ?: fallback
+    return resolvedUrl
+}
+
+@Composable
+fun UserAvatar(
+    avatarUrl: String?,
+    displayName: String,
+    modifier: Modifier = Modifier
+        .size(44.dp)
+        .clip(RoundedCornerShape(6.dp))
+) {
+    var hasError by remember(avatarUrl) { mutableStateOf(false) }
+
+    val initialChar = displayName.trim().firstOrNull()?.uppercaseChar()?.toString() ?: "U"
+    val avatarBgColor = getUserColor(displayName)
+
+    Box(
+        modifier = modifier
+            .background(if (!avatarUrl.isNullOrBlank() && !hasError) Color.Transparent else avatarBgColor)
+            .border(1.dp, Color(0x33000000), RoundedCornerShape(6.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (!avatarUrl.isNullOrBlank() && !hasError) {
+            AsyncImage(
+                model = avatarUrl,
+                contentDescription = "Avatar",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                onError = { hasError = true }
+            )
+        } else {
+            Text(
+                text = initialChar,
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
@@ -2282,15 +2320,13 @@ fun DiaryBubble(
         verticalAlignment = Alignment.Top
     ) {
         // Left column: Avatar (ALWAYS ON THE LEFT IN DIARY VIEW)
-        AsyncImage(
-            model = userAvatarUrl,
-            contentDescription = "Avatar",
+        UserAvatar(
+            avatarUrl = userAvatarUrl,
+            displayName = displayName,
             modifier = Modifier
                 .padding(end = 8.dp, top = 2.dp)
                 .size(44.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
-            contentScale = ContentScale.Crop
+                .clip(RoundedCornerShape(6.dp))
         )
 
         Spacer(modifier = Modifier.width(4.dp))
@@ -2957,15 +2993,13 @@ fun ChatBubble(
         }
 
         // Right Side Avatar for ALL Messages in Default View
-        AsyncImage(
-            model = userAvatarUrl,
-            contentDescription = "Avatar",
+        UserAvatar(
+            avatarUrl = userAvatarUrl,
+            displayName = displayName,
             modifier = Modifier
                 .padding(start = 8.dp, top = 2.dp)
                 .size(44.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
-            contentScale = ContentScale.Crop
+                .clip(RoundedCornerShape(6.dp))
         )
     }
 }
@@ -3669,15 +3703,13 @@ fun ImageGroupBubble(
     ) {
         // Left Side Avatar for Diary Template
         if (!isDefaultTemplate) {
-            AsyncImage(
-                model = userAvatarUrl,
-                contentDescription = "Avatar",
+            UserAvatar(
+                avatarUrl = userAvatarUrl,
+                displayName = displayName,
                 modifier = Modifier
                     .padding(end = 8.dp, top = 2.dp)
                     .size(44.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
-                contentScale = ContentScale.Crop
+                    .clip(RoundedCornerShape(6.dp))
             )
         }
 
@@ -3978,15 +4010,13 @@ fun ImageGroupBubble(
 
         // Right Side Avatar for Default Template
         if (isDefaultTemplate) {
-            AsyncImage(
-                model = userAvatarUrl,
-                contentDescription = "Avatar",
+            UserAvatar(
+                avatarUrl = userAvatarUrl,
+                displayName = displayName,
                 modifier = Modifier
                     .padding(start = 8.dp, top = 2.dp)
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(4.dp)),
-                contentScale = ContentScale.Crop
+                    .size(44.dp)
+                    .clip(RoundedCornerShape(6.dp))
             )
         }
     }
