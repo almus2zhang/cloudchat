@@ -2529,7 +2529,7 @@ class ChatRepository(private val context: Context) {
 
         // 上传头像文件到 assets 目录，映射 avatar 文件名 -> 相对路径
         val avatarUrlMap = mutableMapOf<String, String>()
-        val distinctAvatars = effectiveMessages.mapNotNull { it.senderAvatar }
+        val distinctAvatars = (effectiveMessages.mapNotNull { it.senderAvatar } + listOfNotNull(config.avatarUrl))
             .filter { it.isNotBlank() && !it.startsWith("http://") && !it.startsWith("https://") &&
                     !it.startsWith("data:") && !it.startsWith("file://") && !it.startsWith("content://") }
             .distinct()
@@ -2567,7 +2567,7 @@ class ChatRepository(private val context: Context) {
         }
 
         // 处理本地路径头像（file:// / content://）：读取为 base64 data URI 存入 map，避免日记 HTML 引用本地路径导致裂图
-        val localAvatars = effectiveMessages.mapNotNull { it.senderAvatar }
+        val localAvatars = (effectiveMessages.mapNotNull { it.senderAvatar } + listOfNotNull(config.avatarUrl))
             .filter { it.startsWith("file://") || it.startsWith("content://") }
             .distinct()
         for (localAvatar in localAvatars) {
@@ -2619,7 +2619,7 @@ class ChatRepository(private val context: Context) {
                 return msg.remoteUrl ?: msg.content
             }
             override fun resolveAvatar(msg: ChatMessage, default: String): String {
-                val raw = msg.senderAvatar
+                val raw = msg.senderAvatar.takeIf { !it.isNullOrBlank() } ?: config.avatarUrl
                 val senderName = msg.senderName ?: msg.sender ?: "User"
                 val svgDefault = "data:image/svg+xml;charset=utf-8," + java.net.URLEncoder.encode(
                     """<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="#212c3d"/><text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" font-size="90" font-weight="bold" fill="#818cf8">${senderName.take(1).uppercase()}</text></svg>""",
