@@ -768,14 +768,23 @@ fun MainScreen(
     var isSearchActive by remember { mutableStateOf(false) }
     val searchFocusRequester = remember { FocusRequester() }
 
+    val lanCheckResult = remember(currentConfig) {
+        val cfg = currentConfig
+        if (cfg != null) {
+            com.cloudchat.utils.NetworkUtils.checkLanStatus(cfg.webDavUrl, cfg.webDavFallbackUrl)
+        } else null
+    }
+    val isSameLan = lanCheckResult?.isSameLan == true
+
     // Inject search and sync icons into TopAppBar
-    LaunchedEffect(isSearchActive, searchQuery, syncInterval, isServerConnected, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId, isSyncing) {
+    LaunchedEffect(isSearchActive, searchQuery, syncInterval, isServerConnected, isPrivacyMode, viewOnlyPrivacyItems, currentFolderId, isSyncing, isSameLan) {
         setTopBarActions {
             TopBarActionsContent(
                 isSearchActive = isSearchActive,
                 searchQuery = searchQuery,
                 syncInterval = syncInterval,
                 isServerConnected = isServerConnected,
+                isSameLan = isSameLan,
                 isPrivacyMode = isPrivacyMode,
                 viewOnlyPrivacyItems = viewOnlyPrivacyItems,
                 currentFolderId = currentFolderId,
@@ -5363,6 +5372,7 @@ fun androidx.compose.foundation.layout.RowScope.TopBarActionsContent(
     searchQuery: String,
     syncInterval: Long,
     isServerConnected: Boolean,
+    isSameLan: Boolean = false,
     isPrivacyMode: Boolean,
     viewOnlyPrivacyItems: Boolean,
     currentFolderId: String?,
@@ -5460,7 +5470,7 @@ fun androidx.compose.foundation.layout.RowScope.TopBarActionsContent(
             Icon(
                 imageVector = Icons.Default.Bolt,
                 contentDescription = if (isFast) "快速同步" else "普通同步",
-                tint = if (isServerConnected) (if (isFast) Color(0xFFFFC107) else Color.Gray) else MaterialTheme.colorScheme.error
+                tint = if (isSameLan) Color(0xFF07C160) else (if (isServerConnected) (if (isFast) Color(0xFFFFC107) else Color.Gray) else MaterialTheme.colorScheme.error)
             )
         }
 

@@ -95,7 +95,12 @@ class WebDavStorageProvider(
     private val fallbackCheckInterval = 120 * 1000L // 2 minutes — 给主地址足够恢复时间
 
     private fun getBaseUrl(useFallbackUrl: Boolean): String {
-        val rawUrl = if (useFallbackUrl && config.webDavFallbackUrl.isNotBlank()) {
+        val check = com.cloudchat.utils.NetworkUtils.checkLanStatus(config.webDavUrl, config.webDavFallbackUrl)
+        Log.d("WebDavStorage", check.debugMessage)
+
+        val shouldForceFallback = check.isServerLan && !check.isSameLan && config.webDavFallbackUrl.isNotBlank()
+
+        val rawUrl = if ((useFallbackUrl || shouldForceFallback) && config.webDavFallbackUrl.isNotBlank()) {
             config.webDavFallbackUrl.trim()
         } else {
             config.webDavUrl.trim()
