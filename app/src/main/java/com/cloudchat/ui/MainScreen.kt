@@ -1589,10 +1589,11 @@ fun MainScreen(
 
 @Composable
 fun VoiceWaveformVisualizer(
-    amplitude: Float,
+    amplitude: Float = 0f,
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary
 ) {
+    val liveAmplitude = com.cloudchat.utils.VoiceRecordingManager.currentAmplitude.coerceAtLeast(amplitude)
     val barCount = 15
     val factors = remember { listOf(0.3f, 0.5f, 0.75f, 0.55f, 0.9f, 0.65f, 0.85f, 1.0f, 0.8f, 0.6f, 0.95f, 0.45f, 0.75f, 0.55f, 0.35f) }
 
@@ -1603,7 +1604,7 @@ fun VoiceWaveformVisualizer(
     ) {
         for (i in 0 until barCount) {
             val baseFactor = factors[i % factors.size]
-            val barHeight = (4 + (amplitude * 56 * baseFactor)).dp
+            val barHeight = (4 + (liveAmplitude * 56 * baseFactor)).dp
 
             Box(
                 modifier = Modifier
