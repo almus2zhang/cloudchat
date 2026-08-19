@@ -2737,33 +2737,58 @@ class ChatRepository(private val context: Context) {
         for (avatarName in distinctAvatars) {
             val ext = avatarName.substringAfterLast('.', "png")
             val cleanAvatar = "avatar_${avatarName.hashCode().toUInt()}.$ext"
-            val webdavPath = if (avatarName.contains("/")) avatarName else "${config.saveDir}/$avatarName"
+            val contentType = when (ext.lowercase()) {
+                "jpg", "jpeg" -> "image/jpeg"
+                "png" -> "image/png"
+                "gif" -> "image/gif"
+                "webp" -> "image/webp"
+                else -> "image/jpeg"
+            }
             var uploadedAvatar = false
-            // 优先 WebDAV 远程 COPY（头像在 saveDir 目录，直接复制到 assets）
-            uploadedAvatar = provider.copyRemoteFile(webdavPath, "$targetAssetsDir/$cleanAvatar")
-            // COPY 失败则回退：下载到本地再上传
-            if (!uploadedAvatar) {
-                val tempAvatar = File(context.cacheDir, "avatar_tmp_${System.currentTimeMillis()}_${cleanAvatar}")
+
+            // 1. 优先检查本地缓存目录 (cacheDir/avatars/$safeName)
+            val safeName = avatarName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+            val localCacheAvatar = File(File(context.cacheDir, "avatars"), safeName)
+            if (localCacheAvatar.exists() && localCacheAvatar.length() > 0) {
                 try {
-                    provider.downloadFile(webdavPath, tempAvatar)
-                    if (tempAvatar.exists() && tempAvatar.length() > 0) {
-                        val contentType = when (ext.lowercase()) {
-                            "jpg", "jpeg" -> "image/jpeg"
-                            "png" -> "image/png"
-                            "gif" -> "image/gif"
-                            "webp" -> "image/webp"
-                            else -> "image/jpeg"
-                        }
-                        uploadedAvatar = provider.uploadFileToPath(tempAvatar.inputStream(), "$targetAssetsDir/$cleanAvatar", contentType)
-                    }
+                    uploadedAvatar = provider.uploadFileToPath(localCacheAvatar.inputStream(), "$targetAssetsDir/$cleanAvatar", contentType)
                 } catch (e: Exception) {
-                    Log.w("ChatRepository", "Failed to upload avatar $avatarName", e)
-                } finally {
-                    tempAvatar.delete()
+                    Log.w("ChatRepository", "Failed to upload local cached avatar $avatarName", e)
                 }
             }
+
+            // 2. 本地不存在则尝试从远程路径 COPY 或下载再上传
+            if (!uploadedAvatar) {
+                uploadedAvatar = provider.copyRemoteFile(avatarName, "$targetAssetsDir/$cleanAvatar")
+                if (!uploadedAvatar) {
+                    val tempAvatar = File(context.cacheDir, "avatar_tmp_${System.currentTimeMillis()}_${cleanAvatar}")
+                    try {
+                        provider.downloadFile(avatarName, tempAvatar, null)
+                        if (tempAvatar.exists() && tempAvatar.length() > 0) {
+                            uploadedAvatar = provider.uploadFileToPath(tempAvatar.inputStream(), "$targetAssetsDir/$cleanAvatar", contentType)
+                        }
+                    } catch (e: Exception) {
+                        Log.w("ChatRepository", "Failed to download/upload avatar $avatarName", e)
+                    } finally {
+                        if (tempAvatar.exists()) tempAvatar.delete()
+                    }
+                }
+            }
+
             if (uploadedAvatar) {
                 avatarUrlMap[avatarName] = "assets/$cleanAvatar"
+            } else {
+                // 3. 补发兜底：如果服务器和本地均缺失，自动生成首字母 Data URI 赋给 map
+                try {
+                    val initialName = avatarName.replace(Regex("^avatar_*"), "").replace(".jpg", "").ifEmpty { "User" }
+                    val bmp = generateInitialAvatarBitmap(initialName)
+                    val baos = java.io.ByteArrayOutputStream()
+                    bmp.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+                    val base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
+                    avatarUrlMap[avatarName] = "data:image/jpeg;base64,$base64"
+                } catch (e: Exception) {
+                    Log.w("ChatRepository", "Failed to generate dataUri fallback for $avatarName", e)
+                }
             }
         }
 
@@ -2833,15 +2858,9 @@ class ChatRepository(private val context: Context) {
                 if (raw.startsWith("http://") || raw.startsWith("https://") || raw.startsWith("data:")) {
                     return raw
                 }
-                // file:// / content:// 本地路径：优先使用已转成的 data URI（避免裂图）
-                if (raw.startsWith("file://") || raw.startsWith("content://")) {
-                    avatarUrlMap[raw]?.let { return it }
-                    return fallbackDefault
-                }
-                // 优先使用已上传到 assets 的头像相对路径
+                // 优先使用已映射的 assets/ 或 data URI 路径（避免未带 WebDAV Basic Auth 导致 401 裂图）
                 avatarUrlMap[raw]?.let { return it }
-                // fallback：解析为服务器完整 URL，都没有则用默认占位
-                return provider.getFullUrl(raw) ?: fallbackDefault
+                return fallbackDefault
             }
         }
 
