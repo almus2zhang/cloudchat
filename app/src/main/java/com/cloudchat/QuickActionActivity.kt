@@ -27,7 +27,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.border
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.cloudchat.ui.theme.CloudChatTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -231,21 +233,7 @@ class QuickActionActivity : ComponentActivity() {
             }
         }
 
-        fun getVoiceDotColor(amp: Float): Color {
-            return when {
-                amp < 0.08f -> Color.White
-                amp < 0.25f -> Color(0xFF2196F3) // 蓝色
-                amp < 0.50f -> Color(0xFF4CAF50) // 绿色
-                amp < 0.75f -> Color(0xFFFFC107) // 黄色
-                amp < 0.90f -> Color(0xFFF44336) // 红色
-                else -> Color(0xFF111111)        // 黑色
-            }
-        }
-
-        val dotColor = getVoiceDotColor(amplitude)
-        val dotSize = (28 + (amplitude * 24)).dp
-        val durationSec = (elapsedTimeMs / 1000).coerceAtLeast(0)
-        val durationStr = String.format("%02d:%02d", durationSec / 60, durationSec % 60)
+        val dotSize = (32 + (amplitude * 32)).dp
 
         Card(
             shape = RoundedCornerShape(20.dp),
@@ -257,37 +245,23 @@ class QuickActionActivity : ComponentActivity() {
                 modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 单个圆点（颜色随声音从 白->蓝->绿->黄->红->黑 渐变增大）
+                // 单个白色圆点（纯白，不换颜色，尺寸随音量在默认1倍(32dp)到2倍(64dp)之间变化）
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(64.dp)
+                        .height(72.dp)
                         .fillMaxWidth()
                 ) {
                     Box(
                         modifier = Modifier
                             .size(dotSize)
                             .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(dotColor)
-                            .then(
-                                if (dotColor == Color.White) {
-                                    Modifier.border(1.5.dp, Color.LightGray, androidx.compose.foundation.shape.CircleShape)
-                                } else Modifier
-                            )
+                            .background(Color.White)
+                            .border(1.5.dp, Color(0xFFDDDDDD), androidx.compose.foundation.shape.CircleShape)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // 录音时长显示
-                Text(
-                    text = durationStr,
-                    fontSize = 28.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // 取消与发送按钮
                 Row(

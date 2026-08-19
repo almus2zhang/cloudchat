@@ -1364,23 +1364,7 @@ fun MainScreen(
         }
 
         if (isRecordingVoiceState) {
-            val elapsedTimeMs = (System.currentTimeMillis() - recordStartTime).coerceAtLeast(0)
-            val durationSec = (elapsedTimeMs / 1000).coerceAtLeast(0)
-            val durationStr = String.format("%02d:%02d", durationSec / 60, durationSec % 60)
-
-            fun getVoiceDotColor(amp: Float): Color {
-                return when {
-                    amp < 0.08f -> Color.White
-                    amp < 0.25f -> Color(0xFF2196F3) // 蓝色
-                    amp < 0.50f -> Color(0xFF4CAF50) // 绿色
-                    amp < 0.75f -> Color(0xFFFFC107) // 黄色
-                    amp < 0.90f -> Color(0xFFF44336) // 红色
-                    else -> Color(0xFF111111)        // 黑色
-                }
-            }
-
-            val dotColor = getVoiceDotColor(currentAmplitude)
-            val dotSize = (28 + (currentAmplitude * 24)).dp
+            val dotSize = (32 + (currentAmplitude * 32)).dp
 
             Box(
                 modifier = Modifier
@@ -1391,7 +1375,7 @@ fun MainScreen(
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     shape = MaterialTheme.shapes.large,
-                    modifier = Modifier.size(160.dp),
+                    modifier = Modifier.size(140.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                 ) {
                     Column(
@@ -1401,27 +1385,16 @@ fun MainScreen(
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
-                            modifier = Modifier.height(56.dp).fillMaxWidth()
+                            modifier = Modifier.height(72.dp).fillMaxWidth()
                         ) {
                             Box(
                                 modifier = Modifier
                                     .size(dotSize)
                                     .clip(CircleShape)
-                                    .background(dotColor)
-                                    .then(
-                                        if (dotColor == Color.White) {
-                                            Modifier.border(1.5.dp, Color.LightGray, CircleShape)
-                                        } else Modifier
-                                    )
+                                    .background(Color.White)
+                                    .border(1.5.dp, Color(0xFFDDDDDD), CircleShape)
                             )
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = durationStr,
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
                     }
                 }
             }
@@ -1708,64 +1681,28 @@ fun QuickActionDialogs(
     }
 
     if (showQuickVoiceDialog) {
-        var elapsedTimeMs by remember { mutableLongStateOf(0L) }
-        val startTime = remember { System.currentTimeMillis() }
-
-        LaunchedEffect(showQuickVoiceDialog, isRecordingVoiceState) {
-            while (isRecordingVoiceState) {
-                elapsedTimeMs = System.currentTimeMillis() - startTime
-                delay(100)
-            }
-        }
-
-        fun getVoiceDotColor(amp: Float): Color {
-            return when {
-                amp < 0.08f -> Color.White
-                amp < 0.25f -> Color(0xFF2196F3) // 蓝色
-                amp < 0.50f -> Color(0xFF4CAF50) // 绿色
-                amp < 0.75f -> Color(0xFFFFC107) // 黄色
-                amp < 0.90f -> Color(0xFFF44336) // 红色
-                else -> Color(0xFF111111)        // 黑色
-            }
-        }
-
-        val dotColor = getVoiceDotColor(voiceAmplitude)
-        val dotSize = (28 + (voiceAmplitude * 24)).dp
-        val durationSec = (elapsedTimeMs / 1000).coerceAtLeast(0)
-        val durationStr = String.format("%02d:%02d", durationSec / 60, durationSec % 60)
+        val dotSize = (32 + (voiceAmplitude * 32)).dp
 
         AlertDialog(
             onDismissRequest = onCancelVoice,
             text = {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
                 ) {
-                    // 单个圆点（无文字标题，颜色从 白->蓝->绿->黄->红->黑 随音量动态变化）
+                    // 单个白色圆点（纯白，不换颜色，尺寸在默认1倍(32dp)到2倍(64dp)之间随音量变化）
                     Box(
                         contentAlignment = Alignment.Center,
-                        modifier = Modifier.height(60.dp).fillMaxWidth()
+                        modifier = Modifier.height(72.dp).fillMaxWidth()
                     ) {
                         Box(
                             modifier = Modifier
                                 .size(dotSize)
                                 .clip(CircleShape)
-                                .background(dotColor)
-                                .then(
-                                    if (dotColor == Color.White) {
-                                        Modifier.border(1.5.dp, Color.LightGray, CircleShape)
-                                    } else Modifier
-                                )
+                                .background(Color.White)
+                                .border(1.5.dp, Color(0xFFDDDDDD), CircleShape)
                         )
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    // 动态语音长度显示
-                    Text(
-                        text = durationStr,
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
                 }
             },
             confirmButton = {

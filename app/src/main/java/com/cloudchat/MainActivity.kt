@@ -274,25 +274,21 @@ class MainActivity : ComponentActivity() {
             val uriStr = intent.getStringExtra("quick_action_uri")
             intent.removeExtra("quick_action_data_type")
 
-            val settingsRepo = SettingsRepository(this)
+            val repo = com.cloudchat.repository.ChatRepository(applicationContext)
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                val config = settingsRepo.currentConfig.value
-                if (config != null) {
-                    val repo = com.cloudchat.repository.ChatRepository(applicationContext, config)
-                    when (quickDataType) {
-                        "text" -> text?.let { repo.sendTextMessage(it) }
-                        "voice" -> filePath?.let {
-                            val f = java.io.File(it)
-                            if (f.exists()) {
-                                repo.sendMessage(f.name, com.cloudchat.model.MessageType.AUDIO, f.inputStream(), f.name, android.net.Uri.fromFile(f).toString())
-                            }
+                when (quickDataType) {
+                    "text" -> text?.let { repo.sendMessage(it) }
+                    "voice" -> filePath?.let {
+                        val f = java.io.File(it)
+                        if (f.exists()) {
+                            repo.sendMessage(f.name, com.cloudchat.model.MessageType.AUDIO, f.inputStream(), f.name, android.net.Uri.fromFile(f).toString())
                         }
-                        "image" -> uriStr?.let { u ->
-                            val uri = android.net.Uri.parse(u)
-                            val name = "image_${System.currentTimeMillis()}.jpg"
-                            applicationContext.contentResolver.openInputStream(uri)?.use { stream ->
-                                repo.sendMessage(name, com.cloudchat.model.MessageType.IMAGE, stream, name, uri.toString())
-                            }
+                    }
+                    "image" -> uriStr?.let { u ->
+                        val uri = android.net.Uri.parse(u)
+                        val name = "image_${System.currentTimeMillis()}.jpg"
+                        applicationContext.contentResolver.openInputStream(uri)?.use { stream ->
+                            repo.sendMessage(name, com.cloudchat.model.MessageType.IMAGE, stream, name, uri.toString())
                         }
                     }
                 }
