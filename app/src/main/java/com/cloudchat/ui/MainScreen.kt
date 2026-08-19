@@ -5468,7 +5468,7 @@ fun androidx.compose.foundation.layout.RowScope.TopBarActionsContent(
                     .padding(end = 4.dp)
                     .clip(RoundedCornerShape(16.dp))
                     .clickable {
-                        com.cloudchat.utils.VoiceRecordingManager.restoreToForeground(chatRepository.context)
+                        com.cloudchat.utils.VoiceRecordingManager.restoreToForeground(context)
                     }
             ) {
                 Row(

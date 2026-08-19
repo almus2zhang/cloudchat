@@ -47,12 +47,16 @@ object VoiceRecordingManager {
     
     var currentFolderId: String? = null
     var isFromShortcut: Boolean = false
+    var activeRepository: ChatRepository? = null
 
-    fun startRecording(context: Context, folderId: String? = null, isShortcut: Boolean = false) {
+    fun startRecording(context: Context, chatRepository: ChatRepository? = null, folderId: String? = null, isShortcut: Boolean = false) {
         if (isRecording) return
         
         currentFolderId = folderId
         isFromShortcut = isShortcut
+        if (chatRepository != null) {
+            activeRepository = chatRepository
+        }
 
         val dir = File(context.cacheDir, "recordings")
         if (!dir.exists()) dir.mkdirs()
@@ -148,12 +152,13 @@ object VoiceRecordingManager {
 
     fun stopAndSend(
         context: Context,
-        chatRepository: ChatRepository,
+        chatRepository: ChatRepository? = null,
         onComplete: (() -> Unit)? = null
     ) {
         val recorder = mediaRecorder
         val file = recordFile
         val folderId = currentFolderId
+        val repo = chatRepository ?: activeRepository ?: ChatRepository(context.applicationContext)
 
         stopForegroundService(context)
         timerJob?.cancel()
@@ -183,7 +188,7 @@ object VoiceRecordingManager {
         scope.launch(Dispatchers.IO) {
             try {
                 val inputStream = file.inputStream()
-                chatRepository.sendMessage(
+                repo.sendMessage(
                     content = file.name,
                     type = MessageType.AUDIO,
                     inputStream = inputStream,
@@ -238,5 +243,6 @@ object VoiceRecordingManager {
         currentAmplitude = 0f
         mediaRecorder = null
         recordFile = null
+        activeRepository = null
     }
 }

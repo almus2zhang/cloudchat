@@ -11,7 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.cloudchat.MainActivity
-import com.cloudchat.R
+import com.cloudchat.repository.ChatRepository
 import com.cloudchat.utils.VoiceRecordingManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,10 +34,8 @@ class VoiceRecordingService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_SEND_NOW -> {
-                val repo = (applicationContext as? com.cloudchat.CloudChatApp)?.chatRepository
-                if (repo != null) {
-                    VoiceRecordingManager.stopAndSend(applicationContext, repo)
-                }
+                val repo = VoiceRecordingManager.activeRepository ?: ChatRepository(applicationContext)
+                VoiceRecordingManager.stopAndSend(applicationContext, repo)
                 stopForeground(true)
                 stopSelf()
                 return START_NOT_STICKY
