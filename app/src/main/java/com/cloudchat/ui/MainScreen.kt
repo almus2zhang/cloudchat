@@ -4957,6 +4957,7 @@ fun BoxScope.FastScrollbar(
     var wasDragging by remember { mutableStateOf(false) }
     var draggedTopOffsetPx by remember { mutableFloatStateOf(0f) }
     var isVisible by remember { mutableStateOf(false) }
+    var scrollStartItemIndex by remember { mutableIntStateOf(-1) }
     val coroutineScope = rememberCoroutineScope()
 
     LaunchedEffect(listState.isScrollInProgress, isDragging) {
@@ -4964,12 +4965,16 @@ fun BoxScope.FastScrollbar(
             wasDragging = true
             isVisible = true
         } else if (listState.isScrollInProgress) {
-            // 仅当滚动超过 1.5 屏时才显示快速滚动滑块
+            if (scrollStartItemIndex < 0) {
+                scrollStartItemIndex = listState.firstVisibleItemIndex
+            }
             val visibleCount = listState.layoutInfo.visibleItemsInfo.size.coerceAtLeast(1)
-            if (listState.firstVisibleItemIndex > visibleCount * 1.5f) {
+            val itemsScrolled = kotlin.math.abs(listState.firstVisibleItemIndex - scrollStartItemIndex)
+            if (itemsScrolled > visibleCount * 1.5f) {
                 isVisible = true
             }
         } else {
+            scrollStartItemIndex = -1
             val hideDelay = if (wasDragging) 500L else 1000L
             kotlinx.coroutines.delay(hideDelay)
             isVisible = false
