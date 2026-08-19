@@ -1,13 +1,18 @@
 package com.cloudchat.utils
 
+import android.os.Environment
 import android.util.Log
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
+import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.URI
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManager
@@ -118,31 +123,53 @@ object NetworkUtils {
         }
     }
 
+    data class DetailedInterfaceInfo(
+        val name: String,
+        val isUp: Boolean,
+        val isLoopback: Boolean,
+        val ipv4Addrs: List<String>
+    )
+
+    fun getAllNetworkInterfacesDetailed(): List<DetailedInterfaceInfo> {
+        val list = mutableListOf<DetailedInterfaceInfo>()
+        try {
+            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return emptyList()
+            while (interfaces.hasMoreElements()) {
+                val iface = interfaces.nextElement()
+                val addrs = mutableListOf<String>()
+                val enumAddrs = iface.inetAddresses
+                while (enumAddrs.hasMoreElements()) {
+                    val addr = enumAddrs.nextElement()
+                    if (addr is Inet4Address) {
+                        val hostAddr = addr.hostAddress
+                        if (!hostAddr.isNullOrBlank()) {
+                            addrs.add(hostAddr)
+                        }
+                    }
+                }
+                list.add(DetailedInterfaceInfo(iface.name, iface.isUp, iface.isLoopback, addrs))
+            }
+        } catch (e: Exception) {
+            Log.e("NetworkUtils", "Error getting detailed interfaces: ${e.message}")
+        }
+        return list
+    }
+
     /**
      * 获取本机所有活跃的非环回 IPv4 地址
      */
     fun getLocalIpv4Addresses(): List<String> {
         val result = mutableListOf<String>()
-        try {
-            val interfaces = NetworkInterface.getNetworkInterfaces() ?: return emptyList()
-            while (interfaces.hasMoreElements()) {
-                val iface = interfaces.nextElement()
-                if (!iface.isUp || iface.isLoopback) continue
-                val name = iface.name.lowercase()
-                if (name.contains("p2p") || name.contains("dummy")) continue
-                val addrs = iface.inetAddresses
-                while (addrs.hasMoreElements()) {
-                    val addr = addrs.nextElement()
-                    if (!addr.isLoopbackAddress && addr is Inet4Address) {
-                        val hostAddr = addr.hostAddress
-                        if (!hostAddr.isNullOrBlank() && !hostAddr.startsWith("127.")) {
-                            result.add(hostAddr)
-                        }
-                    }
+        val detailed = getAllNetworkInterfacesDetailed()
+        for (iface in detailed) {
+            if (!iface.isUp || iface.isLoopback) continue
+            val name = iface.name.lowercase()
+            if (name.contains("p2p") || name.contains("dummy")) continue
+            for (ip in iface.ipv4Addrs) {
+                if (!ip.startsWith("127.")) {
+                    result.add(ip)
                 }
             }
-        } catch (e: Exception) {
-            Log.e("NetworkUtils", "Error getting local IP: ${e.message}")
         }
         return result
     }
@@ -189,52 +216,106 @@ object NetworkUtils {
     }
 
     /**
+     * 将调试日志写入 Download/cloudchat/lan_debug.txt 文件
+     */
+    fun writeDebugLogToFile(content: String) {
+        try {
+            val downloadsFolder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val cloudChatDir = File(downloadsFolder, "cloudchat")
+            if (!cloudChatDir.exists()) {
+                cloudChatDir.mkdirs()
+            }
+            val debugFile = File(cloudChatDir, "lan_debug.txt")
+            debugFile.writeText(content)
+
+            val logFile = File(cloudChatDir, "debug.log")
+            logFile.appendText("\n" + content)
+
+            Log.d("NetworkUtils", "LAN debug log successfully written to ${debugFile.absolutePath}")
+        } catch (e: Exception) {
+            Log.e("NetworkUtils", "Failed to write debug log to download/cloudchat: ${e.message}", e)
+        }
+    }
+
+    /**
      * 核心检测逻辑
      */
     fun checkLanStatus(serverUrl: String, fallbackUrl: String): LanCheckResult {
+        val timeStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+        val sb = StringBuilder()
+        sb.appendLine("==================================================")
+        sb.appendLine("CloudChat Android LAN Subnet Diagnosis Log")
+        sb.appendLine("Time: $timeStr")
+        sb.appendLine("==================================================")
+
         val host = extractHost(serverUrl)
+        sb.appendLine("[1] Server Configuration:")
+        sb.appendLine("    - Primary URL: $serverUrl")
+        sb.appendLine("    - Extracted Host: $host")
+        sb.appendLine("    - Fallback URL: ${fallbackUrl.ifBlank { "(None)" }}")
+
         if (host.isBlank()) {
-            return LanCheckResult(
-                isServerLan = false,
-                isSameLan = false,
-                deviceIps = emptyList(),
-                serverHost = host,
-                debugMessage = "[LAN Debug] 主服务 URL 为空"
-            )
+            sb.appendLine("    - Status: Primary URL host is blank")
+            val msg = "[LAN Debug] 主服务 URL 为空"
+            writeDebugLogToFile(sb.toString())
+            return LanCheckResult(false, false, emptyList(), host, msg)
         }
 
         val isServerLan = isPrivateOrLanIp(host)
+        sb.appendLine("    - Is Private LAN Host: $isServerLan")
+
         if (!isServerLan) {
-            return LanCheckResult(
-                isServerLan = false,
-                isSameLan = false,
-                deviceIps = emptyList(),
-                serverHost = host,
-                debugMessage = "[LAN Debug] 配置的主服务 ($host) 为公网域名/地址"
-            )
+            sb.appendLine("    - Status: Primary host ($host) is public domain/IP. No LAN check needed.")
+            val msg = "[LAN Debug] 配置的主服务 ($host) 为公网域名/地址"
+            writeDebugLogToFile(sb.toString())
+            return LanCheckResult(false, false, emptyList(), host, msg)
+        }
+
+        val allIfaces = getAllNetworkInterfacesDetailed()
+        sb.appendLine("\n[2] Device Network Interfaces:")
+        if (allIfaces.isEmpty()) {
+            sb.appendLine("    - (No network interfaces returned by system)")
+        } else {
+            for (iface in allIfaces) {
+                sb.appendLine("    - Interface '${iface.name}' (isUp=${iface.isUp}, isLoopback=${iface.isLoopback}):")
+                if (iface.ipv4Addrs.isEmpty()) {
+                    sb.appendLine("      * IPv4: (None)")
+                } else {
+                    for (ip in iface.ipv4Addrs) {
+                        sb.appendLine("      * IPv4: $ip")
+                    }
+                }
+            }
         }
 
         val localIps = getLocalIpv4Addresses()
+        sb.appendLine("\n[3] Active Local IPv4 Addresses Filtered:")
+        sb.appendLine("    - Filtered IPs: ${localIps.ifEmpty { listOf("(None)") }.joinToString()}")
+
         if (localIps.isEmpty()) {
-            return LanCheckResult(
-                isServerLan = true,
-                isSameLan = false,
-                deviceIps = emptyList(),
-                serverHost = host,
-                debugMessage = "[LAN Debug] 主服务 ($host) 为局域网 IP，但未找到本机有效 IPv4 -> 瞬间切换至备用地址: ${fallbackUrl.ifBlank { "未配置" }}"
-            )
+            sb.appendLine("    - Result: No active non-loopback local IPv4 found -> Switching to fallback: ${fallbackUrl.ifBlank { "未配置" }}")
+            val msg = "[LAN Debug] 主服务 ($host) 为局域网 IP，但未找到本机有效 IPv4 -> 瞬间切换至备用地址"
+            writeDebugLogToFile(sb.toString())
+            return LanCheckResult(true, false, emptyList(), host, msg)
         }
 
+        sb.appendLine("\n[4] Subnet Comparison Steps:")
         var matchedIp: String? = null
         for (ip in localIps) {
-            if (isSameSubnet(ip, host) || host == "localhost" || host == "127.0.0.1" || ip == host) {
+            val match = isSameSubnet(ip, host) || host == "localhost" || host == "127.0.0.1" || ip == host
+            sb.appendLine("    - Compare Local IP ($ip) vs Server Host ($host): $match")
+            if (match) {
                 matchedIp = ip
                 break
             }
         }
 
-        return if (matchedIp != null) {
-            LanCheckResult(
+        val result: LanCheckResult
+        if (matchedIp != null) {
+            sb.appendLine("\n[5] Final Decision:")
+            sb.appendLine("    - Result: MATCHED SAME LAN (Matched IP: $matchedIp)")
+            sb.appendLine("    - Effective URL Used: $serverUrl")
+            result = LanCheckResult(
                 isServerLan = true,
                 isSameLan = true,
                 deviceIps = localIps,
@@ -243,7 +324,10 @@ object NetworkUtils {
             )
         } else {
             val target = if (fallbackUrl.isNotBlank()) fallbackUrl else "原地址(未配备用)"
-            LanCheckResult(
+            sb.appendLine("\n[5] Final Decision:")
+            sb.appendLine("    - Result: MISMATCHED (NOT ON SAME LAN)")
+            sb.appendLine("    - Instantly Switching To Fallback URL: $target")
+            result = LanCheckResult(
                 isServerLan = true,
                 isSameLan = false,
                 deviceIps = localIps,
@@ -251,5 +335,8 @@ object NetworkUtils {
                 debugMessage = "[LAN Debug SWITCH] 本机 IP (${localIps.joinToString()}) 与局域网服务地址 ($host) 不在同一网段 -> 瞬间切换至备用地址: $target"
             )
         }
+        sb.appendLine("==================================================")
+        writeDebugLogToFile(sb.toString())
+        return result
     }
 }
