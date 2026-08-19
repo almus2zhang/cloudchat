@@ -2376,14 +2376,14 @@ fun AudioMessageBubble(
     onSeekAudio: ((com.cloudchat.model.ChatMessage, Float) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val totalSec = message.videoDuration.takeIf { it > 0 } ?: (durationMs / 1000).toInt().coerceAtLeast(1)
-    val curSec = if (isPlaying && durationMs > 0) {
-        ((progressMs.toFloat() / durationMs) * totalSec).toInt().coerceIn(0, totalSec)
+    val totalSec: Int = (if (message.videoDuration > 0) message.videoDuration.toInt() else (durationMs / 1000).toInt()).coerceAtLeast(1)
+    val curSec: Int = if (isPlaying && durationMs > 0) {
+        ((progressMs.toDouble() / durationMs.toDouble()) * totalSec.toDouble()).toInt().coerceIn(0, totalSec)
     } else {
         0
     }
-    val progressFraction = if (isPlaying && durationMs > 0) {
-        (progressMs.toFloat() / durationMs).coerceIn(0f, 1f)
+    val progressFraction: Float = if (isPlaying && durationMs > 0) {
+        (progressMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
     } else 0f
 
     val curStr = String.format("%02d:%02d", curSec / 60, curSec % 60)
@@ -3840,6 +3840,9 @@ fun ImageGroupBubble(
     template: String = "default",
     downloadProgress: Map<String, Int> = emptyMap(),
     playingMessageId: String? = null,
+    audioProgressMs: Long = 0L,
+    audioDurationMs: Long = 0L,
+    onSeekAudio: ((com.cloudchat.model.ChatMessage, Float) -> Unit)? = null,
     onPlayAudio: (com.cloudchat.model.ChatMessage) -> Unit = {},
     onFileClick: (com.cloudchat.model.ChatMessage) -> Unit = {},
     onSelectToggle: (com.cloudchat.model.ChatMessage) -> Unit,
@@ -4049,8 +4052,8 @@ fun ImageGroupBubble(
                                             durationMs = if (isPlaying) audioDurationMs else 0L,
                                             bubbleColor = Color(0xFF07C160),
                                             contentColor = Color.White,
-                                            onPlayAudio = playAudioMessage,
-                                            onSeekAudio = seekAudioMessage
+                                            onPlayAudio = onPlayAudio,
+                                            onSeekAudio = onSeekAudio
                                         )
                                     }
                                     MessageType.FILE -> {
@@ -5297,6 +5300,9 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                         template = currentConfig?.messageTemplate ?: "default",
                         downloadProgress = downloadProgress,
                         playingMessageId = playingMessageId,
+                        audioProgressMs = audioProgressMs,
+                        audioDurationMs = audioDurationMs,
+                        onSeekAudio = onSeekAudio,
                         onPlayAudio = onPlayAudio,
                         onFileClick = { openFileWithDefaultApp(context, chatRepository, it) },
                         onSelectToggle = { clickedMsg ->
