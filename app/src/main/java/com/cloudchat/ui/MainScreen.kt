@@ -569,7 +569,6 @@ fun MainScreen(
     var recordFile by remember { mutableStateOf<File?>(null) }
     var recordStartTime by remember { mutableLongStateOf(0L) }
     var isPressAndHoldRecording by remember { mutableStateOf(false) }
-    var currentAmplitude by remember { mutableStateOf(0f) }
     var amplitudeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     // --- Permission Launchers ---
@@ -1347,7 +1346,7 @@ fun MainScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        VoiceWaveformVisualizer(amplitude = currentAmplitude)
+                        VoiceWaveformVisualizer()
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = "松开 发送",
@@ -1568,7 +1567,6 @@ fun MainScreen(
             },
             showQuickVoiceDialog = showQuickVoiceDialog,
             isPressAndHoldRecording = isPressAndHoldRecording,
-            voiceAmplitude = currentAmplitude,
             onStopAndSendVoice = {
                 stopAndSendVoice()
                 showQuickVoiceDialog = false
@@ -1626,7 +1624,6 @@ fun QuickActionDialogs(
     onQuickTextDismiss: () -> Unit,
     showQuickVoiceDialog: Boolean,
     isPressAndHoldRecording: Boolean = false,
-    voiceAmplitude: Float = 0f,
     onStopAndSendVoice: () -> Unit,
     onCancelVoice: () -> Unit
 ) {
@@ -1668,7 +1665,6 @@ fun QuickActionDialogs(
     val isVoiceDialogVisible = (showQuickVoiceDialog || (com.cloudchat.utils.VoiceRecordingManager.isRecording && !isPressAndHoldRecording)) && !com.cloudchat.utils.VoiceRecordingManager.isRecordingInBackground
 
     if (isVoiceDialogVisible) {
-        val currentAmp = if (com.cloudchat.utils.VoiceRecordingManager.isRecording) com.cloudchat.utils.VoiceRecordingManager.currentAmplitude else voiceAmplitude
         val seconds = if (com.cloudchat.utils.VoiceRecordingManager.isRecording) com.cloudchat.utils.VoiceRecordingManager.elapsedSeconds else 0
         val timeText = String.format("%02d:%02d", seconds / 60, seconds % 60)
         val context = LocalContext.current
@@ -1701,7 +1697,7 @@ fun QuickActionDialogs(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
                 ) {
-                    VoiceWaveformVisualizer(amplitude = currentAmp)
+                    VoiceWaveformVisualizer()
                 }
             },
             confirmButton = {
