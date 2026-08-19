@@ -267,6 +267,41 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
 
+        val quickDataType = intent.getStringExtra("quick_action_data_type")
+        if (!quickDataType.isNullOrEmpty()) {
+            val text = intent.getStringExtra("quick_action_text")
+            val filePath = intent.getStringExtra("quick_action_file_path")
+            val uriStr = intent.getStringExtra("quick_action_uri")
+            intent.removeExtra("quick_action_data_type")
+
+            val settingsRepo = SettingsRepository(this)
+            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                val config = settingsRepo.currentConfig.value
+                if (config != null) {
+                    val repo = com.cloudchat.repository.ChatRepository(applicationContext, config)
+                    when (quickDataType) {
+                        "text" -> text?.let { repo.sendTextMessage(it) }
+                        "voice" -> filePath?.let {
+                            val f = java.io.File(it)
+                            if (f.exists()) {
+                                repo.sendMessage(f.name, com.cloudchat.model.MessageType.AUDIO, f.inputStream(), f.name, android.net.Uri.fromFile(f).toString())
+                            }
+                        }
+                        "image" -> uriStr?.let { u ->
+                            val uri = android.net.Uri.parse(u)
+                            val name = "image_${System.currentTimeMillis()}.jpg"
+                            applicationContext.contentResolver.openInputStream(uri)?.use { stream ->
+                                repo.sendMessage(name, com.cloudchat.model.MessageType.IMAGE, stream, name, uri.toString())
+                            }
+                        }
+                    }
+                }
+            }
+            android.widget.Toast.makeText(applicationContext, "✅ 快捷消息已发送", android.widget.Toast.LENGTH_SHORT).show()
+            finish()
+            return
+        }
+
         val actionExtra = intent.getStringExtra("quick_action")
         if (!actionExtra.isNullOrEmpty()) {
             quickAction.value = actionExtra

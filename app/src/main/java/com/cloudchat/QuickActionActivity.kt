@@ -132,6 +132,7 @@ class QuickActionActivity : ComponentActivity() {
         var isRecording by remember { mutableStateOf(false) }
         var amplitude by remember { mutableFloatStateOf(0f) }
         var recordStartTime by remember { mutableLongStateOf(0L) }
+        var elapsedTimeMs by remember { mutableLongStateOf(0L) }
 
         var hasAudioPermission by remember {
             mutableStateOf(
@@ -182,6 +183,7 @@ class QuickActionActivity : ComponentActivity() {
                         try {
                             val maxAmp = mediaRecorder?.maxAmplitude ?: 0
                             amplitude = (maxAmp.toFloat() / 32767f).coerceIn(0f, 1f)
+                            elapsedTimeMs = System.currentTimeMillis() - recordStartTime
                         } catch (e: Exception) {}
                         delay(80)
                     }
@@ -208,7 +210,6 @@ class QuickActionActivity : ComponentActivity() {
                 return
             }
 
-            // 把录音文件路径传给 MainActivity，由它来发送
             deliverToMainActivity(QuickActionData(type = "voice", filePath = file.absolutePath))
             onDismiss()
         }
@@ -230,6 +231,22 @@ class QuickActionActivity : ComponentActivity() {
             }
         }
 
+        fun getVoiceDotColor(amp: Float): Color {
+            return when {
+                amp < 0.08f -> Color.White
+                amp < 0.25f -> Color(0xFF2196F3) // 蓝色
+                amp < 0.50f -> Color(0xFF4CAF50) // 绿色
+                amp < 0.75f -> Color(0xFFFFC107) // 黄色
+                amp < 0.90f -> Color(0xFFF44336) // 红色
+                else -> Color(0xFF111111)        // 黑色
+            }
+        }
+
+        val dotColor = getVoiceDotColor(amplitude)
+        val dotSize = (28 + (amplitude * 24)).dp
+        val durationSec = (elapsedTimeMs / 1000).coerceAtLeast(0)
+        val durationStr = String.format("%02d:%02d", durationSec / 60, durationSec % 60)
+
         Card(
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -240,43 +257,39 @@ class QuickActionActivity : ComponentActivity() {
                 modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = "快捷发送语音",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                // 单个圆点（颜色随声音从 白->蓝->绿->黄->红->黑 渐变增大）
+                Box(
+                    contentAlignment = Alignment.Center,
                     modifier = Modifier
-                        .height(48.dp)
-                        .padding(vertical = 4.dp)
+                        .height(64.dp)
+                        .fillMaxWidth()
                 ) {
-                    val barCount = 9
-                    for (i in 0 until barCount) {
-                        val phase = (i + 1) * 0.7f
-                        val factor = 0.25f + 0.75f * Math.abs(Math.sin(phase.toDouble() + System.currentTimeMillis() * 0.008)).toFloat()
-                        val hFraction = if (isRecording) (amplitude * factor).coerceIn(0.12f, 1f) else 0.12f
-                        Box(
-                            modifier = Modifier
-                                .width(6.dp)
-                                .fillMaxHeight(hFraction)
-                                .clip(RoundedCornerShape(3.dp))
-                                .background(MaterialTheme.colorScheme.primary)
-                        )
-                    }
+                    Box(
+                        modifier = Modifier
+                            .size(dotSize)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(dotColor)
+                            .then(
+                                if (dotColor == Color.White) {
+                                    Modifier.border(1.5.dp, Color.LightGray, androidx.compose.foundation.shape.CircleShape)
+                                } else Modifier
+                            )
+                    )
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 录音时长显示
                 Text(
-                    text = if (isRecording) "正在录音中..." else "准备中...",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = durationStr,
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
+
                 Spacer(modifier = Modifier.height(24.dp))
 
+                // 取消与发送按钮
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -289,10 +302,9 @@ class QuickActionActivity : ComponentActivity() {
                     }
                     Button(
                         onClick = { stopAndSend() },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                        modifier = Modifier.weight(1.4f)
+                        modifier = Modifier.weight(1f)
                     ) {
-                        Text("停止录音并发送", fontWeight = FontWeight.Bold)
+                        Text("发送", fontWeight = FontWeight.Bold)
                     }
                 }
             }

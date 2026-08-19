@@ -182,6 +182,7 @@ fun MainScreen(
     var showQuickTextDialog by remember { mutableStateOf(false) }
     var quickTextInput by remember { mutableStateOf("") }
     var showQuickVoiceDialog by remember { mutableStateOf(false) }
+    var isFromShortcut by remember { mutableStateOf(false) }
     // --- Selection and Haptic States ---
     var textSelectionClearKey by remember { mutableStateOf(0) }
     var isTextSelected by remember { mutableStateOf(false) }
@@ -920,6 +921,9 @@ fun MainScreen(
     }
 
     LaunchedEffect(quickAction) {
+        if (quickAction != null) {
+            isFromShortcut = true
+        }
         when (quickAction) {
             "send_image" -> {
                 multimediaPickerLauncher.launch("image/*")
@@ -1360,6 +1364,24 @@ fun MainScreen(
         }
 
         if (isRecordingVoiceState) {
+            val elapsedTimeMs = (System.currentTimeMillis() - recordStartTime).coerceAtLeast(0)
+            val durationSec = (elapsedTimeMs / 1000).coerceAtLeast(0)
+            val durationStr = String.format("%02d:%02d", durationSec / 60, durationSec % 60)
+
+            fun getVoiceDotColor(amp: Float): Color {
+                return when {
+                    amp < 0.08f -> Color.White
+                    amp < 0.25f -> Color(0xFF2196F3) // 蓝色
+                    amp < 0.50f -> Color(0xFF4CAF50) // 绿色
+                    amp < 0.75f -> Color(0xFFFFC107) // 黄色
+                    amp < 0.90f -> Color(0xFFF44336) // 红色
+                    else -> Color(0xFF111111)        // 黑色
+                }
+            }
+
+            val dotColor = getVoiceDotColor(currentAmplitude)
+            val dotSize = (28 + (currentAmplitude * 24)).dp
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1377,39 +1399,29 @@ fun MainScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Recording",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center,
-                            modifier = Modifier.fillMaxWidth().height(32.dp)
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.height(56.dp).fillMaxWidth()
                         ) {
-                            val barCount = 7
-                            for (i in 0 until barCount) {
-                                val factor = when (i) {
-                                    0, 6 -> 0.3f
-                                    1, 5 -> 0.6f
-                                    2, 4 -> 0.9f
-                                    else -> 1.0f
-                                }
-                                val barHeight = (currentAmplitude * 32.dp.value * factor).coerceAtLeast(4f)
-                                Box(
-                                    modifier = Modifier
-                                        .padding(horizontal = 2.dp)
-                                        .width(4.dp)
-                                        .height(barHeight.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primary)
-                                )
-                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(dotSize)
+                                    .clip(CircleShape)
+                                    .background(dotColor)
+                                    .then(
+                                        if (dotColor == Color.White) {
+                                            Modifier.border(1.5.dp, Color.LightGray, CircleShape)
+                                        } else Modifier
+                                    )
+                            )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text("Recording...", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = durationStr,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
                     }
                 }
             }
@@ -1608,16 +1620,29 @@ fun MainScreen(
             onQuickTextSend = { text ->
                 scope.launch {
                     chatRepository.sendMessage(text, folderId = currentFolderId)
+                    if (isFromShortcut) {
+                        android.widget.Toast.makeText(context, "✅ 快捷消息已发送", android.widget.Toast.LENGTH_SHORT).show()
+                        (context as? android.app.Activity)?.finish()
+                    }
                 }
                 showQuickTextDialog = false
             },
-            onQuickTextDismiss = { showQuickTextDialog = false },
+            onQuickTextDismiss = { 
+                showQuickTextDialog = false 
+                if (isFromShortcut) {
+                    (context as? android.app.Activity)?.finish()
+                }
+            },
             showQuickVoiceDialog = showQuickVoiceDialog,
             isRecordingVoiceState = isRecordingVoiceState,
             voiceAmplitude = currentAmplitude,
             onStopAndSendVoice = {
                 if (isRecordingVoiceState) {
                     stopAndSendVoice()
+                    if (isFromShortcut) {
+                        android.widget.Toast.makeText(context, "✅ 快捷语音已发送", android.widget.Toast.LENGTH_SHORT).show()
+                        (context as? android.app.Activity)?.finish()
+                    }
                 }
                 showQuickVoiceDialog = false
             },
@@ -1626,6 +1651,9 @@ fun MainScreen(
                     cancelVoiceRecording()
                 }
                 showQuickVoiceDialog = false
+                if (isFromShortcut) {
+                    (context as? android.app.Activity)?.finish()
+                }
             }
         )
     }
@@ -1680,71 +1708,73 @@ fun QuickActionDialogs(
     }
 
     if (showQuickVoiceDialog) {
+        var elapsedTimeMs by remember { mutableLongStateOf(0L) }
+        val startTime = remember { System.currentTimeMillis() }
+
+        LaunchedEffect(showQuickVoiceDialog, isRecordingVoiceState) {
+            while (isRecordingVoiceState) {
+                elapsedTimeMs = System.currentTimeMillis() - startTime
+                delay(100)
+            }
+        }
+
+        fun getVoiceDotColor(amp: Float): Color {
+            return when {
+                amp < 0.08f -> Color.White
+                amp < 0.25f -> Color(0xFF2196F3) // 蓝色
+                amp < 0.50f -> Color(0xFF4CAF50) // 绿色
+                amp < 0.75f -> Color(0xFFFFC107) // 黄色
+                amp < 0.90f -> Color(0xFFF44336) // 红色
+                else -> Color(0xFF111111)        // 黑色
+            }
+        }
+
+        val dotColor = getVoiceDotColor(voiceAmplitude)
+        val dotSize = (28 + (voiceAmplitude * 24)).dp
+        val durationSec = (elapsedTimeMs / 1000).coerceAtLeast(0)
+        val durationStr = String.format("%02d:%02d", durationSec / 60, durationSec % 60)
+
         AlertDialog(
             onDismissRequest = onCancelVoice,
-            title = { Text("发送语音", fontWeight = FontWeight.Bold) },
             text = {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp)
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
                 ) {
-                    Text(
-                        text = if (isRecordingVoiceState) "正在录音中..." else "录音就绪",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    // 音量条
-                    Row(
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.height(40.dp).padding(vertical = 4.dp)
-                    ) {
-                        val barCount = 9
-                        for (i in 0 until barCount) {
-                            val phase = (i + 1) * 0.7f
-                            val factor = 0.25f + 0.75f * Math.abs(
-                                Math.sin(phase.toDouble() + System.currentTimeMillis() * 0.008)
-                            ).toFloat()
-                            val hFraction = if (isRecordingVoiceState)
-                                (voiceAmplitude * factor).coerceIn(0.12f, 1f) else 0.12f
-                            Box(
-                                modifier = Modifier
-                                    .width(5.dp)
-                                    .fillMaxHeight(hFraction)
-                                    .clip(RoundedCornerShape(3.dp))
-                                    .background(MaterialTheme.colorScheme.primary)
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
+                    // 单个圆点（无文字标题，颜色从 白->蓝->绿->黄->红->黑 随音量动态变化）
                     Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.height(60.dp).fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "Mic",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(28.dp)
+                        Box(
+                            modifier = Modifier
+                                .size(dotSize)
+                                .clip(CircleShape)
+                                .background(dotColor)
+                                .then(
+                                    if (dotColor == Color.White) {
+                                        Modifier.border(1.5.dp, Color.LightGray, CircleShape)
+                                    } else Modifier
+                                )
                         )
                     }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    // 动态语音长度显示
+                    Text(
+                        text = durationStr,
+                        fontSize = 28.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                 }
             },
             confirmButton = {
-                Button(
-                    onClick = onStopAndSendVoice,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) {
-                    Text("停止录音并发送")
+                Button(onClick = onStopAndSendVoice) {
+                    Text("发送", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = onCancelVoice) {
+                OutlinedButton(onClick = onCancelVoice) {
                     Text("取消")
                 }
             }
