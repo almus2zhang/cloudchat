@@ -606,7 +606,7 @@ fun MainScreen(
     }
 
     fun startVoiceRecording() {
-        com.cloudchat.utils.VoiceRecordingManager.startRecording(context, currentFolderId, isFromShortcut)
+        com.cloudchat.utils.VoiceRecordingManager.startRecording(context, chatRepository, currentFolderId, isFromShortcut)
     }
 
     fun stopAndSendVoice() {
@@ -5355,6 +5355,7 @@ fun androidx.compose.foundation.layout.RowScope.TopBarActionsContent(
     onRenameFolder: (String, String) -> Unit,
     onGenerateFolderDiary: (String) -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     if (isSearchActive) {
         LaunchedEffect(Unit) {
             searchFocusRequester.requestFocus()
