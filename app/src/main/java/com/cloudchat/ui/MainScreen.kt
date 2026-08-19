@@ -455,6 +455,9 @@ fun MainScreen(
     }
 
     var playingMessageId by remember { mutableStateOf<String?>(null) }
+    var audioProgressMs by remember { mutableLongStateOf(0L) }
+    var audioDurationMs by remember { mutableLongStateOf(0L) }
+
     val exoPlayer = remember {
         androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
             addListener(object : androidx.media3.common.Player.Listener {
@@ -466,6 +469,20 @@ fun MainScreen(
             })
         }
     }
+
+    LaunchedEffect(playingMessageId) {
+        if (playingMessageId != null) {
+            while (true) {
+                audioProgressMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                audioDurationMs = exoPlayer.duration.coerceAtLeast(0L)
+                delay(100)
+            }
+        } else {
+            audioProgressMs = 0L
+            audioDurationMs = 0L
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             exoPlayer.release()
@@ -501,6 +518,14 @@ fun MainScreen(
                     }
                 }
             }
+        }
+    }
+
+    val seekAudioMessage: (com.cloudchat.model.ChatMessage, Float) -> Unit = { message, fraction ->
+        if (playingMessageId == message.id && exoPlayer.duration > 0) {
+            val targetMs = (fraction * exoPlayer.duration).toLong()
+            exoPlayer.seekTo(targetMs)
+            audioProgressMs = targetMs
         }
     }
 
@@ -1261,6 +1286,9 @@ fun MainScreen(
                 activeDownloadIds = activeDownloadIds,
                 autoDownloadLimit = autoDownloadLimit,
                 playingMessageId = playingMessageId,
+                audioProgressMs = audioProgressMs,
+                audioDurationMs = audioDurationMs,
+                onSeekAudio = seekAudioMessage,
                 mediaMessages = mediaMessages,
                 selectedIds = selectedIds,
                 onSelectionChange = { selectedIds = it },
@@ -2336,6 +2364,96 @@ fun UserAvatar(
     }
 }
 
+@Composable
+fun AudioMessageBubble(
+    message: com.cloudchat.model.ChatMessage,
+    isPlaying: Boolean,
+    progressMs: Long = 0L,
+    durationMs: Long = 0L,
+    bubbleColor: Color,
+    contentColor: Color,
+    onPlayAudio: (com.cloudchat.model.ChatMessage) -> Unit,
+    onSeekAudio: ((com.cloudchat.model.ChatMessage, Float) -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val totalSec = message.videoDuration.takeIf { it > 0 } ?: (durationMs / 1000).toInt().coerceAtLeast(1)
+    val curSec = if (isPlaying && durationMs > 0) {
+        ((progressMs.toFloat() / durationMs) * totalSec).toInt().coerceIn(0, totalSec)
+    } else {
+        0
+    }
+    val progressFraction = if (isPlaying && durationMs > 0) {
+        (progressMs.toFloat() / durationMs).coerceIn(0f, 1f)
+    } else 0f
+
+    val curStr = String.format("%02d:%02d", curSec / 60, curSec % 60)
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = bubbleColor),
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
+        modifier = modifier.widthIn(min = 180.dp, max = 260.dp)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                IconButton(
+                    onClick = { onPlayAudio(message) },
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = contentColor,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Slider(
+                        value = if (isPlaying) progressFraction else 0f,
+                        onValueChange = { fraction ->
+                            onSeekAudio?.invoke(message, fraction)
+                        },
+                        colors = SliderDefaults.colors(
+                            thumbColor = contentColor,
+                            activeTrackColor = contentColor,
+                            inactiveTrackColor = contentColor.copy(alpha = 0.3f)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                Text(
+                    text = if (isPlaying) curStr else "${totalSec}\"",
+                    color = contentColor,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(end = 4.dp)
+                )
+            }
+
+            if (!message.caption.isNullOrBlank()) {
+                Text(
+                    text = message.caption,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = contentColor.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(bottom = 4.dp, start = 8.dp)
+                )
+            }
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun DiaryBubble(
@@ -2347,6 +2465,9 @@ fun DiaryBubble(
     downloadProgress: Map<String, Int>,
     isDownloading: Boolean,
     playingMessageId: String?,
+    audioProgressMs: Long = 0L,
+    audioDurationMs: Long = 0L,
+    onSeekAudio: ((ChatMessage, Float) -> Unit)? = null,
     onPlayAudio: (ChatMessage) -> Unit,
     onMediaClick: (ChatMessage) -> Unit,
     onLongClick: () -> Unit
@@ -2555,21 +2676,16 @@ fun DiaryBubble(
                 }
                 MessageType.AUDIO -> {
                     val isPlaying = playingMessageId == message.id
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = Color(0xFF4CAF50)),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.clickable { onPlayAudio(message) }
-                    ) {
-                        Row(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(imageVector = if (isPlaying) Icons.Default.VolumeUp else Icons.Default.VolumeMute, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(text = "${message.videoDuration}s", color = Color.White, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                        }
-                    }
-                    if (!message.caption.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(text = message.caption, style = MaterialTheme.typography.bodySmall, color = Color(0xFF444444), textAlign = TextAlign.Start)
-                    }
+                    AudioMessageBubble(
+                        message = message,
+                        isPlaying = isPlaying,
+                        progressMs = if (isPlaying) audioProgressMs else 0L,
+                        durationMs = if (isPlaying) audioDurationMs else 0L,
+                        bubbleColor = Color(0xFF4CAF50),
+                        contentColor = Color.White,
+                        onPlayAudio = onPlayAudio,
+                        onSeekAudio = onSeekAudio
+                    )
                 }
                 MessageType.FILE -> {
                     val fileProgress = downloadProgress[message.id]
@@ -2672,6 +2788,9 @@ fun ChatBubble(
     downloadProgress: Map<String, Int>,
     isDownloading: Boolean,
     playingMessageId: String?,
+    audioProgressMs: Long = 0L,
+    audioDurationMs: Long = 0L,
+    onSeekAudio: ((ChatMessage, Float) -> Unit)? = null,
     onPlayAudio: (ChatMessage) -> Unit,
     onMediaClick: (ChatMessage) -> Unit,
     onLongClick: () -> Unit
@@ -2929,40 +3048,17 @@ fun ChatBubble(
                     )
                 }
                 MessageType.AUDIO -> {
-                    val localFile = remember(message.id) {
-                        chatRepository.getLocalFile(message.id, message.content)
-                    }
                     val isPlaying = playingMessageId == message.id
-
-                    Card(
-                        colors = CardDefaults.cardColors(containerColor = bubbleColor),
-                        shape = MaterialTheme.shapes.medium,
-                        elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
-                        modifier = Modifier
-                            .clickable {
-                                onPlayAudio(message)
-                            }
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                                .width(Math.min(80 + (message.videoDuration * 4).toInt(), 200).dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (isPlaying) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
-                                contentDescription = null,
-                                tint = contentColor,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "${message.videoDuration}\"",
-                                color = contentColor,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
+                    AudioMessageBubble(
+                        message = message,
+                        isPlaying = isPlaying,
+                        progressMs = if (isPlaying) audioProgressMs else 0L,
+                        durationMs = if (isPlaying) audioDurationMs else 0L,
+                        bubbleColor = bubbleColor,
+                        contentColor = contentColor,
+                        onPlayAudio = onPlayAudio,
+                        onSeekAudio = onSeekAudio
+                    )
                 }
                 else -> {
                     val localUriStr = chatRepository.getTransientUri(message.id, message.content)
@@ -3946,36 +4042,16 @@ fun ImageGroupBubble(
                                     }
                                     MessageType.AUDIO -> {
                                         val isPlaying = playingMessageId == message.id
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            modifier = Modifier
-                                                .clip(RoundedCornerShape(20.dp))
-                                                .background(Color(0xFF07C160))
-                                                .clickable { onPlayAudio(message) }
-                                                .padding(horizontal = 14.dp, vertical = 6.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = if (isPlaying) Icons.Default.VolumeUp else Icons.Default.VolumeMute,
-                                                contentDescription = null,
-                                                tint = Color.White,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "${message.videoDuration}s",
-                                                color = Color.White,
-                                                fontWeight = FontWeight.Medium,
-                                                fontSize = 13.sp
-                                            )
-                                        }
-                                        if (!message.caption.isNullOrBlank()) {
-                                            Text(
-                                                text = message.caption,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = Color.Gray,
-                                                modifier = Modifier.padding(top = 1.dp)
-                                            )
-                                        }
+                                        AudioMessageBubble(
+                                            message = message,
+                                            isPlaying = isPlaying,
+                                            progressMs = if (isPlaying) audioProgressMs else 0L,
+                                            durationMs = if (isPlaying) audioDurationMs else 0L,
+                                            bubbleColor = Color(0xFF07C160),
+                                            contentColor = Color.White,
+                                            onPlayAudio = playAudioMessage,
+                                            onSeekAudio = seekAudioMessage
+                                        )
                                     }
                                     MessageType.FILE -> {
                                         val progress = downloadProgress[message.id]
@@ -5094,6 +5170,9 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
     activeDownloadIds: Set<String>,
     autoDownloadLimit: Long,
     playingMessageId: String?,
+    audioProgressMs: Long = 0L,
+    audioDurationMs: Long = 0L,
+    onSeekAudio: ((com.cloudchat.model.ChatMessage, Float) -> Unit)? = null,
     mediaMessages: List<com.cloudchat.model.ChatMessage>,
     selectedIds: Set<String>,
     onSelectionChange: (Set<String>) -> Unit,
@@ -5184,6 +5263,9 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                             downloadProgress = downloadProgress,
                             isDownloading = isDownloading,
                             playingMessageId = playingMessageId,
+                            audioProgressMs = audioProgressMs,
+                            audioDurationMs = audioDurationMs,
+                            onSeekAudio = onSeekAudio,
                             onPlayAudio = onPlayAudio,
                             onMediaClick = onMediaClickHandler,
                             onLongClick = onLongClickHandler
@@ -5198,6 +5280,9 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                             downloadProgress = downloadProgress,
                             isDownloading = isDownloading,
                             playingMessageId = playingMessageId,
+                            audioProgressMs = audioProgressMs,
+                            audioDurationMs = audioDurationMs,
+                            onSeekAudio = onSeekAudio,
                             onPlayAudio = onPlayAudio,
                             onMediaClick = onMediaClickHandler,
                             onLongClick = onLongClickHandler
