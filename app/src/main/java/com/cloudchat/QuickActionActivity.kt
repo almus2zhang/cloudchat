@@ -219,7 +219,6 @@ class QuickActionActivity : ComponentActivity() {
                     Button(
                         onClick = {
                             com.cloudchat.utils.VoiceRecordingManager.stopAndSend(context, repo) {
-                                Toast.makeText(applicationContext, "✅ 语音发送成功", Toast.LENGTH_SHORT).show()
                                 onDismiss()
                             }
                         },

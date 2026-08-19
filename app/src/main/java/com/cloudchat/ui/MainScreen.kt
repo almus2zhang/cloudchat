@@ -1573,7 +1573,6 @@ fun MainScreen(
                 stopAndSendVoice()
                 showQuickVoiceDialog = false
                 if (isFromShortcut) {
-                    android.widget.Toast.makeText(context, "✅ 快捷语音已发送", android.widget.Toast.LENGTH_SHORT).show()
                     (context as? android.app.Activity)?.finish()
                 }
             },
@@ -1595,7 +1594,18 @@ fun VoiceWaveformVisualizer(
     color: Color = MaterialTheme.colorScheme.primary
 ) {
     val barCount = 15
-    val factors = remember { listOf(0.25f, 0.45f, 0.7f, 0.5f, 0.9f, 0.65f, 0.85f, 1.0f, 0.8f, 0.6f, 0.95f, 0.4f, 0.75f, 0.55f, 0.3f) }
+    val infiniteTransition = rememberInfiniteTransition(label = "waveform")
+    val phase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 6.28318f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "phase"
+    )
+
+    val factors = remember { listOf(0.3f, 0.5f, 0.75f, 0.55f, 0.9f, 0.65f, 0.85f, 1.0f, 0.8f, 0.6f, 0.95f, 0.45f, 0.75f, 0.55f, 0.35f) }
 
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
@@ -1603,8 +1613,11 @@ fun VoiceWaveformVisualizer(
         modifier = modifier.height(72.dp).fillMaxWidth()
     ) {
         for (i in 0 until barCount) {
-            val factor = factors[i % factors.size]
-            val barHeight = (6 + (amplitude * 56 * factor)).dp
+            val baseFactor = factors[i % factors.size]
+            val waveOscillation = (kotlin.math.sin(phase + i * 0.5f) * 0.18f + 0.18f).toFloat()
+            val effectiveAmp = (amplitude.coerceAtLeast(0.05f) + waveOscillation).coerceIn(0.12f, 1f)
+            val barHeight = (8 + (effectiveAmp * 54 * baseFactor)).dp
+
             Box(
                 modifier = Modifier
                     .width(4.dp)

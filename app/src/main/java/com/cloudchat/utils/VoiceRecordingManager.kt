@@ -104,11 +104,14 @@ object VoiceRecordingManager {
                     elapsedSeconds = (durationMs / 1000).toInt()
 
                     val maxAmp = mediaRecorder?.maxAmplitude ?: 0
-                    currentAmplitude = (maxAmp.toFloat() / 32767f).coerceIn(0f, 1f)
+                    if (maxAmp > 0) {
+                        val rawAmp = (maxAmp.toFloat() / 15000f).coerceIn(0f, 1f)
+                        currentAmplitude = kotlin.math.sqrt(rawAmp)
+                    }
                 } catch (e: Exception) {
                     // ignore
                 }
-                delay(100)
+                delay(50)
             }
         }
     }
@@ -117,6 +120,7 @@ object VoiceRecordingManager {
         if (!isRecording) return
         isRecordingInBackground = true
         startForegroundService(context)
+        (context as? android.app.Activity)?.moveTaskToBack(true)
     }
 
     fun restoreToForeground(context: Context) {
@@ -197,7 +201,6 @@ object VoiceRecordingManager {
                     folderId = folderId
                 )
                 scope.launch(Dispatchers.Main) {
-                    Toast.makeText(context, "✅ 语音消息发送成功", Toast.LENGTH_SHORT).show()
                     onComplete?.invoke()
                 }
             } catch (e: Exception) {
