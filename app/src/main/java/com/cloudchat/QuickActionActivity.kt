@@ -128,18 +128,13 @@ class QuickActionActivity : ComponentActivity() {
 
     @Composable
     private fun VoiceActionView(onDismiss: () -> Unit) {
-        val scope = rememberCoroutineScope()
-        var mediaRecorder by remember { mutableStateOf<android.media.MediaRecorder?>(null) }
-        var recordFile by remember { mutableStateOf<File?>(null) }
-        var isRecording by remember { mutableStateOf(false) }
-        var amplitude by remember { mutableFloatStateOf(0f) }
-        var recordStartTime by remember { mutableLongStateOf(0L) }
-        var elapsedTimeMs by remember { mutableLongStateOf(0L) }
+        val context = this@QuickActionActivity
+        val repo = remember { com.cloudchat.repository.ChatRepository(context.applicationContext) }
 
         var hasAudioPermission by remember {
             mutableStateOf(
                 androidx.core.content.ContextCompat.checkSelfPermission(
-                    this@QuickActionActivity,
+                    context,
                     android.Manifest.permission.RECORD_AUDIO
                 ) == android.content.pm.PackageManager.PERMISSION_GRANTED
             )
@@ -155,85 +150,17 @@ class QuickActionActivity : ComponentActivity() {
             }
         }
 
-        fun startRecording() {
-            try {
-                val dir = File(cacheDir, "recordings")
-                if (!dir.exists()) dir.mkdirs()
-                val file = File(dir, "voice_${System.currentTimeMillis()}.mp4")
-                recordFile = file
-                recordStartTime = System.currentTimeMillis()
-
-                val recorder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                    android.media.MediaRecorder(this@QuickActionActivity)
-                } else {
-                    android.media.MediaRecorder()
-                }
-
-                recorder.apply {
-                    setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
-                    setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4)
-                    setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC)
-                    setOutputFile(file.absolutePath)
-                    prepare()
-                    start()
-                }
-                mediaRecorder = recorder
-                isRecording = true
-
-                scope.launch(Dispatchers.Main) {
-                    while (isRecording && mediaRecorder != null) {
-                        try {
-                            val maxAmp = mediaRecorder?.maxAmplitude ?: 0
-                            amplitude = (maxAmp.toFloat() / 32767f).coerceIn(0f, 1f)
-                            elapsedTimeMs = System.currentTimeMillis() - recordStartTime
-                        } catch (e: Exception) {}
-                        delay(80)
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("QuickActionActivity", "Start recorder failed", e)
-                Toast.makeText(applicationContext, "录音初始化失败", Toast.LENGTH_SHORT).show()
-                onDismiss()
-            }
-        }
-
-        fun stopAndSend() {
-            val recorder = mediaRecorder ?: return
-            mediaRecorder = null
-            isRecording = false
-            try { recorder.stop() } catch (e: Exception) {} finally { recorder.release() }
-
-            val file = recordFile ?: run { onDismiss(); return }
-            val duration = System.currentTimeMillis() - recordStartTime
-            if (duration < 1000) {
-                Toast.makeText(applicationContext, "录音时间太短", Toast.LENGTH_SHORT).show()
-                file.delete()
-                onDismiss()
-                return
-            }
-
-            deliverToMainActivity(QuickActionData(type = "voice", filePath = file.absolutePath))
-            onDismiss()
-        }
-
-        fun cancelRecording() {
-            val recorder = mediaRecorder
-            mediaRecorder = null
-            isRecording = false
-            try { recorder?.stop() } catch (e: Exception) {} finally { recorder?.release() }
-            recordFile?.delete()
-            onDismiss()
-        }
-
         LaunchedEffect(Unit) {
             if (!hasAudioPermission) {
                 permissionLauncher.launch(android.Manifest.permission.RECORD_AUDIO)
             } else {
-                startRecording()
+                com.cloudchat.utils.VoiceRecordingManager.startRecording(context, repo, isShortcut = true)
             }
         }
 
-        val dotSize = (32 + (amplitude * 32)).dp
+        val amplitude = com.cloudchat.utils.VoiceRecordingManager.currentAmplitude
+        val seconds = com.cloudchat.utils.VoiceRecordingManager.elapsedSeconds
+        val timeText = String.format("%02d:%02d", seconds / 60, seconds % 60)
 
         Card(
             shape = RoundedCornerShape(20.dp),
@@ -245,37 +172,57 @@ class QuickActionActivity : ComponentActivity() {
                 modifier = Modifier.padding(24.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                // 单个白色圆点（纯白，不换颜色，尺寸随音量在默认1倍(32dp)到2倍(64dp)之间变化）
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .height(72.dp)
-                        .fillMaxWidth()
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(dotSize)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(Color.White)
-                            .border(1.5.dp, Color(0xFFDDDDDD), androidx.compose.foundation.shape.CircleShape)
+                    Text("语音录音", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = timeText,
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
                     )
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 取消与发送按钮
+                com.cloudchat.ui.VoiceWaveformVisualizer(amplitude = amplitude)
+
+                Spacer(modifier = Modifier.height(16.dp))
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedButton(
-                        onClick = { cancelRecording() },
+                        onClick = {
+                            com.cloudchat.utils.VoiceRecordingManager.cancelRecording(context) {
+                                Toast.makeText(applicationContext, "已取消录音", Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            }
+                        },
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("取消")
+                        Text("取消", color = MaterialTheme.colorScheme.error)
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            com.cloudchat.utils.VoiceRecordingManager.moveToBackground(context)
+                            onDismiss()
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("后台")
                     }
                     Button(
-                        onClick = { stopAndSend() },
+                        onClick = {
+                            com.cloudchat.utils.VoiceRecordingManager.stopAndSend(context, repo) {
+                                Toast.makeText(applicationContext, "✅ 语音发送成功", Toast.LENGTH_SHORT).show()
+                                onDismiss()
+                            }
+                        },
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("发送", fontWeight = FontWeight.Bold)

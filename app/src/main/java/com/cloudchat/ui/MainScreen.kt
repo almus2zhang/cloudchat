@@ -569,6 +569,7 @@ fun MainScreen(
     var recordFile by remember { mutableStateOf<File?>(null) }
     var recordStartTime by remember { mutableLongStateOf(0L) }
     var isRecordingVoiceState by remember { mutableStateOf(false) }
+    var isPressAndHoldRecording by remember { mutableStateOf(false) }
     var currentAmplitude by remember { mutableStateOf(0f) }
     var amplitudeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
@@ -1267,7 +1268,8 @@ fun MainScreen(
                     onShowImagePicker = { showImagePicker = true },
                     startVoiceRecording = ::startVoiceRecording,
                     stopAndSendVoice = ::stopAndSendVoice,
-                    cancelVoiceRecording = ::cancelVoiceRecording
+                    cancelVoiceRecording = ::cancelVoiceRecording,
+                    onPressAndHoldChange = { isPressAndHoldRecording = it }
                 )
             } else {
                 // Selection Toolbar replaces the input bar during multi-select
@@ -1328,7 +1330,7 @@ fun MainScreen(
             }
         }
 
-        if (isRecordingVoiceState) {
+        if (isRecordingVoiceState && isPressAndHoldRecording) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1338,7 +1340,7 @@ fun MainScreen(
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     shape = MaterialTheme.shapes.large,
-                    modifier = Modifier.size(160.dp, 120.dp),
+                    modifier = Modifier.size(180.dp, 130.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                 ) {
                     Column(
@@ -1347,6 +1349,13 @@ fun MainScreen(
                         verticalArrangement = Arrangement.Center
                     ) {
                         VoiceWaveformVisualizer(amplitude = currentAmplitude)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "松开 发送",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     }
                 }
             }
@@ -1560,6 +1569,7 @@ fun MainScreen(
             },
             showQuickVoiceDialog = showQuickVoiceDialog,
             isRecordingVoiceState = isRecordingVoiceState,
+            isPressAndHoldRecording = isPressAndHoldRecording,
             voiceAmplitude = currentAmplitude,
             onStopAndSendVoice = {
                 if (isRecordingVoiceState) {
@@ -1621,6 +1631,7 @@ fun QuickActionDialogs(
     onQuickTextDismiss: () -> Unit,
     showQuickVoiceDialog: Boolean,
     isRecordingVoiceState: Boolean,
+    isPressAndHoldRecording: Boolean = false,
     voiceAmplitude: Float = 0f,
     onStopAndSendVoice: () -> Unit,
     onCancelVoice: () -> Unit
@@ -1660,7 +1671,7 @@ fun QuickActionDialogs(
         )
     }
 
-    val isVoiceDialogVisible = (showQuickVoiceDialog || com.cloudchat.utils.VoiceRecordingManager.isRecording) && !com.cloudchat.utils.VoiceRecordingManager.isRecordingInBackground
+    val isVoiceDialogVisible = (showQuickVoiceDialog || (com.cloudchat.utils.VoiceRecordingManager.isRecording && !isPressAndHoldRecording)) && !com.cloudchat.utils.VoiceRecordingManager.isRecordingInBackground
 
     if (isVoiceDialogVisible) {
         val currentAmp = if (com.cloudchat.utils.VoiceRecordingManager.isRecording) com.cloudchat.utils.VoiceRecordingManager.currentAmplitude else voiceAmplitude
@@ -4524,7 +4535,8 @@ fun ChatInputBar(
     onShowImagePicker: () -> Unit,
     startVoiceRecording: () -> Unit,
     stopAndSendVoice: () -> Unit,
-    cancelVoiceRecording: () -> Unit
+    cancelVoiceRecording: () -> Unit,
+    onPressAndHoldChange: (Boolean) -> Unit = {}
 ) {
     Column(modifier = Modifier.navigationBarsPadding().background(MaterialTheme.colorScheme.surface)) {
         Row(
@@ -4577,6 +4589,7 @@ fun ChatInputBar(
                                     } else {
                                         try {
                                             isRecording = true
+                                            onPressAndHoldChange(true)
                                             startVoiceRecording()
                                             val released = tryAwaitRelease()
                                             if (released) {
@@ -4589,6 +4602,7 @@ fun ChatInputBar(
                                             cancelVoiceRecording()
                                         } finally {
                                             isRecording = false
+                                            onPressAndHoldChange(false)
                                         }
                                     }
                                 }
