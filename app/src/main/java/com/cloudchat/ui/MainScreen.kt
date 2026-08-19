@@ -4960,7 +4960,17 @@ fun BoxScope.FastScrollbar(
     var scrollStartItemIndex by remember { mutableIntStateOf(-1) }
     val coroutineScope = rememberCoroutineScope()
 
-    LaunchedEffect(listState.isScrollInProgress, isDragging) {
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (!listState.isScrollInProgress) {
+            scrollStartItemIndex = -1
+            val hideDelay = if (wasDragging) 500L else 1000L
+            kotlinx.coroutines.delay(hideDelay)
+            isVisible = false
+            wasDragging = false
+        }
+    }
+
+    LaunchedEffect(listState.firstVisibleItemIndex, isDragging) {
         if (isDragging) {
             wasDragging = true
             isVisible = true
@@ -4973,12 +4983,6 @@ fun BoxScope.FastScrollbar(
             if (itemsScrolled > visibleCount * 1.5f) {
                 isVisible = true
             }
-        } else {
-            scrollStartItemIndex = -1
-            val hideDelay = if (wasDragging) 500L else 1000L
-            kotlinx.coroutines.delay(hideDelay)
-            isVisible = false
-            wasDragging = false
         }
     }
 
