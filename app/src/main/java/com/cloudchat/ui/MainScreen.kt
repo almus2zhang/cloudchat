@@ -568,7 +568,6 @@ fun MainScreen(
     var mediaRecorder by remember { mutableStateOf<android.media.MediaRecorder?>(null) }
     var recordFile by remember { mutableStateOf<File?>(null) }
     var recordStartTime by remember { mutableLongStateOf(0L) }
-    var isRecordingVoiceState by remember { mutableStateOf(false) }
     var isPressAndHoldRecording by remember { mutableStateOf(false) }
     var currentAmplitude by remember { mutableStateOf(0f) }
     var amplitudeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -1330,7 +1329,7 @@ fun MainScreen(
             }
         }
 
-        if (isRecordingVoiceState && isPressAndHoldRecording) {
+        if (com.cloudchat.utils.VoiceRecordingManager.isRecording && isPressAndHoldRecording) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1568,23 +1567,18 @@ fun MainScreen(
                 }
             },
             showQuickVoiceDialog = showQuickVoiceDialog,
-            isRecordingVoiceState = isRecordingVoiceState,
             isPressAndHoldRecording = isPressAndHoldRecording,
             voiceAmplitude = currentAmplitude,
             onStopAndSendVoice = {
-                if (isRecordingVoiceState) {
-                    stopAndSendVoice()
-                    if (isFromShortcut) {
-                        android.widget.Toast.makeText(context, "✅ 快捷语音已发送", android.widget.Toast.LENGTH_SHORT).show()
-                        (context as? android.app.Activity)?.finish()
-                    }
-                }
+                stopAndSendVoice()
                 showQuickVoiceDialog = false
+                if (isFromShortcut) {
+                    android.widget.Toast.makeText(context, "✅ 快捷语音已发送", android.widget.Toast.LENGTH_SHORT).show()
+                    (context as? android.app.Activity)?.finish()
+                }
             },
             onCancelVoice = {
-                if (isRecordingVoiceState) {
-                    cancelVoiceRecording()
-                }
+                cancelVoiceRecording()
                 showQuickVoiceDialog = false
                 if (isFromShortcut) {
                     (context as? android.app.Activity)?.finish()
@@ -1630,7 +1624,6 @@ fun QuickActionDialogs(
     onQuickTextSend: (String) -> Unit,
     onQuickTextDismiss: () -> Unit,
     showQuickVoiceDialog: Boolean,
-    isRecordingVoiceState: Boolean,
     isPressAndHoldRecording: Boolean = false,
     voiceAmplitude: Float = 0f,
     onStopAndSendVoice: () -> Unit,
