@@ -2615,8 +2615,24 @@ fun DiaryBubble(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.InsertDriveFile, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(28.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
+                                val isLong = message.content.length > 25
+                                var isExpanded by remember(message.id) { mutableStateOf(false) }
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(text = message.content, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                                    Text(
+                                        text = message.content,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = if (isExpanded) Int.MAX_VALUE else 2,
+                                        overflow = if (isExpanded) androidx.compose.ui.text.style.TextOverflow.Clip else androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                    if (isLong) {
+                                        Text(
+                                            text = if (isExpanded) "收起" else "展开全文",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.clickable { isExpanded = !isExpanded }
+                                        )
+                                    }
                                     if (message.fileSize > 0) {
                                         Text(text = formatFileSize(message.fileSize), style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                                     }
@@ -2996,15 +3012,25 @@ fun ChatBubble(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             // Reverted to simple layout
+                            val isLong = message.content.length > 25
+                            var isExpanded by remember(message.id) { mutableStateOf(false) }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = message.content,
                                     fontWeight = FontWeight.Medium,
-                                    maxLines = 2,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                    maxLines = if (isExpanded) Int.MAX_VALUE else 2,
+                                    overflow = if (isExpanded) androidx.compose.ui.text.style.TextOverflow.Clip else androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                     fontSize = 15.sp,
                                     color = Color.Black
                                 )
+                                if (isLong) {
+                                    Text(
+                                        text = if (isExpanded) "收起" else "展开全文",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.clickable { isExpanded = !isExpanded }
+                                    )
+                                }
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = if (message.fileSize > 0) formatFileSize(message.fileSize) else "Document",
@@ -4000,14 +4026,24 @@ fun ImageGroupBubble(
                                                 modifier = Modifier.size(22.dp)
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
+                                            val isLong = message.content.length > 25
+                                            var isExpanded by remember(message.id) { mutableStateOf(false) }
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(
                                                     text = message.content,
                                                     fontWeight = FontWeight.Medium,
-                                                    maxLines = 1,
-                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                                    maxLines = if (isExpanded) Int.MAX_VALUE else 2,
+                                                    overflow = if (isExpanded) androidx.compose.ui.text.style.TextOverflow.Clip else androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                                     fontSize = 12.5.sp
                                                 )
+                                                if (isLong) {
+                                                    Text(
+                                                        text = if (isExpanded) "收起" else "展开全文",
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.clickable { isExpanded = !isExpanded }
+                                                    )
+                                                }
                                                 if (message.fileSize > 0) {
                                                     Text(
                                                         text = formatFileSize(message.fileSize),
