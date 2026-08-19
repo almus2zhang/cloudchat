@@ -1329,8 +1329,6 @@ fun MainScreen(
         }
 
         if (isRecordingVoiceState) {
-            val dotSize = (32 + (currentAmplitude * 32)).dp
-
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -1340,7 +1338,7 @@ fun MainScreen(
                 Card(
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     shape = MaterialTheme.shapes.large,
-                    modifier = Modifier.size(140.dp),
+                    modifier = Modifier.size(160.dp, 120.dp),
                     elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                 ) {
                     Column(
@@ -1348,18 +1346,7 @@ fun MainScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center
                     ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.height(72.dp).fillMaxWidth()
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(dotSize)
-                                    .clip(CircleShape)
-                                    .background(Color.White)
-                                    .border(1.5.dp, Color(0xFFDDDDDD), CircleShape)
-                            )
-                        }
+                        VoiceWaveformVisualizer(amplitude = currentAmplitude)
                     }
                 }
             }
@@ -1598,6 +1585,34 @@ fun MainScreen(
 }
 
 @Composable
+fun VoiceWaveformVisualizer(
+    amplitude: Float,
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.primary
+) {
+    val barCount = 15
+    val factors = remember { listOf(0.25f, 0.45f, 0.7f, 0.5f, 0.9f, 0.65f, 0.85f, 1.0f, 0.8f, 0.6f, 0.95f, 0.4f, 0.75f, 0.55f, 0.3f) }
+
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.height(72.dp).fillMaxWidth()
+    ) {
+        for (i in 0 until barCount) {
+            val factor = factors[i % factors.size]
+            val barHeight = (6 + (amplitude * 56 * factor)).dp
+            Box(
+                modifier = Modifier
+                    .width(4.dp)
+                    .height(barHeight)
+                    .clip(CircleShape)
+                    .background(color)
+            )
+        }
+    }
+}
+
+@Composable
 fun QuickActionDialogs(
     showQuickTextDialog: Boolean,
     quickTextInput: String,
@@ -1649,7 +1664,6 @@ fun QuickActionDialogs(
 
     if (isVoiceDialogVisible) {
         val currentAmp = if (com.cloudchat.utils.VoiceRecordingManager.isRecording) com.cloudchat.utils.VoiceRecordingManager.currentAmplitude else voiceAmplitude
-        val dotSize = (32 + (currentAmp * 32)).dp
         val seconds = if (com.cloudchat.utils.VoiceRecordingManager.isRecording) com.cloudchat.utils.VoiceRecordingManager.elapsedSeconds else 0
         val timeText = String.format("%02d:%02d", seconds / 60, seconds % 60)
         val context = LocalContext.current
@@ -1682,18 +1696,7 @@ fun QuickActionDialogs(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
                 ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.height(72.dp).fillMaxWidth()
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(dotSize)
-                                .clip(CircleShape)
-                                .background(Color.White)
-                                .border(1.5.dp, Color(0xFFDDDDDD), CircleShape)
-                        )
-                    }
+                    VoiceWaveformVisualizer(amplitude = currentAmp)
                 }
             },
             confirmButton = {
