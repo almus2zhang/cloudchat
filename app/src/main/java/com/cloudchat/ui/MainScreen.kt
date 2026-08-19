@@ -1594,17 +1594,6 @@ fun VoiceWaveformVisualizer(
     color: Color = MaterialTheme.colorScheme.primary
 ) {
     val barCount = 15
-    val infiniteTransition = rememberInfiniteTransition(label = "waveform")
-    val phase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 6.28318f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "phase"
-    )
-
     val factors = remember { listOf(0.3f, 0.5f, 0.75f, 0.55f, 0.9f, 0.65f, 0.85f, 1.0f, 0.8f, 0.6f, 0.95f, 0.45f, 0.75f, 0.55f, 0.35f) }
 
     Row(
@@ -1614,9 +1603,7 @@ fun VoiceWaveformVisualizer(
     ) {
         for (i in 0 until barCount) {
             val baseFactor = factors[i % factors.size]
-            val waveOscillation = (kotlin.math.sin(phase + i * 0.5f) * 0.18f + 0.18f).toFloat()
-            val effectiveAmp = (amplitude.coerceAtLeast(0.05f) + waveOscillation).coerceIn(0.12f, 1f)
-            val barHeight = (8 + (effectiveAmp * 54 * baseFactor)).dp
+            val barHeight = (4 + (amplitude * 56 * baseFactor)).dp
 
             Box(
                 modifier = Modifier

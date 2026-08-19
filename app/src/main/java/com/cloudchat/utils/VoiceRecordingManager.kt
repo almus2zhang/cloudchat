@@ -105,13 +105,15 @@ object VoiceRecordingManager {
 
                     val maxAmp = mediaRecorder?.maxAmplitude ?: 0
                     if (maxAmp > 0) {
-                        val rawAmp = (maxAmp.toFloat() / 15000f).coerceIn(0f, 1f)
-                        currentAmplitude = kotlin.math.sqrt(rawAmp)
+                        val norm = (kotlin.math.log10(1.0 + maxAmp) / kotlin.math.log10(15000.0)).toFloat()
+                        currentAmplitude = norm.coerceIn(0f, 1f)
+                    } else {
+                        currentAmplitude = 0f
                     }
                 } catch (e: Exception) {
-                    // ignore
+                    currentAmplitude = 0f
                 }
-                delay(50)
+                delay(60)
             }
         }
     }
