@@ -267,6 +267,10 @@ class MainActivity : ComponentActivity() {
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
 
+        if (intent.action == com.cloudchat.service.VoiceRecordingService.ACTION_RESTORE_RECORDING || intent.getBooleanExtra("restore_recording", false)) {
+            com.cloudchat.utils.VoiceRecordingManager.restoreToForeground(this)
+        }
+
         val quickDataType = intent.getStringExtra("quick_action_data_type")
         if (!quickDataType.isNullOrEmpty()) {
             val text = intent.getStringExtra("quick_action_text")

@@ -606,77 +606,14 @@ fun MainScreen(
     }
 
     fun startVoiceRecording() {
-        val dir = File(context.cacheDir, "recordings")
-        if (!dir.exists()) dir.mkdirs()
-        val file = File(dir, "voice_${System.currentTimeMillis()}.mp4")
-        recordFile = file
-        recordStartTime = System.currentTimeMillis()
-        
-        val recorder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            android.media.MediaRecorder(context)
-        } else {
-            android.media.MediaRecorder()
-        }
-        
-        recorder.apply {
-            setAudioSource(android.media.MediaRecorder.AudioSource.MIC)
-            setOutputFormat(android.media.MediaRecorder.OutputFormat.MPEG_4)
-            setAudioEncoder(android.media.MediaRecorder.AudioEncoder.AAC)
-            setOutputFile(file.absolutePath)
-            prepare()
-            start()
-        }
-        mediaRecorder = recorder
-
-        isRecordingVoiceState = true
-        currentAmplitude = 0f
-        amplitudeJob = scope.launch(Dispatchers.Main) {
-            while (mediaRecorder != null) {
-                try {
-                    val maxAmp = mediaRecorder?.maxAmplitude ?: 0
-                    currentAmplitude = (maxAmp.toFloat() / 32767f).coerceIn(0f, 1f)
-                } catch (e: Exception) {
-                    // ignore
-                }
-                delay(100)
-            }
-        }
+        com.cloudchat.utils.VoiceRecordingManager.startRecording(context, currentFolderId, isFromShortcut)
     }
 
     fun stopAndSendVoice() {
-        val recorder = mediaRecorder ?: return
-        mediaRecorder = null
-        isRecordingVoiceState = false
-        amplitudeJob?.cancel()
-        amplitudeJob = null
-        try {
-            recorder.stop()
-        } catch (e: Exception) {
-            Log.e("MainScreen", "Stop recorder failed", e)
-        } finally {
-            recorder.release()
-        }
-        
-        val file = recordFile ?: return
-        recordFile = null
-        val durationMs = System.currentTimeMillis() - recordStartTime
-        
-        if (durationMs < 1000) {
-            android.widget.Toast.makeText(context, "录音时间太短", android.widget.Toast.LENGTH_SHORT).show()
-            file.delete()
-            return
-        }
-        
-        scope.launch {
-            val inputStream = file.inputStream()
-            chatRepository.sendMessage(
-                content = file.name,
-                type = MessageType.AUDIO,
-                inputStream = inputStream,
-                fileName = file.name,
-                localUri = Uri.fromFile(file).toString(),
-                folderId = currentFolderId
-            )
+        com.cloudchat.utils.VoiceRecordingManager.stopAndSend(context, chatRepository) {
+            if (isFromShortcut) {
+                (context as? android.app.Activity)?.finish()
+            }
         }
     }
 
@@ -745,20 +682,11 @@ fun MainScreen(
     }
 
     fun cancelVoiceRecording() {
-        val recorder = mediaRecorder ?: return
-        mediaRecorder = null
-        isRecordingVoiceState = false
-        amplitudeJob?.cancel()
-        amplitudeJob = null
-        try {
-            recorder.stop()
-        } catch (e: Exception) {
-            // ignore
-        } finally {
-            recorder.release()
+        com.cloudchat.utils.VoiceRecordingManager.cancelRecording(context) {
+            if (isFromShortcut) {
+                (context as? android.app.Activity)?.finish()
+            }
         }
-        recordFile?.delete()
-        recordFile = null
     }
 
     LaunchedEffect(mediaPagerIndex) {
@@ -1717,17 +1645,43 @@ fun QuickActionDialogs(
         )
     }
 
-    if (showQuickVoiceDialog) {
-        val dotSize = (32 + (voiceAmplitude * 32)).dp
+    val isVoiceDialogVisible = (showQuickVoiceDialog || com.cloudchat.utils.VoiceRecordingManager.isRecording) && !com.cloudchat.utils.VoiceRecordingManager.isRecordingInBackground
+
+    if (isVoiceDialogVisible) {
+        val currentAmp = if (com.cloudchat.utils.VoiceRecordingManager.isRecording) com.cloudchat.utils.VoiceRecordingManager.currentAmplitude else voiceAmplitude
+        val dotSize = (32 + (currentAmp * 32)).dp
+        val seconds = if (com.cloudchat.utils.VoiceRecordingManager.isRecording) com.cloudchat.utils.VoiceRecordingManager.elapsedSeconds else 0
+        val timeText = String.format("%02d:%02d", seconds / 60, seconds % 60)
+        val context = LocalContext.current
 
         AlertDialog(
-            onDismissRequest = onCancelVoice,
+            onDismissRequest = {
+                if (com.cloudchat.utils.VoiceRecordingManager.isRecording) {
+                    com.cloudchat.utils.VoiceRecordingManager.moveToBackground(context)
+                } else {
+                    onCancelVoice()
+                }
+            },
+            title = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("语音录音", fontWeight = FontWeight.Bold)
+                    Text(
+                        text = timeText,
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
             text = {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
                 ) {
-                    // 单个白色圆点（纯白，不换颜色，尺寸在默认1倍(32dp)到2倍(64dp)之间随音量变化）
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier.height(72.dp).fillMaxWidth()
@@ -1743,13 +1697,24 @@ fun QuickActionDialogs(
                 }
             },
             confirmButton = {
-                Button(onClick = onStopAndSendVoice) {
-                    Text("发送", fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = {
+                        if (com.cloudchat.utils.VoiceRecordingManager.isRecording) {
+                            com.cloudchat.utils.VoiceRecordingManager.moveToBackground(context)
+                        }
+                    }) {
+                        Icon(Icons.Default.CloudQueue, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("后台")
+                    }
+                    Button(onClick = onStopAndSendVoice) {
+                        Text("发送", fontWeight = FontWeight.Bold)
+                    }
                 }
             },
             dismissButton = {
                 OutlinedButton(onClick = onCancelVoice) {
-                    Text("取消")
+                    Text("取消", color = MaterialTheme.colorScheme.error)
                 }
             }
         )
@@ -5480,6 +5445,51 @@ fun androidx.compose.foundation.layout.RowScope.TopBarActionsContent(
                     MaterialTheme.colorScheme.error
                 }
             )
+        }
+
+        if (com.cloudchat.utils.VoiceRecordingManager.isRecording) {
+            val infiniteTransition = rememberInfiniteTransition(label = "recPulse")
+            val alpha by infiniteTransition.animateFloat(
+                initialValue = 1f,
+                targetValue = 0.35f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(800, easing = LinearEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "recAlpha"
+            )
+            val seconds = com.cloudchat.utils.VoiceRecordingManager.elapsedSeconds
+            val timeText = String.format("%02d:%02d", seconds / 60, seconds % 60)
+
+            Surface(
+                color = Color(0xFFE53935).copy(alpha = alpha),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .padding(end = 4.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable {
+                        com.cloudchat.utils.VoiceRecordingManager.restoreToForeground(chatRepository.context)
+                    }
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = "唤出录音界面",
+                        tint = Color.White,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "REC $timeText",
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
         }
 
         IconButton(modifier = Modifier.size(40.dp), onClick = { onSearchActiveChange(true) }) {
