@@ -5469,8 +5469,16 @@ fun androidx.compose.foundation.layout.RowScope.TopBarActionsContent(
         }) {
             Icon(
                 imageVector = Icons.Default.Bolt,
-                contentDescription = if (isFast) "快速同步" else "普通同步",
-                tint = if (isSameLan) Color(0xFF07C160) else (if (isServerConnected) (if (isFast) Color(0xFFFFC107) else Color.Gray) else MaterialTheme.colorScheme.error)
+                contentDescription = if (isFast) "快速同步 (1秒)" else "普通同步 (5秒)",
+                tint = if (isServerConnected) {
+                    if (isSameLan) {
+                        if (isFast) Color(0xFFFF9800) else Color(0xFF07C160)
+                    } else {
+                        if (isFast) Color(0xFFFFC107) else Color.Gray
+                    }
+                } else {
+                    MaterialTheme.colorScheme.error
+                }
             )
         }
 
