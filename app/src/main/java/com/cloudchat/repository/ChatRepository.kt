@@ -413,6 +413,29 @@ class ChatRepository(private val context: Context) {
         val fullUrl = resolveUrl(remoteUrl) ?: remoteUrl
         return downloadFileInternal(messageId, fileName, fullUrl)
     }
+
+    suspend fun resolveTextContent(msg: ChatMessage): String = withContext(Dispatchers.IO) {
+        if (!msg.isTextFileFormat()) return@withContext msg.content
+        val txtFileName = if (msg.content.endsWith(".txt")) msg.content else "text_${msg.id}.txt"
+        val localFile = getLocalFile(msg.id, txtFileName)
+        if (localFile.exists() && localFile.length() > 0) {
+            try {
+                return@withContext localFile.readText(Charsets.UTF_8)
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "Failed to read local text file $txtFileName", e)
+            }
+        }
+        val remoteUrl = msg.remoteUrl ?: txtFileName
+        try {
+            val downloaded = downloadFileToCache(msg.id, txtFileName, remoteUrl)
+            if (downloaded != null && downloaded.exists()) {
+                return@withContext downloaded.readText(Charsets.UTF_8)
+            }
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "Failed to download text file $txtFileName", e)
+        }
+        return@withContext msg.textPreview ?: msg.content
+    }
     
     private suspend fun downloadFileInternal(messageId: String, fileName: String, remoteUrl: String): File? = withContext(Dispatchers.IO) {
         val provider = storageProvider ?: return@withContext null
@@ -872,22 +895,38 @@ class ChatRepository(private val context: Context) {
             }
         }
 
-        val encodedFileName = fileName?.let { URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
+        val newMessageId = UUID.randomUUID().toString()
+        val isTextOffload = (type == com.cloudchat.model.MessageType.TEXT && inputStream == null && fileName == null && content.length >= 500)
+        val generatedTxtFileName = if (isTextOffload) "text_${newMessageId.take(8)}.txt" else null
+        val effectiveFileName = fileName ?: generatedTxtFileName
+
+        if (isTextOffload && generatedTxtFileName != null) {
+            try {
+                val txtFile = getLocalFile(newMessageId, generatedTxtFileName)
+                txtFile.writeText(content, Charsets.UTF_8)
+                fileSize = txtFile.length()
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "Failed to write offloaded text file", e)
+            }
+        }
+
+        val encodedFileName = effectiveFileName?.let { URLEncoder.encode(it, "UTF-8").replace("+", "%20") }
         val userDir = config.saveDir
         val root = config.serverPath.trim().removePrefix("/").removeSuffix("/")
         val cloudPath = if (root.isEmpty()) userDir else "$root/$userDir"
 
-        val remoteUrl = fileName
+        val remoteUrl = effectiveFileName
 
-        val useChunking = (inputStream != null && fileName != null && config.type == com.cloudchat.model.StorageType.WEBDAV && config.webDavChunkSize > 0L && fileSize > config.webDavChunkSize)
+        val useChunking = (inputStream != null && effectiveFileName != null && config.type == com.cloudchat.model.StorageType.WEBDAV && config.webDavChunkSize > 0L && fileSize > config.webDavChunkSize)
         val chunkSize = if (useChunking) config.webDavChunkSize else 0L
         val totalChunks = if (useChunking) ((fileSize + chunkSize - 1) / chunkSize).toInt() else 0
 
         val newMessage = ChatMessage(
+            id = newMessageId,
             sender = config.username, // Username identifies the sender
             senderName = config.username,
             senderAvatar = config.avatarUrl,
-            content = fileName ?: content,
+            content = effectiveFileName ?: content,
             type = type,
             isOutgoing = true,
             remoteUrl = remoteUrl,
@@ -900,7 +939,9 @@ class ChatRepository(private val context: Context) {
             totalChunks = totalChunks,
             categories = categories,
             groupId = groupId,
-            folderId = folderId
+            folderId = folderId,
+            isTextFile = isTextOffload || (type == com.cloudchat.model.MessageType.TEXT && effectiveFileName?.startsWith("text_") == true && effectiveFileName.endsWith(".txt")),
+            textPreview = if (isTextOffload) content.take(100) else null
         )
 
         localUri?.let { uriStr ->
@@ -918,7 +959,7 @@ class ChatRepository(private val context: Context) {
             Log.e("ChatRepository", "Failed to save local history on send", e)
         }
 
-        if (inputStream != null) {
+        if (inputStream != null || isTextOffload) {
             _uploadProgress.update { it + (newMessage.id to 0) }
         }
 
@@ -931,10 +972,10 @@ class ChatRepository(private val context: Context) {
                 // 拿到上传锁，真正开始上传时才计时
                 uploadStartedAt[newMessage.id] = System.currentTimeMillis()
             try {
-                if (localUri != null && fileName != null) {
+                if (localUri != null && effectiveFileName != null) {
                     try {
                         val uri = Uri.parse(localUri)
-                        val targetFile = getLocalFile(newMessage.id, fileName)
+                        val targetFile = getLocalFile(newMessage.id, effectiveFileName)
                         if (!targetFile.exists() || targetFile.length() == 0L) {
                             context.contentResolver.openInputStream(uri)?.use { input ->
                                 targetFile.outputStream().use { output ->
@@ -943,18 +984,20 @@ class ChatRepository(private val context: Context) {
                             }
                         }
                     } catch (e: Exception) {
-                        Log.e("ChatRepository", "Failed to copy file to local cache: $fileName", e)
+                        Log.e("ChatRepository", "Failed to copy file to local cache: $effectiveFileName", e)
                     }
                 }
 
-                if (fileName != null) {
+                val uploadFileName = effectiveFileName
+                if (uploadFileName != null) {
                     val contentType = when(type) {
                         com.cloudchat.model.MessageType.IMAGE -> "image/jpeg"
                         com.cloudchat.model.MessageType.VIDEO -> "video/mp4"
+                        com.cloudchat.model.MessageType.TEXT -> "text/plain; charset=utf-8"
                         else -> "application/octet-stream"
                     }
 
-                    val targetFile = getLocalFile(newMessage.id, fileName)
+                    val targetFile = getLocalFile(newMessage.id, uploadFileName)
                     val uploadStream = if (targetFile.exists() && targetFile.length() > 0L) {
                         targetFile.inputStream()
                     } else if (localUri != null) {
@@ -1044,7 +1087,7 @@ class ChatRepository(private val context: Context) {
                                 chunkFile.inputStream().use { partIn ->
                                     provider.uploadFileRange(
                                         partIn,
-                                        fileName,
+                                        effectiveFileName!!,
                                         contentType,
                                         startByte,
                                         endByte,
@@ -1076,7 +1119,7 @@ class ChatRepository(private val context: Context) {
                                     }
                                 }
 
-                                val partName = "${fileName}.part${partIdx}"
+                                val partName = "${effectiveFileName!!}.part${partIdx}"
                                 val partLength = chunkFile.length()
                                 val currentPartIdx = partIdx
                                 chunkFile.inputStream().use { partIn ->
@@ -1090,7 +1133,7 @@ class ChatRepository(private val context: Context) {
                             }
                         } else {
                             val actualLength = if (targetFile.exists()) targetFile.length() else fileSize
-                            provider.uploadFile(streamToUpload, fileName, contentType, actualLength) { progress ->
+                            provider.uploadFile(streamToUpload, effectiveFileName!!, contentType, actualLength) { progress ->
                                 _uploadProgress.update { it + (newMessage.id to progress) }
                             }
                         }

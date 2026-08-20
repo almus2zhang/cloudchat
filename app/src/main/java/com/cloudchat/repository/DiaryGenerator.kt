@@ -172,7 +172,8 @@ object DiaryGenerator {
                         "<span class=\"file-size\">${formatBytes(sub.fileSize)}</span></div></div>"
                 }
                 else -> {
-                    "<div class=\"wechat-text-content\" style=\"margin: 4px 0;\">${escapeHtml(sub.content)}</div>"
+                    val resolvedText = sub.getDisplayText()
+                    "<div class=\"wechat-text-content\" style=\"margin: 4px 0;\">${escapeHtml(resolvedText)}</div>"
                 }
             }
         }
@@ -252,7 +253,7 @@ object DiaryGenerator {
                                 MessageType.IMAGE -> "<img src=\"$u\" class=\"card-img\" loading=\"lazy\" onclick=\"openLightbox(this.src)\"/>"
                                 MessageType.VIDEO -> "<video src=\"$u\" controls preload=\"none\" class=\"card-video\"></video>"
                                 MessageType.AUDIO -> "<audio src=\"$u\" controls preload=\"none\"></audio>"
-                                else -> "<div class=\"card-text\">${escapeHtml(s.content)}</div>"
+                                else -> "<div class=\"card-text\">${escapeHtml(s.getDisplayText())}</div>"
                             }
                         } + "</div>"
                     }
@@ -266,7 +267,8 @@ object DiaryGenerator {
                     }
                 }
 
-                val textStr = if (isLocation) (msg.locationAddress ?: msg.content) else (if (msg.type == MessageType.TEXT) msg.content else (msg.caption ?: ""))
+                val textContent = msg.getDisplayText()
+                val textStr = if (isLocation) (msg.locationAddress ?: textContent) else (if (msg.type == MessageType.TEXT) textContent else (msg.caption ?: ""))
                 "<div class=\"timeline-node\"><div class=\"timeline-dot\"></div>" +
                     "<div class=\"timeline-content-card\">" +
                     "<div class=\"card-header\"><span class=\"card-date\">${date.full}</span>" +

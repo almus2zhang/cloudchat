@@ -2509,9 +2509,18 @@ fun DiaryBubble(
             Spacer(modifier = Modifier.height(3.dp))
             when (message.type) {
                 MessageType.TEXT -> {
+                    val resolvedTextState = produceState(
+                        initialValue = message.getDisplayText(),
+                        key1 = message.id,
+                        key2 = message.content
+                    ) {
+                        if (message.isTextFileFormat()) {
+                            value = chatRepository.resolveTextContent(message)
+                        }
+                    }
                     SelectionContainer {
                         Text(
-                            text = message.content,
+                            text = resolvedTextState.value,
                             style = MaterialTheme.typography.bodyMedium,
                             color = Color(0xFF222222),
                             fontSize = 15.sp,
@@ -2834,6 +2843,15 @@ fun ChatBubble(
             )
             when (message.type) {
                 MessageType.TEXT -> {
+                    val resolvedTextState = produceState(
+                        initialValue = message.getDisplayText(),
+                        key1 = message.id,
+                        key2 = message.content
+                    ) {
+                        if (message.isTextFileFormat()) {
+                            value = chatRepository.resolveTextContent(message)
+                        }
+                    }
                     Card(
                         colors = CardDefaults.cardColors(containerColor = bubbleColor),
                         shape = MaterialTheme.shapes.medium,
@@ -2841,7 +2859,7 @@ fun ChatBubble(
                     ) {
                         SelectionContainer {
                             Text(
-                                text = message.content,
+                                text = resolvedTextState.value,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                                 color = contentColor,
                                 fontSize = 16.sp
@@ -4003,9 +4021,18 @@ fun ImageGroupBubble(
                             ) {
                                 when (message.type) {
                                     MessageType.TEXT -> {
+                                        val resolvedTextState = produceState(
+                                            initialValue = message.getDisplayText(),
+                                            key1 = message.id,
+                                            key2 = message.content
+                                        ) {
+                                            if (message.isTextFileFormat()) {
+                                                value = chatRepository.resolveTextContent(message)
+                                            }
+                                        }
                                         androidx.compose.foundation.text.selection.SelectionContainer {
                                             Text(
-                                                text = message.content,
+                                                text = resolvedTextState.value,
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = Color(0xFF222222),
                                                 fontSize = 14.5.sp,

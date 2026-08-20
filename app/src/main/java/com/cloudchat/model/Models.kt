@@ -39,10 +39,21 @@ data class ChatMessage(
     val isEdited: Boolean = false,
     val folderId: String? = null, // For packing messages into a FOLDER
     val isDeleted: Boolean = false,
-    val lastModified: Long = System.currentTimeMillis()
+    val lastModified: Long = System.currentTimeMillis(),
+    val isTextFile: Boolean = false,
+    val textPreview: String? = null
 ) {
     val safeCategories: List<String>
         get() = categories ?: emptyList()
+
+    fun isTextFileFormat(): Boolean {
+        return isTextFile || (type == MessageType.TEXT && content.startsWith("text_") && content.endsWith(".txt"))
+    }
+
+    fun getDisplayText(): String {
+        if (!isTextFileFormat()) return content
+        return textPreview ?: content
+    }
 }
 
 enum class StorageType {
