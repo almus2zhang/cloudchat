@@ -6653,8 +6653,7 @@ fun GuideDialog(show: Boolean, onDismiss: () -> Unit) {
                 Text("🔲 [拆散]: 将已归档的文件夹或合并消息拆分还原为独立多条", style = MaterialTheme.typography.bodySmall)
                 Text("📖 [日记]: 将选中的消息提取生成静态 HTML 网页日记", style = MaterialTheme.typography.bodySmall)
                 Text("⬇ [下载]: 批量下载选中的图片、视频及文件素材到本地", style = MaterialTheme.typography.bodySmall)
-                Text("🔒 [隐私/隐藏]: 将选中的敏感记录移入暗号隐私空间", style = MaterialTheme.typography.bodySmall)
-                Text("✓ [范围]: 先选起始消息，点“范围”再选终点，自动选中全区间", style = MaterialTheme.typography.bodySmall)
+                                Text("✓ [范围]: 先选起始消息，点“范围”再选终点，自动选中全区间", style = MaterialTheme.typography.bodySmall)
                 Text("🗑 [删除]: 彻底删除选中的聊天记录", style = MaterialTheme.typography.bodySmall)
                 Text("✕ [取消]: 退出当前多选模式", style = MaterialTheme.typography.bodySmall)
 
