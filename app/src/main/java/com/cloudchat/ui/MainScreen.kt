@@ -6660,7 +6660,8 @@ fun CollapsibleTextView(
 
 
 fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
-    return try {
+    // 1. MediaStore Query
+    try {
         val projection = arrayOf(
             android.provider.MediaStore.Images.Media._ID,
             android.provider.MediaStore.Images.Media.DATE_ADDED
@@ -6680,10 +6681,40 @@ fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
                 return android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
             }
         }
-        null
     } catch (e: Exception) {
-        null
+        android.util.Log.w("CloudChat", "MediaStore query failed: ${e.message}")
     }
+
+    // 2. Fallback Direct File System Query (DCIM/Screenshots & Pictures/Screenshots)
+    try {
+        val dirs = listOf(
+            File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), "Screenshots"),
+            File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DCIM), "Screenshots"),
+            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES),
+            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DCIM)
+        )
+        var latestFile: File? = null
+        var maxTime = 0L
+        for (dir in dirs) {
+            if (dir.exists() && dir.isDirectory) {
+                dir.listFiles()?.forEach { file ->
+                    if (file.isFile && (file.extension.equals("jpg", true) || file.extension.equals("png", true) || file.extension.equals("jpeg", true) || file.extension.equals("webp", true))) {
+                        if (file.lastModified() > maxTime) {
+                            maxTime = file.lastModified()
+                            latestFile = file
+                        }
+                    }
+                }
+            }
+        }
+        if (latestFile != null) {
+            return android.net.Uri.fromFile(latestFile)
+        }
+    } catch (e: Exception) {
+        android.util.Log.w("CloudChat", "File system screenshot check failed: ${e.message}")
+    }
+
+    return null
 }
 
 @Composable
@@ -6695,7 +6726,7 @@ fun GuideDialog(show: Boolean, onDismiss: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.HelpOutline, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("CloudChat 使用说明与图标指南", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text("CloudChat 多选工具栏图标说明", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
             }
         },
         text = {
@@ -6703,27 +6734,17 @@ fun GuideDialog(show: Boolean, onDismiss: () -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("多选工具栏图标说明：", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                
-                Text("📁 [打包]: 选中多条消息归档收纳为一个文件夹", style = MaterialTheme.typography.bodySmall)
-                Text("📂 [移入]: 将选中的消息或文件夹移入其他指定文件夹中", style = MaterialTheme.typography.bodySmall)
-                Text("🔳 [合并]: 将多条选中的文本或图片拼接为一条长卡片", style = MaterialTheme.typography.bodySmall)
-                Text("🔲 [拆散]: 将已归档的文件夹或合并消息拆分还原为独立多条", style = MaterialTheme.typography.bodySmall)
-                Text("📖 [日记]: 将选中的消息提取生成静态 HTML 网页日记", style = MaterialTheme.typography.bodySmall)
-                Text("⬇ [下载]: 批量下载选中的图片、视频及文件素材到本地", style = MaterialTheme.typography.bodySmall)
-                                Text("✓ [范围]: 先选起始消息，点“范围”再选终点，自动选中全区间", style = MaterialTheme.typography.bodySmall)
-                Text("🗑 [删除]: 彻底删除选中的聊天记录", style = MaterialTheme.typography.bodySmall)
-                Text("✕ [取消]: 退出当前多选模式", style = MaterialTheme.typography.bodySmall)
-
-                Divider(modifier = Modifier.padding(vertical = 4.dp))
-                Text("📸 Android 截图快捷悬浮发送：", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                Text("在手机上完成截屏或拍照后，点击聊天输入框右侧的【+】号，输入框上方将自动浮现最新截图卡片，支持一键快速发送！", style = MaterialTheme.typography.bodySmall)
-
-                Divider(modifier = Modifier.padding(vertical = 4.dp))
-                Text("⚡ 物理修改时间增量同步：", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                Text("采用 WebDAV PROPFIND XML 解析物理时间比对，未产生新记录时精准拦截，零流量、零卡顿。", style = MaterialTheme.typography.bodySmall)
+                GuideIconItem(icon = Icons.Default.Folder, title = "打包", desc = "选中多条消息归档收纳为一个文件夹")
+                GuideIconItem(icon = Icons.Default.DriveFileMove, title = "移入", desc = "将选中的消息或文件夹移入其他指定文件夹中")
+                GuideIconItem(icon = Icons.Default.GroupWork, title = "合并", desc = "将多条选中的文本或图片拼接为一条长卡片")
+                GuideIconItem(icon = Icons.Default.CallSplit, title = "拆散", desc = "将已归档的文件夹或合并消息拆分还原为独立多条")
+                GuideIconItem(icon = Icons.Default.MenuBook, title = "日记", desc = "将选中的消息提取生成静态 HTML 网页日记")
+                GuideIconItem(icon = Icons.Default.Download, title = "下载", desc = "批量下载选中的图片、视频及文件素材到本地")
+                GuideIconItem(icon = Icons.Default.SelectAll, title = "范围", desc = "先选起始消息，点“范围”再选终点，自动选中全区间")
+                GuideIconItem(icon = Icons.Default.Delete, title = "删除", desc = "彻底删除选中的聊天记录")
+                GuideIconItem(icon = Icons.Default.Close, title = "取消", desc = "退出当前多选模式")
             }
         },
         confirmButton = {
@@ -6732,4 +6753,24 @@ fun GuideDialog(show: Boolean, onDismiss: () -> Unit) {
             }
         }
     )
+}
+
+@Composable
+fun GuideIconItem(icon: ImageVector, title: String, desc: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.size(36.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = title, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(20.dp))
+            }
+        }
+        Spacer(modifier = Modifier.width(10.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            Text(desc, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
