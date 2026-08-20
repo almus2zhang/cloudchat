@@ -1342,7 +1342,14 @@ fun MainScreen(
                     stopAndSendVoice = ::stopAndSendVoice,
                     cancelVoiceRecording = ::cancelVoiceRecording,
                     onPressAndHoldChange = { isPressAndHoldRecording = it },
-                    onCheckRecentScreenshot = { recentImageUri = checkRecentScreenshot(context) }
+                    onCheckRecentScreenshot = {
+                        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                            val uri = checkRecentScreenshot(context)
+                            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                recentImageUri = uri
+                            }
+                        }
+                    }
                 )
             } else {
                 // Selection Toolbar replaces the input bar during multi-select
@@ -4799,11 +4806,12 @@ fun ChatInputBar(
             } else {
                 IconButton(
                     onClick = {
-                        onCheckRecentScreenshot()
-                        onAttachmentPanelVisibleChange(!isAttachmentPanelVisible)
-                        if (!isAttachmentPanelVisible) {
+                        val willOpen = !isAttachmentPanelVisible
+                        onAttachmentPanelVisibleChange(willOpen)
+                        if (willOpen) {
                             keyboardController?.hide()
                             focusManager.clearFocus()
+                            onCheckRecentScreenshot()
                         }
                     },
                     modifier = Modifier.size(40.dp)
