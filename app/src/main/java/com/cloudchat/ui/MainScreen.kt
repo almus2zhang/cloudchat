@@ -1257,32 +1257,39 @@ fun MainScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { recentImageUri = null }
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        contentAlignment = Alignment.Center
+                            .padding(end = 12.dp, bottom = 4.dp),
+                        contentAlignment = Alignment.BottomEnd
                     ) {
                         Card(
                             modifier = Modifier.wrapContentSize(),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                            shape = RoundedCornerShape(16.dp)
+                            shape = RoundedCornerShape(12.dp)
                         ) {
                             Column(
-                                modifier = Modifier.padding(14.dp),
+                                modifier = Modifier
+                                    .width(96.dp)
+                                    .padding(6.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Text(
-                                    text = "你是要发送这张图片吗？",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(bottom = 10.dp)
+                                    text = "你可能想发\n的照片：",
+                                    fontSize = 11.sp,
+                                    lineHeight = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 4.dp)
                                 )
                                 coil.compose.AsyncImage(
                                     model = recentImageUri,
-                                    contentDescription = "发送最新图片",
+                                    contentDescription = "发送最新照片",
                                     modifier = Modifier
-                                        .size(120.dp)
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .size(96.dp)
+                                        .clip(RoundedCornerShape(8.dp))
                                         .clickable {
                                             val targetUri = recentImageUri
                                             recentImageUri = null
