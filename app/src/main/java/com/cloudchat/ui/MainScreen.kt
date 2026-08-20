@@ -6671,6 +6671,15 @@ fun CollapsibleTextView(
 
 
 fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
+    val nowSec = System.currentTimeMillis() / 1000
+    var infoText = ""
+
+    val hasMediaImagesPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    } else {
+        androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
     // 1. MediaStore Query (DATE_ADDED DESC, created within last 2 minutes / 120s)
     try {
         val projection = arrayOf(
@@ -6691,14 +6700,22 @@ fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
                 val dateColumn = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DATE_ADDED)
                 val id = cursor.getLong(idColumn)
                 val dateAdded = cursor.getLong(dateColumn)
-                val nowSec = System.currentTimeMillis() / 1000
-                if (nowSec - dateAdded in 0..120) {
-                    return android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                val diffSec = nowSec - dateAdded
+                infoText = "最新图片距今${diffSec}秒"
+                android.util.Log.d("CloudChatDebug", "MediaStore latest image diffSec=$diffSec, dateAdded=$dateAdded, nowSec=$nowSec")
+
+                if (diffSec in -300..180) {
+                    val uri = android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                    android.widget.Toast.makeText(context, "✅ 找到2分钟内最新截图 (距今 ${diffSec}s)", android.widget.Toast.LENGTH_SHORT).show()
+                    return uri
                 }
+            } else {
+                infoText = "相册无图片"
             }
         }
     } catch (e: Exception) {
-        android.util.Log.w("CloudChat", "MediaStore query failed: ${e.message}")
+        infoText = "相册查询异常: ${e.message}"
+        android.util.Log.e("CloudChatDebug", infoText, e)
     }
 
     // 2. Fallback Direct File System Query (DCIM/Screenshots & Pictures/Screenshots)
@@ -6724,15 +6741,24 @@ fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
             }
         }
         if (latestFile != null) {
-            val ageMs = System.currentTimeMillis() - maxTime
-            if (ageMs in 0..120000) {
+            val diffSec = (System.currentTimeMillis() - maxTime) / 1000
+            android.util.Log.d("CloudChatDebug", "FileSystem latest image: ${latestFile.name}, diffSec=$diffSec")
+            if (diffSec in -300..180) {
+                android.widget.Toast.makeText(context, "✅ 文件搜索找到2分钟内截图 (距今 ${diffSec}s)", android.widget.Toast.LENGTH_SHORT).show()
                 return android.net.Uri.fromFile(latestFile)
+            } else {
+                infoText += " | 物理文件距今${diffSec}s"
             }
         }
     } catch (e: Exception) {
-        android.util.Log.w("CloudChat", "File system screenshot check failed: ${e.message}")
+        android.util.Log.w("CloudChatDebug", "File system check error: ${e.message}")
     }
 
+    if (!hasMediaImagesPermission) {
+        infoText = "⚠️ 请开启读取照片权限 ($infoText)"
+    }
+
+    android.widget.Toast.makeText(context, "🔍 截图诊断: $infoText", android.widget.Toast.LENGTH_LONG).show()
     return null
 }
 
