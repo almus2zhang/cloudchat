@@ -1228,7 +1228,7 @@ fun MainScreen(
                 dragModifier = dragModifier,
                 chatUiItems = chatUiItems,
                 isDiaryTemplate = isDiaryTemplate,
-                diaryDateGroups = diaryDateGroups,
+                                    diaryDateGroups = diaryDateGroups,
                 chatRepository = chatRepository,
                 context = context,
                 currentConfig = currentConfig,
@@ -1252,6 +1252,58 @@ fun MainScreen(
 
 
             if (selectedIds.isEmpty()) {
+                if (recentImageUri != null) {
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                coil.compose.AsyncImage(
+                                    model = recentImageUri,
+                                    contentDescription = "Recent Image Preview",
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .clip(RoundedCornerShape(8.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text("最近截图/新增照片", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                                    Text("点击一键快捷发送", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Button(
+                                    onClick = {
+                                        val uri = recentImageUri
+                                        recentImageUri = null
+                                        if (uri != null) {
+                                            scope.launch {
+                                                chatRepository.sendMessage(uri.toString(), com.cloudchat.model.MessageType.IMAGE, folderId = currentFolderId)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.padding(end = 4.dp)
+                                ) {
+                                    Text("发送")
+                                }
+                                IconButton(onClick = { recentImageUri = null }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Dismiss")
+                                }
+                            }
+                        }
+                    }
+                }
                 ChatInputBar(
                     context = context,
                     chatRepository = chatRepository,
@@ -1559,6 +1611,8 @@ fun MainScreen(
                 }
             }
         )
+
+        GuideDialog(show = showGuideModal, onDismiss = { showGuideModal = false })
 
         QuickActionDialogs(
             showQuickTextDialog = showQuickTextDialog,
