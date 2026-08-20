@@ -1267,19 +1267,30 @@ fun MainScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically, 
+                                modifier = Modifier.weight(1f).clickable {
+                                    val uri = recentImageUri
+                                    recentImageUri = null
+                                    if (uri != null) {
+                                        scope.launch {
+                                            chatRepository.sendMessage(uri.toString(), com.cloudchat.model.MessageType.IMAGE, folderId = currentFolderId)
+                                        }
+                                    }
+                                }
+                            ) {
                                 coil.compose.AsyncImage(
                                     model = recentImageUri,
-                                    contentDescription = "Recent Image Preview",
+                                    contentDescription = "最新图片",
                                     modifier = Modifier
-                                        .size(48.dp)
+                                        .size(52.dp)
                                         .clip(RoundedCornerShape(8.dp)),
                                     contentScale = ContentScale.Crop
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Column {
-                                    Text("最近截图/新增照片", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-                                    Text("点击一键快捷发送", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("你想要发送的图片？", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                    Text("点击缩略图发送", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -6660,13 +6671,13 @@ fun CollapsibleTextView(
 
 
 fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
-    // 1. MediaStore Query
+    // 1. MediaStore Query (DATE_ADDED DESC, created within last 2 minutes / 120s)
     try {
         val projection = arrayOf(
             android.provider.MediaStore.Images.Media._ID,
             android.provider.MediaStore.Images.Media.DATE_ADDED
         )
-        val sortOrder = "${android.provider.MediaStore.Images.Media._ID} DESC"
+        val sortOrder = "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC"
         val query = context.contentResolver.query(
             android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             projection,
@@ -6677,8 +6688,13 @@ fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
         query?.use { cursor ->
             if (cursor.moveToFirst()) {
                 val idColumn = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media._ID)
+                val dateColumn = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DATE_ADDED)
                 val id = cursor.getLong(idColumn)
-                return android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                val dateAdded = cursor.getLong(dateColumn)
+                val nowSec = System.currentTimeMillis() / 1000
+                if (nowSec - dateAdded in 0..120) {
+                    return android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                }
             }
         }
     } catch (e: Exception) {
@@ -6708,7 +6724,10 @@ fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
             }
         }
         if (latestFile != null) {
-            return android.net.Uri.fromFile(latestFile)
+            val ageMs = System.currentTimeMillis() - maxTime
+            if (ageMs in 0..120000) {
+                return android.net.Uri.fromFile(latestFile)
+            }
         }
     } catch (e: Exception) {
         android.util.Log.w("CloudChat", "File system screenshot check failed: ${e.message}")
