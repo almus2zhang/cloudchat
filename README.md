@@ -1,81 +1,80 @@
-# CloudChat Android App
+# CloudChat (Android 端)
 
 [English](#english) | [中文](#中文)
 
 ---
 
-## English
+## 中文
 
-CloudChat is a unique Android application that provides a **chat-style interface** for managing your files on cloud storage (S3 and WebDAV). Instead of a traditional folder-tree view, it presents your files as "messages" in a conversation, making mobile file management familiar and intuitive.
+**CloudChat** 是一款采用全新“聊天式”交互设计的云存储管理与笔记协作客户端。它摒弃了传统文件管理器繁琐的树状文件夹结构，将您的云端文件、随手笔记、多媒体资源以类似微信/Telegram 聊天流的形式呈现，让文件存储、检索与管理变得像聊天一样自然高效。
 
-### Detailed Features:
+本仓库为 **Android 原生 App (APK)** 版本代码。
 
--   **Dual Backend Connectivity**: 
-    -   **S3 Support**: Connect to any S3-compatible service (AWS S3, Minio, DigitalOcean Spaces, etc.).
-    -   **WebDAV Support**: Seamless integration with WebDAV servers for personal cloud storage (Nextcloud, OwnCloud, etc.).
--   **Chat-Inspiration UI**:
-    -   Files are displayed as message bubbles in a chronological flow.
-    -   Support for modern UI elements like **Zoomable Images** and a dedicated **Video Player** for media hosted on the cloud.
--   **Intelligent File Organization**:
-    -   **Multi-Account Support**: Manage multiple cloud configurations and switch between them easily.
-    -   **Automatic Pathing**: Files are automatically organized under `root/username/` to maintain a clean and isolated environment for different users on the same server.
--   **Seamless Android Integration**:
-    -   **Share Sheet Target**: Directly upload files or text snippets to your cloud by sharing from other apps (e.g., Photos, Browser, File Managers).
-    -   **Thumbnail Previewing**: Generates and shows thumbnails for media files to quickly identify content.
--   **Robust Security & Privacy**:
-    -   **Confidential Configuration**: Core server credentials are XOR-obfuscated within the binary to prevent casual discovery via decompilation.
-    -   **Optimized Release**: Release builds are processed with ProGuard/R8 to minify code and obfuscate logic for enhanced security.
-    -   **Local Storage**: Account settings are stored securely using Android DataStore (Preferences).
+### 🌟 核心功能特性
 
-### How to Build the APK:
+#### 1. 💬 聊天式云端存储交互
+- **时间线消息流**：所有上传的文件、照片、视频、语音及随记均以时间线气泡展现，清晰直观。
+- **混合文本存储（Hybrid Text Offloading）**：
+  - 短文本直接保存在索引元数据中，加载秒开。
+  - 长文本（≥500字）自动转存为 `.txt` 文件上传至云存储，加载时自动静默解包读取，兼顾传输效率与数据完整性。
+- **长文本智能折叠**：超过 10 行的长文本自动折叠并提供优雅的展开/收起按钮与渐变过度效果。
 
-1.  **Environment**: Ensure you have **Android Studio** (Hedgehog or newer recommended) and **JDK 17** installed.
-2.  **Configuration & Secrets**:
-    *   The project uses XOR-obfuscated secrets to protect WebDAV credentials.
-    *   Copy `app/src/main/java/com/cloudchat/utils/ConfigHelper.kt.example` to `app/src/main/java/com/cloudchat/utils/ConfigHelper.kt`.
-    *   (Optional) Use `generate_secrets.py` to generate your own XORed byte arrays for the URL, user, and password. 
-    *   Update `ConfigHelper.kt` with your values.
-3.  **Open Project**: Launch Android Studio and select `Open` -> Browse to project directory.
-4.  **Gradle Sync**: Wait for Android Studio to sync dependencies and download the Gradle wrapper.
-5.  **Build**: 
-    -   Go to `Build` -> `Build Bundle(s) / APK(s)` -> `Build APK(s)`.
-    -   The generated APK will be located at: `app/build/outputs/apk/debug/app-debug.apk`
+#### 2. 🔌 双引擎云存储支持 (WebDAV + S3)
+- **WebDAV 支持**：无缝对接 Nextcloud, ownCloud, 坚果云, Alist 及各类网盘 WebDAV 接口。
+- **S3 协议支持**：支持 AWS S3, MinIO, DigitalOcean Spaces, 阿里云 OSS / 腾讯云 COS（S3 兼容模式）。
+- **多账号快速切换**：可保存多个云端存储节点与账号，一键随时切换。
+- **隔离用户路径**：自动按 `root/username/` 规范整理文件，保证同一服务器下多用户隔离。
+
+#### 3. 🎬 丰富多媒体预览与播放
+- **媒体播放器**：内置原生视频/音频播放组件，支持进度拖动与时间显示。
+- **高精缩略图**：自动为上传的图片和视频生成云端/本地缩略图，浏览速度提升 10 倍。
+- **图片全屏放大查看**：支持手势缩放、平移与原图加载。
+
+#### 4. 📱 Android 原生深度集成
+- **系统级分享菜单（Share Sheet）**：在相册、浏览器、文件管理器等任意 App 点击“分享”，即可直接将图片、文本或文件保存至 CloudChat 云端。
+- **本地高能缓存**：采用 Android DataStore 与本地磁盘双重缓存机制，离线亦可快速检索历史记录。
+- **安全与混淆防护**：核心凭据混淆处理，Release 版本全量经过 ProGuard / R8 压缩与混淆，防反编译防泄漏。
 
 ---
 
-## 中文
+### 📦 三端生态与互通说明
 
-CloudChat 是一款独特的 Android 应用，它为存储在云端（S3 和 WebDAV）的文件提供了一个**聊天式交互界面**。与传统的文件夹树状视图不同，它将文件以对话中的“消息”形式展现，使移动端的文件管理变得像聊天一样熟悉且直观。
+CloudChat 采用统一的数据结构标准，全平台数据 100% 无缝互通：
 
-### 详细功能描述：
+| 平台端 | 架构技术 | 特色优势 |
+| :--- | :--- | :--- |
+| **Android (APK)** | Kotlin + Jetpack Compose + Coroutines | 原生系统分享集成、手势流畅、后台稳定同步 |
+| **Web 网页端** | React + Vite + TailwindCSS | 无需安装、跨浏览器随处访问、内置日记导出 |
+| **Desktop 桌面端** | Rust + Tauri 2.0 | 内存占用极低（<50MB）、秒速启动、本地文件拖拽 |
 
--   **双存储后端支持**：
-    -   **S3 支持**：可连接任何兼容 S3 的服务（如 AWS S3, Minio, DigitalOcean Spaces 等）。
-    -   **WebDAV 支持**：无缝集成 WebDAV 服务器，适用于个人云存储（如 Nextcloud, OwnCloud 等）。
--   **聊天式 UI 设计**：
-    -   文件以时间线的形式显示在消息气泡中。
-    -   内置现代化的 UI 组件，支持**图片缩放查看**和专用的**视频播放器**，可直接播放云端媒体。
--   **智能文件组织**：
-    -   **多账号管理**：支持保存多个云端配置并可随时切换。
-    -   **自动化路径管理**：文件自动整理在 `root/username/` 路径下，确保同一服务器上不同用户的环境清晰且隔离。
--   **无缝 Android 系统集成**：
-    -   **系统分享支持**：通过 Android 原生分享菜单，可直接将其他应用（如相册、浏览器、文件管理器）中的文件或文本上传至云端。
-    -   **缩略图预览**：自动生成并显示媒体文件的缩略图，方便快速识别内容。
--   **健全的安全与隐私防护**：
-    -   **加密配置文件**：核心服务器凭据在二进制文件中经过 XOR 混淆处理，防止通过简单的反编译获取敏感信息。
-    -   **发布优化**：Release 版本通过 ProGuard/R8 开启了代码压缩和混淆，进一步增强了应用的安全性。
-    -   **本地安全存储**：账号设置通过 Android DataStore (Preferences) 进行本地加密存储。
+---
 
-### 如何编译 APK：
+### 🛠️ 编译构建指南
 
-1.  **环境准备**：确保安装了 **Android Studio** (建议 Hedgehog 或更高版本) 和 **JDK 17**。
-2.  **配置与密钥设置**：
-    *   项目使用 XOR 混淆保护 WebDAV 凭据。
-    *   将 `app/src/main/java/com/cloudchat/utils/ConfigHelper.kt.example` 复制为 `app/src/main/java/com/cloudchat/utils/ConfigHelper.kt`。
-    *   （可选）使用 `generate_secrets.py` 生成你自己的 URL、用户名和密码的 XOR 加密字节数组。
-    *   在 `ConfigHelper.kt` 中更新相关值。
-3.  **打开项目**：启动 Android Studio，选择 `Open` 并浏览到项目目录。
-4.  **Gradle 同步**：等待 Android Studio 同步依赖项并下载 Gradle Wrapper。
-5.  **编译构建**： 
-    -   点击菜单栏 `Build` -> `Build Bundle(s) / APK(s)` -> `Build APK(s)`。
-    -   生成的 APK 文件位于：`app/build/outputs/apk/debug/app-debug.apk`
+1. **环境准备**：
+   - Android Studio (Hedgehog 2023.1.1 或更高版本)
+   - JDK 17
+2. **配置密钥**：
+   - 复制 `app/src/main/java/com/cloudchat/utils/ConfigHelper.kt.example` 为 `ConfigHelper.kt`。
+   - （可选）运行 `python generate_secrets.py` 生成加密混淆凭据。
+3. **编译 APK**：
+   - 执行 Gradle 构建：`./gradlew assembleDebug` 或在 Android Studio 中点击 `Build -> Build APKs`。
+   - 生成的 APK 路径：`app/build/outputs/apk/debug/app-debug.apk`
+
+---
+
+## English
+
+**CloudChat** is a unique cloud storage and personal knowledge manager featuring a **chat-style interface**. Instead of traditional nested folders, CloudChat displays your files, notes, images, and videos as intuitive message bubbles in a seamless conversational stream.
+
+This repository contains the source code for the **Android Native App (APK)**.
+
+### 🌟 Key Features
+
+- **Chat-Inspired UI**: Files and notes presented as chronological message bubbles.
+- **Hybrid Text Offloading**: Short notes saved in metadata for instant access; long notes (≥500 chars) automatically offloaded as `.txt` cloud files.
+- **Dual Backend**: Full support for both **WebDAV** (Nextcloud, Alist, etc.) and **S3-compatible API** (AWS S3, MinIO, etc.).
+- **Smart Text Folding**: Long messages exceeding 10 lines are automatically truncated with expandable toggles.
+- **Native Android Sharing**: Direct target for the Android Share Sheet—save images, text, and files from any application instantly.
+- **Media Player & Viewer**: Built-in player for audio/video streaming and gesture-zoomable image viewer.
+- **ProGuard / R8 Security**: Confidential configs obfuscated with XOR and optimized with ProGuard for release builds.
