@@ -27,6 +27,7 @@ import com.cloudchat.model.StorageType
 import com.cloudchat.repository.SettingsRepository
 import com.cloudchat.storage.S3StorageProvider
 import com.cloudchat.storage.WebDavStorageProvider
+import com.cloudchat.utils.DebugLogger
 import kotlinx.coroutines.launch
 
 import android.net.Uri
@@ -215,6 +216,32 @@ fun SettingsScreen(onBack: () -> Unit) {
                     Icon(Icons.Default.Add, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Add New Account")
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                var debugLogEnabled by remember { mutableStateOf(DebugLogger.isEnabled) }
+
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("调试日志写入 (Debug Log File)", style = MaterialTheme.typography.titleMedium)
+                            Text("关闭后停止向 debug_log.txt 写入文件与调试日志", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(
+                            checked = debugLogEnabled,
+                            onCheckedChange = {
+                                debugLogEnabled = it
+                                DebugLogger.setLogEnabled(it)
+                            }
+                        )
+                    }
                 }
 
                 }

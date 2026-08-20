@@ -15,12 +15,20 @@ object DebugLogger {
     private const val MAX_LOG_SIZE = 2 * 1024 * 1024L // 2MB
 
     private var activeLogFile: File? = null
+    private var prefsContext: Context? = null
+
+    @Volatile
+    var isEnabled: Boolean = true
 
     private val _logLines = MutableStateFlow<List<String>>(emptyList())
     val logLines: StateFlow<List<String>> = _logLines.asStateFlow()
 
     fun init(context: Context) {
         try {
+            prefsContext = context.applicationContext
+            val sp = prefsContext?.getSharedPreferences("debug_prefs", Context.MODE_PRIVATE)
+            isEnabled = sp?.getBoolean("debug_log_enabled", true) ?: true
+
             val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
             val dir = File(baseDir, "debug_logs")
             if (!dir.exists()) {
@@ -28,7 +36,7 @@ object DebugLogger {
             }
             activeLogFile = File(dir, "debug_log.txt")
 
-            if (activeLogFile?.exists() == true) {
+            if (activeLogFile?.exists() == true && isEnabled) {
                 try {
                     val lines = activeLogFile!!.readLines().takeLast(200)
                     _logLines.value = lines
@@ -36,15 +44,31 @@ object DebugLogger {
                     Log.w(TAG, "Failed to read initial log lines", e)
                 }
             }
-            log("System", "=== CloudChat DebugLogger Initialized ===")
-            log("System", "Log File: ${activeLogFile?.absolutePath}")
+            log("System", "=== CloudChat DebugLogger Initialized (Enabled: $isEnabled) ===")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize DebugLogger", e)
         }
     }
 
+    fun setLogEnabled(enabled: Boolean) {
+        isEnabled = enabled
+        try {
+            prefsContext?.getSharedPreferences("debug_prefs", Context.MODE_PRIVATE)
+                ?.edit()
+                ?.putBoolean("debug_log_enabled", enabled)
+                ?.apply()
+        } catch (e: Exception) {}
+        if (!enabled) {
+            _logLines.value = emptyList()
+        } else {
+            log("System", "=== DebugLogger Enabled ===")
+        }
+    }
+
     @Synchronized
     fun log(tag: String, message: String) {
+        if (!isEnabled) return
+
         val timeStr = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
         val logLine = "[$timeStr] [$tag] $message"
 
@@ -76,6 +100,7 @@ object DebugLogger {
 
     fun getLogFileText(): String {
         return try {
+            if (!isEnabled) return "调试日志已禁用"
             activeLogFile?.readText() ?: ""
         } catch (e: Exception) {
             "Error reading log file: ${e.message}"
@@ -87,7 +112,9 @@ object DebugLogger {
         try {
             activeLogFile?.delete()
             activeLogFile?.createNewFile()
-            log("System", "=== Log Cleared ===")
+            if (isEnabled) {
+                log("System", "=== Log Cleared ===")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to clear log file", e)
         }
