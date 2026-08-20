@@ -6600,7 +6600,7 @@ fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
             android.provider.MediaStore.Images.Media._ID,
             android.provider.MediaStore.Images.Media.DATE_ADDED
         )
-        val sortOrder = "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC"
+        val sortOrder = "${android.provider.MediaStore.Images.Media._ID} DESC"
         val query = context.contentResolver.query(
             android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             projection,
@@ -6611,13 +6611,8 @@ fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
         query?.use { cursor ->
             if (cursor.moveToFirst()) {
                 val idColumn = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media._ID)
-                val dateColumn = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DATE_ADDED)
                 val id = cursor.getLong(idColumn)
-                val dateAdded = cursor.getLong(dateColumn)
-                val nowSec = System.currentTimeMillis() / 1000
-                if (nowSec - dateAdded < 180) { // added in last 3 minutes
-                    return android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                }
+                return android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
             }
         }
         null
