@@ -2518,15 +2518,12 @@ fun DiaryBubble(
                             value = chatRepository.resolveTextContent(message)
                         }
                     }
-                    SelectionContainer {
-                        Text(
-                            text = resolvedTextState.value,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFF222222),
-                            fontSize = 15.sp,
-                            textAlign = TextAlign.Start
-                        )
-                    }
+                    CollapsibleTextView(
+                        text = resolvedTextState.value,
+                        color = Color(0xFF222222),
+                        fontSize = 15.sp,
+                        isOutgoing = false
+                    )
                     if (!message.locationAddress.isNullOrBlank()) {
                         Text(text = message.locationAddress, style = MaterialTheme.typography.labelSmall, color = Color.Gray, modifier = Modifier.padding(top = 2.dp), textAlign = TextAlign.Start)
                     }
@@ -2857,14 +2854,13 @@ fun ChatBubble(
                         shape = MaterialTheme.shapes.medium,
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp)
                     ) {
-                        SelectionContainer {
-                            Text(
-                                text = resolvedTextState.value,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                color = contentColor,
-                                fontSize = 16.sp
-                            )
-                        }
+                        CollapsibleTextView(
+                            text = resolvedTextState.value,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            color = contentColor,
+                            fontSize = 16.sp,
+                            isOutgoing = true
+                        )
                     }
                 }
                 MessageType.IMAGE -> {
@@ -4030,15 +4026,13 @@ fun ImageGroupBubble(
                                                 value = chatRepository.resolveTextContent(message)
                                             }
                                         }
-                                        androidx.compose.foundation.text.selection.SelectionContainer {
-                                            Text(
-                                                text = resolvedTextState.value,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = Color(0xFF222222),
-                                                fontSize = 14.5.sp,
-                                                lineHeight = 20.sp
-                                            )
-                                        }
+                                        CollapsibleTextView(
+                                            text = resolvedTextState.value,
+                                            color = Color(0xFF222222),
+                                            fontSize = 14.5.sp,
+                                            lineHeight = 20.sp,
+                                            isOutgoing = false
+                                        )
                                         if (!message.locationAddress.isNullOrBlank()) {
                                             Text(
                                                 text = message.locationAddress,
@@ -6540,6 +6534,52 @@ fun DiaryGenerateDialog(
                 TextButton(onClick = { showCoverPicker = false }) { Text("取消") }
             }
         )
+    }
+}
+
+@Composable
+fun CollapsibleTextView(
+    text: String,
+    modifier: Modifier = Modifier,
+    color: Color = Color(0xFF222222),
+    fontSize: androidx.compose.ui.unit.TextUnit = 15.sp,
+    lineHeight: androidx.compose.ui.unit.TextUnit = androidx.compose.ui.unit.TextUnit.Unspecified,
+    isOutgoing: Boolean = false
+) {
+    val lineCount = remember(text) { text.count { it == '\n' } + 1 }
+    var isExpanded by remember(text) { mutableStateOf(false) }
+    var isOverflowing by remember(text) { mutableStateOf(false) }
+    val showToggle = isExpanded || isOverflowing || lineCount >= 10 || text.length >= 400
+
+    Column(modifier = modifier) {
+        androidx.compose.foundation.text.selection.SelectionContainer {
+            Text(
+                text = text,
+                maxLines = if (isExpanded) Int.MAX_VALUE else 10,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                onTextLayout = { layoutResult ->
+                    if (!isExpanded && (layoutResult.hasVisualOverflow || layoutResult.lineCount >= 10)) {
+                        isOverflowing = true
+                    }
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = color,
+                fontSize = fontSize,
+                lineHeight = lineHeight,
+                textAlign = TextAlign.Start
+            )
+        }
+        if (showToggle) {
+            Text(
+                text = if (isExpanded) "收起" else "展开全文",
+                color = if (isOutgoing) Color.White.copy(alpha = 0.9f) else Color(0xFF007AFF),
+                fontSize = 12.5.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(top = 4.dp, bottom = 2.dp)
+            )
+        }
     }
 }
 
