@@ -1253,64 +1253,53 @@ fun MainScreen(
 
             if (selectedIds.isEmpty()) {
                 if (recentImageUri != null) {
-                    Card(
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+                            .clickable { recentImageUri = null }
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                        Card(
+                            modifier = Modifier.wrapContentSize(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+                            shape = RoundedCornerShape(16.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically, 
-                                modifier = Modifier.weight(1f).clickable {
-                                    val uri = recentImageUri
-                                    recentImageUri = null
-                                    if (uri != null) {
-                                        scope.launch {
-                                            chatRepository.sendMessage(uri.toString(), com.cloudchat.model.MessageType.IMAGE, folderId = currentFolderId)
-                                        }
-                                    }
-                                }
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
                             ) {
+                                Text(
+                                    text = "你是要发送这张图片吗？",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(bottom = 10.dp)
+                                )
                                 coil.compose.AsyncImage(
                                     model = recentImageUri,
-                                    contentDescription = "最新图片",
+                                    contentDescription = "发送最新图片",
                                     modifier = Modifier
-                                        .size(52.dp)
-                                        .clip(RoundedCornerShape(8.dp)),
+                                        .size(120.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable {
+                                            val targetUri = recentImageUri
+                                            recentImageUri = null
+                                            if (targetUri != null) {
+                                                sendRecentImage(
+                                                    context = context,
+                                                    chatRepository = chatRepository,
+                                                    scope = scope,
+                                                    uri = targetUri,
+                                                    currentFolderId = currentFolderId,
+                                                    attachLocationEnabled = attachLocationEnabled,
+                                                    deleteSourceAfterSend = deleteSourceAfterSend
+                                                )
+                                            }
+                                        },
                                     contentScale = ContentScale.Crop
                                 )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text("你想要发送的图片？", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
-                                    Text("点击缩略图发送", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Button(
-                                    onClick = {
-                                        val uri = recentImageUri
-                                        recentImageUri = null
-                                        if (uri != null) {
-                                            scope.launch {
-                                                chatRepository.sendMessage(uri.toString(), com.cloudchat.model.MessageType.IMAGE, folderId = currentFolderId)
-                                            }
-                                        }
-                                    },
-                                    modifier = Modifier.padding(end = 4.dp)
-                                ) {
-                                    Text("发送")
-                                }
-                                IconButton(onClick = { recentImageUri = null }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Dismiss")
-                                }
                             }
                         }
                     }
@@ -6671,17 +6660,45 @@ fun CollapsibleTextView(
 }
 
 
+fun sendRecentImage(
+    context: android.content.Context,
+    chatRepository: ChatRepository,
+    scope: kotlinx.coroutines.CoroutineScope,
+    uri: android.net.Uri,
+    currentFolderId: String?,
+    attachLocationEnabled: Boolean,
+    deleteSourceAfterSend: Boolean
+) {
+    scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val name = "image_${System.currentTimeMillis()}.jpg"
+            val stream = context.contentResolver.openInputStream(uri)
+            if (stream != null) {
+                stream.use { inputStream ->
+                    chatRepository.sendMessage(
+                        content = name,
+                        type = com.cloudchat.model.MessageType.IMAGE,
+                        inputStream = inputStream,
+                        fileName = name,
+                        localUri = uri.toString(),
+                        locationAddress = if (attachLocationEnabled) fetchAddressQuickly(context) else null,
+                        folderId = currentFolderId,
+                        deleteSourceFile = deleteSourceAfterSend
+                    )
+                }
+            } else {
+                android.util.Log.e("MainScreen", "Could not open inputStream for recent image: $uri")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainScreen", "Failed to send recent image", e)
+        }
+    }
+}
+
 fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
     val nowSec = System.currentTimeMillis() / 1000
-    var infoText = ""
 
-    val hasMediaImagesPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-        androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_MEDIA_IMAGES) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    } else {
-        androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    }
-
-    // 1. MediaStore Query (DATE_ADDED DESC, created within last 2 minutes / 120s)
+    // 1. MediaStore Query (DATE_ADDED DESC, created within last 30s)
     try {
         val projection = arrayOf(
             android.provider.MediaStore.Images.Media._ID,
@@ -6702,21 +6719,14 @@ fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
                 val id = cursor.getLong(idColumn)
                 val dateAdded = cursor.getLong(dateColumn)
                 val diffSec = nowSec - dateAdded
-                infoText = "最新图片距今${diffSec}秒"
-                android.util.Log.d("CloudChatDebug", "MediaStore latest image diffSec=$diffSec, dateAdded=$dateAdded, nowSec=$nowSec")
 
-                if (diffSec in -300..180) {
-                    val uri = android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
-                    android.widget.Toast.makeText(context, "✅ 找到2分钟内最新截图 (距今 ${diffSec}s)", android.widget.Toast.LENGTH_SHORT).show()
-                    return uri
+                if (diffSec in -60..30) {
+                    return android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                 }
-            } else {
-                infoText = "相册无图片"
             }
         }
     } catch (e: Exception) {
-        infoText = "相册查询异常: ${e.message}"
-        android.util.Log.e("CloudChatDebug", infoText, e)
+        android.util.Log.w("CloudChat", "MediaStore query failed: ${e.message}")
     }
 
     // 2. Fallback Direct File System Query (DCIM/Screenshots & Pictures/Screenshots)
@@ -6743,23 +6753,14 @@ fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
         }
         if (latestFile != null) {
             val diffSec = (System.currentTimeMillis() - maxTime) / 1000
-            android.util.Log.d("CloudChatDebug", "FileSystem latest image: ${latestFile.name}, diffSec=$diffSec")
-            if (diffSec in -300..180) {
-                android.widget.Toast.makeText(context, "✅ 文件搜索找到2分钟内截图 (距今 ${diffSec}s)", android.widget.Toast.LENGTH_SHORT).show()
+            if (diffSec in -60..30) {
                 return android.net.Uri.fromFile(latestFile)
-            } else {
-                infoText += " | 物理文件距今${diffSec}s"
             }
         }
     } catch (e: Exception) {
-        android.util.Log.w("CloudChatDebug", "File system check error: ${e.message}")
+        android.util.Log.w("CloudChat", "File system check error: ${e.message}")
     }
 
-    if (!hasMediaImagesPermission) {
-        infoText = "⚠️ 请开启读取照片权限 ($infoText)"
-    }
-
-    android.widget.Toast.makeText(context, "🔍 截图诊断: $infoText", android.widget.Toast.LENGTH_LONG).show()
     return null
 }
 
