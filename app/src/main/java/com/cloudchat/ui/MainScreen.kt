@@ -1345,7 +1345,8 @@ fun MainScreen(
                     startVoiceRecording = ::startVoiceRecording,
                     stopAndSendVoice = ::stopAndSendVoice,
                     cancelVoiceRecording = ::cancelVoiceRecording,
-                    onPressAndHoldChange = { isPressAndHoldRecording = it }
+                    onPressAndHoldChange = { isPressAndHoldRecording = it },
+                    onCheckRecentScreenshot = { recentImageUri = checkRecentScreenshot(context) }
                 )
             } else {
                 // Selection Toolbar replaces the input bar during multi-select
