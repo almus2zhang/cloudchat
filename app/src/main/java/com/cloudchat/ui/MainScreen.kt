@@ -6546,10 +6546,11 @@ fun CollapsibleTextView(
     lineHeight: androidx.compose.ui.unit.TextUnit = androidx.compose.ui.unit.TextUnit.Unspecified,
     isOutgoing: Boolean = false
 ) {
-    val lineCount = remember(text) { text.count { it == '\n' } + 1 }
+    val lineCount = remember(text) { text.split("\n").size }
+    val estimatedLines = remember(text) { text.length / 25 }
     var isExpanded by remember(text) { mutableStateOf(false) }
     var isOverflowing by remember(text) { mutableStateOf(false) }
-    val showToggle = isExpanded || isOverflowing || lineCount >= 10 || text.length >= 400
+    val showToggle = lineCount >= 10 || estimatedLines >= 10 || text.length >= 250 || isOverflowing || isExpanded
 
     Column(modifier = modifier) {
         androidx.compose.foundation.text.selection.SelectionContainer {
@@ -6570,15 +6571,18 @@ fun CollapsibleTextView(
             )
         }
         if (showToggle) {
-            Text(
-                text = if (isExpanded) "收起" else "展开全文",
-                color = if (isOutgoing) Color.White.copy(alpha = 0.9f) else Color(0xFF007AFF),
-                fontSize = 12.5.sp,
-                fontWeight = FontWeight.Bold,
+            Box(
                 modifier = Modifier
-                    .clickable { isExpanded = !isExpanded }
                     .padding(top = 4.dp, bottom = 2.dp)
-            )
+                    .clickable { isExpanded = !isExpanded }
+            ) {
+                Text(
+                    text = if (isExpanded) "▲ 收起" else "▼ 展开全文",
+                    color = if (isOutgoing) Color(0xFFFFD54F) else Color(0xFF007AFF),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
