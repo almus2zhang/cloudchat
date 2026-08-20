@@ -782,6 +782,7 @@ class ChatRepository(private val context: Context) {
         startSyncLoop()
     }
 
+    @Volatile private var lastKnownCloudIndexTime: Long = 0L
     private val isRefreshingFromCloud = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private fun startSyncLoop() {
@@ -1811,11 +1812,9 @@ class ChatRepository(private val context: Context) {
         conflictSuppressed.set(false)
     }
 
-    suspend fun refreshHistoryFromCloud() = withContext(Dispatchers.IO) {
-        DebugLogger.log("Sync", "=== 开始 Android 云端历史记录比对刷新 ===")
+    suspend fun refreshHistoryFromCloud(force: Boolean = false) = withContext(Dispatchers.IO) {
+        DebugLogger.log("Sync", "=== 开始 Android 云端历史记录比对刷新 (force=$force) ===")
         if (!isRefreshingFromCloud.compareAndSet(false, true)) return@withContext
-        // 有正在上传的任务时跳过本次刷新，避免「拉取」与「推送」竞态，
-        // 否则会把刚发送成功、尚未上传完的消息覆盖删除。等上传完成后再刷新。
         if (activeUploadJobs.isNotEmpty() || historySyncRequested.get()) {
             isRefreshingFromCloud.set(false)
             return@withContext
@@ -1824,6 +1823,17 @@ class ChatRepository(private val context: Context) {
         val provider = storageProvider ?: run { _isSyncing.value = false; isRefreshingFromCloud.set(false); return@withContext }
         val config = currentConfig ?: run { isRefreshingFromCloud.set(false); return@withContext }
         try {
+            DebugLogger.log("Sync", "[Sync] 获取 chat_index.json 修改时间...")
+            val cloudIndexTime = provider.getLastModified("chat_index.json")
+            DebugLogger.log("Sync", "[Sync] chat_index.json 修改时间结果: $cloudIndexTime (lastKnown: $lastKnownCloudIndexTime)")
+
+            if (!force && cloudIndexTime > 0 && lastKnownCloudIndexTime > 0 && cloudIndexTime <= lastKnownCloudIndexTime) {
+                DebugLogger.log("Sync", "[Sync] 云端索引无变化")
+                _isServerConnected.value = true
+                return@withContext
+            }
+
+            DebugLogger.log("Sync", "[Sync] 正在下载并解析 chat_index.json...")
             var indexJson = provider.downloadText("chat_index.json")
             if (indexJson == null) {
                 // Migration: Check if chat_history.json exists
@@ -1831,7 +1841,6 @@ class ChatRepository(private val context: Context) {
                 if (oldJson != null) {
                     val rawCloudHistory: List<ChatMessage> = try { gson.fromJson(oldJson, object : TypeToken<List<ChatMessage>>() {}.type) } catch(e:Exception){emptyList()}
                     val cloudHistory = rawCloudHistory.mapNotNull { sanitizeMessage(it) }
-                    // Shard it
                     val shards = cloudHistory.groupBy { getMonthShardName(it.timestamp) }
                     shards.forEach { (shardName, msgs) ->
                         provider.uploadText(gson.toJson(msgs.sortedBy{it.timestamp}), shardName)
@@ -1840,7 +1849,6 @@ class ChatRepository(private val context: Context) {
                     try { provider.recycleFile("chat_history.json") } catch (e: Exception) {}
                     indexJson = gson.toJson(shards.keys.toList())
                 } else {
-                    // 服务器没有任何 history 文件
                     _isServerConnected.value = true
                     _isSyncing.value = false
                     isRefreshingFromCloud.set(false)
@@ -1880,6 +1888,7 @@ class ChatRepository(private val context: Context) {
             val allCloudMsgs = mutableListOf<ChatMessage>()
             
             shardNames.forEach { shard ->
+                DebugLogger.log("Sync", "[Sync] 正在下载分片: $shard")
                 val json = provider.downloadText(shard)
                 if (json != null) {
                     val raw: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
@@ -1891,13 +1900,7 @@ class ChatRepository(private val context: Context) {
             
             val cloudIds = allCloudMsgs.map { it.id }.toSet()
 
-            // 服务器 index 文件存在：云端是唯一真相
-            // - shard 有数据：合并云端 + 本地 pending
-            // - shard 全为空（服务器被清空）：保留本地 pending，清空已成功的
             _messages.update { current ->
-                // 保留「本地有、云端没有」的消息：
-                // 1) 非 SUCCESS（pending/failed，本地待处理）
-                // 2) SUCCESS 但云端还没有（刚发成功、history 尚未上传完成），避免被旧云端数据覆盖删除
                 val localOnly = current.filter { it.id !in cloudIds }
                 if (allCloudMsgs.isNotEmpty()) {
                     val merged = allCloudMsgs.map { cloudMsg ->
@@ -1905,7 +1908,6 @@ class ChatRepository(private val context: Context) {
                     } + localOnly
                     merged.sortedBy { it.timestamp }
                 } else {
-                    // 云端 index 存在但 shard 全为空 → 服务器记录被清空，通知用户选择
                     Log.w("ChatRepository", "Cloud index exists but all shards empty")
                     isRefreshingFromCloud.set(false)
                     if (!conflictSuppressed.get()) {
@@ -1920,11 +1922,16 @@ class ChatRepository(private val context: Context) {
                 }
             }
 
+            if (cloudIndexTime > 0) {
+                lastKnownCloudIndexTime = cloudIndexTime
+            }
+
             saveLocalHistory(config.id)
             _isServerConnected.value = true
-            // 服务器已恢复正常，重置冲突忽略标志，后续如再次为空会重新提示
             conflictSuppressed.set(false)
+            DebugLogger.log("Sync", "[Sync] 云端数据比对完成，当前内存有效消息数: ${_messages.value.size}")
         } catch (e: Exception) {
+            DebugLogger.log("Sync", "[Sync] 刷新失败: ${e.message}")
             Log.e("ChatRepository", "Cloud refresh failed", e)
             _isServerConnected.value = provider.isReachable()
         } finally {
