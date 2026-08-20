@@ -161,6 +161,8 @@ fun MainScreen(
     val appMode by settingsRepository.appMode.collectAsState(initial = com.cloudchat.model.AppMode.NOT_SET)
     val isSecurityAuthenticated by chatRepository.isSecurityAuthenticated.collectAsState()
     var showSecurityOverlay by remember { mutableStateOf(false) }
+    var showGuideModal by remember { mutableStateOf(false) }
+    var recentImageUri by remember { mutableStateOf<android.net.Uri?>(null) }
 
     // --- Dialog and Action States ---
     var showDeleteMessagesConfirmDialog by remember { mutableStateOf(false) }
@@ -392,6 +394,8 @@ fun MainScreen(
             setTopBarTitle(if (activeCategory == "diary") "日记" else "CloudChat")
             setTopBarTitleComposable {
                 var showTitleDropdown by remember { mutableStateOf(false) }
+    var showGuideModal by remember { mutableStateOf(false) }
+    var recentImageUri by remember { mutableStateOf<android.net.Uri?>(null) }
                 Box {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -4547,7 +4551,8 @@ fun ChatInputBar(
     startVoiceRecording: () -> Unit,
     stopAndSendVoice: () -> Unit,
     cancelVoiceRecording: () -> Unit,
-    onPressAndHoldChange: (Boolean) -> Unit = {}
+    onPressAndHoldChange: (Boolean) -> Unit = {},
+    onCheckRecentScreenshot: () -> Unit = {}
 ) {
     Column(modifier = Modifier.navigationBarsPadding().background(MaterialTheme.colorScheme.surface)) {
         Row(
@@ -4721,6 +4726,7 @@ fun ChatInputBar(
             } else {
                 IconButton(
                     onClick = {
+                        onCheckRecentScreenshot()
                         onAttachmentPanelVisibleChange(!isAttachmentPanelVisible)
                         if (!isAttachmentPanelVisible) {
                             keyboardController?.hide()
@@ -6587,3 +6593,84 @@ fun CollapsibleTextView(
     }
 }
 
+
+fun checkRecentScreenshot(context: android.content.Context): android.net.Uri? {
+    return try {
+        val projection = arrayOf(
+            android.provider.MediaStore.Images.Media._ID,
+            android.provider.MediaStore.Images.Media.DATE_ADDED
+        )
+        val sortOrder = "${android.provider.MediaStore.Images.Media.DATE_ADDED} DESC"
+        val query = context.contentResolver.query(
+            android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            null,
+            null,
+            sortOrder
+        )
+        query?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val idColumn = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media._ID)
+                val dateColumn = cursor.getColumnIndexOrThrow(android.provider.MediaStore.Images.Media.DATE_ADDED)
+                val id = cursor.getLong(idColumn)
+                val dateAdded = cursor.getLong(dateColumn)
+                val nowSec = System.currentTimeMillis() / 1000
+                if (nowSec - dateAdded < 180) { // added in last 3 minutes
+                    return android.content.ContentUris.withAppendedId(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                }
+            }
+        }
+        null
+    } catch (e: Exception) {
+        null
+    }
+}
+
+@Composable
+fun GuideDialog(show: Boolean, onDismiss: () -> Unit) {
+    if (!show) return
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.HelpOutline, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("CloudChat 使用说明与图标指南", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("多选工具栏图标说明：", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                
+                Text("📁 [打包]: 选中多条消息归档收纳为一个文件夹", style = MaterialTheme.typography.bodySmall)
+                Text("📂 [移入]: 将选中的消息或文件夹移入其他指定文件夹中", style = MaterialTheme.typography.bodySmall)
+                Text("🔳 [合并]: 将多条选中的文本或图片拼接为一条长卡片", style = MaterialTheme.typography.bodySmall)
+                Text("🔲 [拆散]: 将已归档的文件夹或合并消息拆分还原为独立多条", style = MaterialTheme.typography.bodySmall)
+                Text("📖 [日记]: 将选中的消息提取生成静态 HTML 网页日记", style = MaterialTheme.typography.bodySmall)
+                Text("⬇ [下载]: 批量下载选中的图片、视频及文件素材到本地", style = MaterialTheme.typography.bodySmall)
+                Text("🔒 [隐私/隐藏]: 将选中的敏感记录移入暗号隐私空间", style = MaterialTheme.typography.bodySmall)
+                Text("✓ [范围]: 先选起始消息，点“范围”再选终点，自动选中全区间", style = MaterialTheme.typography.bodySmall)
+                Text("🗑 [删除]: 彻底删除选中的聊天记录", style = MaterialTheme.typography.bodySmall)
+                Text("✕ [取消]: 退出当前多选模式", style = MaterialTheme.typography.bodySmall)
+
+                Divider(modifier = Modifier.padding(vertical = 4.dp))
+                Text("📸 Android 截图快捷悬浮发送：", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Text("在手机上完成截屏或拍照后，点击聊天输入框右侧的【+】号，输入框上方将自动浮现最新截图卡片，支持一键快速发送！", style = MaterialTheme.typography.bodySmall)
+
+                Divider(modifier = Modifier.padding(vertical = 4.dp))
+                Text("⚡ 物理修改时间增量同步：", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                Text("采用 WebDAV PROPFIND XML 解析物理时间比对，未产生新记录时精准拦截，零流量、零卡顿。", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("我明白了")
+            }
+        }
+    )
+}
