@@ -394,8 +394,6 @@ fun MainScreen(
             setTopBarTitle(if (activeCategory == "diary") "日记" else "CloudChat")
             setTopBarTitleComposable {
                 var showTitleDropdown by remember { mutableStateOf(false) }
-    var showGuideModal by remember { mutableStateOf(false) }
-    var recentImageUri by remember { mutableStateOf<android.net.Uri?>(null) }
                 Box {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -441,6 +439,19 @@ fun MainScreen(
                             },
                             onClick = {
                                 activeCategory = "diary"
+                                showTitleDropdown = false
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.HelpOutline, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("说明", fontWeight = FontWeight.Normal)
+                                }
+                            },
+                            onClick = {
+                                showGuideModal = true
                                 showTitleDropdown = false
                             }
                         )
