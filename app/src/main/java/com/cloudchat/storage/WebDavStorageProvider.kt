@@ -1,5 +1,7 @@
 package com.cloudchat.storage
 
+import com.cloudchat.utils.DebugLogger
+
 import android.util.Log
 import com.cloudchat.model.ChatMessage
 import com.cloudchat.model.ServerConfig
@@ -415,9 +417,42 @@ class WebDavStorageProvider(
     }
 
     override suspend fun getLastModified(fileName: String): Long = withContext(Dispatchers.IO) {
+        val safe = safeFileName(fileName) ?: return@withContext -1L
         try {
             runWithRetry { currentBaseUrl ->
-                val url = "$currentBaseUrl${java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")}"
+                val url = "$currentBaseUrl${java.net.URLEncoder.encode(safe, "UTF-8").replace("+", "%20")}"
+                
+                // 1. 首选 PROPFIND XML 深度查询 (RFC 4918 权威规范，避开 CORS Header 剥离)
+                try {
+                    val propBody = "<?xml version=\"1.0\" encoding=\"utf-8\" ?><D:propfind xmlns:D=\"DAV:\"><D:prop><D:getlastmodified/></D:prop></D:propfind>"
+                    val propRequest = Request.Builder()
+                        .url(url)
+                        .addHeader("Authorization", auth)
+                        .addHeader("Depth", "0")
+                        .method("PROPFIND", propBody.toRequestBody("application/xml; charset=utf-8".toMediaType()))
+                        .build()
+
+                    client.newCall(propRequest).execute().use { response ->
+                        if (response.isSuccessful || response.code == 207) {
+                            val xml = response.body?.string().orEmpty()
+                            val regex = Regex("<[^>]*getlastmodified[^>]*>([^<]+)</[^>]*getlastmodified>", RegexOption.IGNORE_CASE)
+                            val match = regex.find(xml)
+                            if (match != null) {
+                                val dateStr = match.groupValues[1].trim()
+                                val sdf = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.US)
+                                val parsedTime = sdf.parse(dateStr)?.time ?: -1L
+                                if (parsedTime > 0) {
+                                    DebugLogger.log("HTTP", "PROPFIND $safe getlastmodified XML -> $parsedTime")
+                                    return@runWithRetry parsedTime
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    DebugLogger.log("HTTP", "PROPFIND XML getlastmodified warning for $safe: ${e.message}")
+                }
+
+                // 2. 备用 HEAD 请求
                 val request = Request.Builder()
                     .url(url)
                     .addHeader("Authorization", auth)
@@ -429,13 +464,18 @@ class WebDavStorageProvider(
                         val lastModified = response.header("Last-Modified")
                         if (lastModified != null) {
                             val sdf = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.US)
-                            return@runWithRetry sdf.parse(lastModified)?.time ?: -1L
+                            val parsedTime = sdf.parse(lastModified)?.time ?: -1L
+                            if (parsedTime > 0) {
+                                DebugLogger.log("HTTP", "HEAD $safe Last-Modified header -> $parsedTime")
+                                return@runWithRetry parsedTime
+                            }
                         }
                     }
                 }
                 -1L
             }
         } catch (e: Exception) {
+            DebugLogger.log("HTTP", "getLastModified failed for $fileName: ${e.message}")
             -1L
         }
     }
@@ -762,6 +802,7 @@ class WebDavStorageProvider(
     }
 
     override suspend fun downloadText(fileName: String): String? = withContext(Dispatchers.IO) {
+        DebugLogger.log("HTTP", "GET $fileName")
         runWithRetry { currentBaseUrl ->
             val url = "$currentBaseUrl${java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")}"
             val request = Request.Builder()

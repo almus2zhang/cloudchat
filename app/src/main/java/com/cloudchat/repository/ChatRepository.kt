@@ -1,5 +1,7 @@
 package com.cloudchat.repository
 
+import com.cloudchat.utils.DebugLogger
+
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -1522,6 +1524,7 @@ class ChatRepository(private val context: Context) {
 
     // 在 historySyncMutex 保护下执行的真正同步逻辑（串行，不会并发）
     private suspend fun doSyncHistoryLocked(currentList: List<ChatMessage>) {
+        DebugLogger.log("Sync", "=== 开始 Android 离线/在线消息上传推流 ===")
         val provider = storageProvider ?: return
 
         var indexJson = provider.downloadText("chat_index.json")
@@ -1809,6 +1812,7 @@ class ChatRepository(private val context: Context) {
     }
 
     suspend fun refreshHistoryFromCloud() = withContext(Dispatchers.IO) {
+        DebugLogger.log("Sync", "=== 开始 Android 云端历史记录比对刷新 ===")
         if (!isRefreshingFromCloud.compareAndSet(false, true)) return@withContext
         // 有正在上传的任务时跳过本次刷新，避免「拉取」与「推送」竞态，
         // 否则会把刚发送成功、尚未上传完的消息覆盖删除。等上传完成后再刷新。

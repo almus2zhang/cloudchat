@@ -16,10 +16,13 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import com.cloudchat.utils.DebugLogger
+
 class CloudChatApp : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
+        DebugLogger.init(this)
         installCrashLogger()
     }
 
