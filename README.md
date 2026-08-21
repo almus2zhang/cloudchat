@@ -35,6 +35,27 @@
 
 ---
 
+## 🔧 WebDAV 服务端配置与排查指南
+
+在通过反向代理（如 Nginx、Nginx Proxy Manager、宝塔面板、FRP 等）接入 WebDAV 服务器时，如果出现 `GET/HEAD` 返回 404 成功，但 `PROPFIND` 或 `MKCOL` 拦截报错 `Failed to fetch`，说明网关未放行跨域响应头或 WebDAV 特殊谓词方法。
+
+### 反向代理配置（Nginx 示例）
+
+必须在配置中**允许 WebDAV 特殊谓词**并**放行跨域响应头**：
+
+```nginx
+# 1. 允许 WebDAV 扩展 HTTP 方法
+dav_methods PUT DELETE MKCOL COPY MOVE;
+
+# 2. 设置允许跨域方法 (必须包含 PROPFIND 与 MKCOL)
+add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE, PROPFIND, MKCOL' always;
+
+# 3. 设置允许跨域请求头 (必须包含 Authorization, Content-Type, Depth)
+add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Depth, X-Requested-With' always;
+```
+
+---
+
 ## 📱 构建与编译
 
 本项目基于原生 **Kotlin + Jetpack Compose** 开发。
