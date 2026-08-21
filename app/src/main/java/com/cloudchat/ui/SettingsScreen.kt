@@ -81,6 +81,7 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     var deletingAccountConfig by remember { mutableStateOf<ServerConfig?>(null) }
     var isTesting by remember { mutableStateOf(false) }
+    var showDebugLogsModal by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
 
     var showPasswordDialog by remember { mutableStateOf(false) }

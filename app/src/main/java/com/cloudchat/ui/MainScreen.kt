@@ -162,6 +162,7 @@ fun MainScreen(
     val isSecurityAuthenticated by chatRepository.isSecurityAuthenticated.collectAsState()
     var showSecurityOverlay by remember { mutableStateOf(false) }
     var showGuideModal by remember { mutableStateOf(false) }
+    var showDebugLogsModal by remember { mutableStateOf(false) }
     var recentImageUri by remember { mutableStateOf<android.net.Uri?>(null) }
 
     // --- Dialog and Action States ---
@@ -1628,6 +1629,7 @@ fun MainScreen(
         )
 
         GuideDialog(show = showGuideModal, onDismiss = { showGuideModal = false })
+    DebugLogsDialog(show = showDebugLogsModal, onDismiss = { showDebugLogsModal = false })
 
         QuickActionDialogs(
             showQuickTextDialog = showQuickTextDialog,
@@ -6836,3 +6838,86 @@ fun GuideIconItem(icon: ImageVector, title: String, desc: String) {
         }
     }
 }
+
+
+@Composable
+fun DebugLogsDialog(show: Boolean, onDismiss: () -> Unit) {
+    if (!show) return
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val logLines by com.cloudchat.utils.DebugLogger.logLines.collectAsState()
+    val scrollState = rememberScrollState()
+
+    LaunchedEffect(logLines.size) {
+        scrollState.animateScrollTo(scrollState.maxValue)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Terminal, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("同步与网络调试日志 (Debug Logs)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 420.dp)
+            ) {
+                Surface(
+                    color = Color(0xFF0F172A),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth().weight(1f)
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(scrollState)
+                            .padding(8.dp)
+                    ) {
+                        if (logLines.isEmpty()) {
+                            Text("暂无日志，请触发同步或点击【测试验证】...", color = Color.Gray, fontSize = 12.sp)
+                        } else {
+                            logLines.forEach { line ->
+                                val textColor = when {
+                                    line.contains("FAIL") || line.contains("ERR") || line.contains("Error") || line.contains("!") -> Color(0xFFF87171)
+                                    line.contains("HTTP") -> Color(0xFF38BDF8)
+                                    line.contains("===") -> Color(0xFFFACC15)
+                                    else -> Color(0xFF4ADE80)
+                                }
+                                Text(
+                                    text = line,
+                                    color = textColor,
+                                    fontSize = 11.sp,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    modifier = Modifier.padding(vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        val text = logLines.joinToString("\n")
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("Debug Logs", text)
+                        clipboard.setPrimaryClip(clip)
+                        android.widget.Toast.makeText(context, "已复制调试日志到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                ) {
+                    Text("复制日志")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("关闭")
+                }
+            }
+        }
+    )
+}
+

@@ -287,10 +287,13 @@ class WebDavStorageProvider(
                     else -> Result.failure(Exception("服务器返回 HTTP $code"))
                 }
             } catch (e: Exception) {
-                if (attempt == 1) return Result.failure(e)
+                val causeMsg = e.cause?.message?.let { " (原因: $it)" } ?: ""
+                val errText = "${e.javaClass.simpleName}: ${e.message ?: "网络连接或握手中断"}$causeMsg"
+                DebugLogger.log("WebDavStorage", "testSingleUrl error ($testUrl, attempt $attempt): $errText")
+                if (attempt == 1) return Result.failure(Exception(errText))
             }
         }
-        return Result.failure(Exception("未知错误"))
+        return Result.failure(Exception("连接网络尝试失败"))
     }
 
     private fun mkCol(url: String) {

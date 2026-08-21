@@ -80,7 +80,8 @@ object NetworkUtils {
     private fun createAuthInterceptor() = Interceptor { chain ->
         val request = chain.request()
         val url = request.url.toString()
-        Log.d("NetworkUtils", "Request: ${request.method} $url")
+        val shortName = url.split("?")[0].split("/").filter { it.isNotEmpty() }.takeLast(2).joinToString("/")
+        DebugLogger.log("HTTP", "${request.method} $shortName")
         
         val authenticatedRequest = if (currentAuth != null && request.header("Authorization") == null) {
             request.newBuilder()
@@ -92,10 +93,13 @@ object NetworkUtils {
         
         try {
             val response = chain.proceed(authenticatedRequest)
-            Log.d("NetworkUtils", "Response: ${response.code} for $url")
+            DebugLogger.log("HTTP", "${request.method} $shortName -> Status ${response.code}")
             response
         } catch (e: Exception) {
-            Log.e("NetworkUtils", "Request failed for $url", e)
+            val causeMsg = e.cause?.message?.let { " ($it)" } ?: ""
+            val errLine = "[FAIL] ${request.method} $shortName -> ${e.javaClass.simpleName}: ${e.message ?: "Connect Error"}$causeMsg"
+            DebugLogger.log("HTTP_ERR", errLine)
+            Log.e("NetworkUtils", errLine, e)
             throw e
         }
     }
