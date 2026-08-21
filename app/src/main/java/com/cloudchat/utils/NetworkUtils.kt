@@ -60,6 +60,8 @@ object NetworkUtils {
             val sslContext = SSLContext.getInstance("TLS")
             sslContext.init(null, trustAllCerts, SecureRandom())
 
+            val sniSocketFactory = SniSSLSocketFactory(sslContext.socketFactory)
+
             val tlsSpec = okhttp3.ConnectionSpec.Builder(okhttp3.ConnectionSpec.COMPATIBLE_TLS)
                 .allEnabledTlsVersions()
                 .allEnabledCipherSuites()
@@ -71,7 +73,7 @@ object NetworkUtils {
                 .connectionSpecs(listOf(tlsSpec, okhttp3.ConnectionSpec.CLEARTEXT))
                 .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
                 .retryOnConnectionFailure(true)
-                .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
+                .sslSocketFactory(sniSocketFactory, trustAllCerts[0] as X509TrustManager)
                 .hostnameVerifier { _, _ -> true }
                 .addInterceptor(authInterceptor)
                 .connectTimeout(15, TimeUnit.SECONDS)
@@ -352,5 +354,55 @@ object NetworkUtils {
         sb.appendLine("==================================================")
         writeDebugLogToFile(sb.toString())
         return result
+    }
+}
+
+class SniSSLSocketFactory(private val delegate: javax.net.ssl.SSLSocketFactory) : javax.net.ssl.SSLSocketFactory() {
+    override fun getDefaultCipherSuites(): Array<String> = delegate.defaultCipherSuites
+    override fun getSupportedCipherSuites(): Array<String> = delegate.supportedCipherSuites
+
+    override fun createSocket(): java.net.Socket {
+        return delegate.createSocket()
+    }
+
+    override fun createSocket(s: java.net.Socket, host: String, port: Int, autoClose: Boolean): java.net.Socket {
+        val socket = delegate.createSocket(s, host, port, autoClose) as javax.net.ssl.SSLSocket
+        setSni(socket, host)
+        return socket
+    }
+
+    override fun createSocket(host: String, port: Int): java.net.Socket {
+        val socket = delegate.createSocket(host, port) as javax.net.ssl.SSLSocket
+        setSni(socket, host)
+        return socket
+    }
+
+    override fun createSocket(host: String, port: Int, localHost: java.net.InetAddress, localPort: Int): java.net.Socket {
+        val socket = delegate.createSocket(host, port, localHost, localPort) as javax.net.ssl.SSLSocket
+        setSni(socket, host)
+        return socket
+    }
+
+    override fun createSocket(host: java.net.InetAddress, port: Int): java.net.Socket {
+        return delegate.createSocket(host, port)
+    }
+
+    override fun createSocket(host: java.net.InetAddress, port: Int, localHost: java.net.InetAddress, localPort: Int): java.net.Socket {
+        return delegate.createSocket(host, port, localHost, localPort)
+    }
+
+    private fun setSni(socket: javax.net.ssl.SSLSocket, host: String) {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                val sslParameters = socket.sslParameters
+                sslParameters.serverNames = listOf(javax.net.ssl.SNIHostName(host))
+                socket.sslParameters = sslParameters
+            } else {
+                val method = socket.javaClass.getMethod("setHostname", String::class.java)
+                method.invoke(socket, host)
+            }
+        } catch (e: Exception) {
+            Log.w("NetworkUtils", "Failed to set SNI hostname for $host: ${e.message}")
+        }
     }
 }
