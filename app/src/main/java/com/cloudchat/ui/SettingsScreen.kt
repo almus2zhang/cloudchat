@@ -109,6 +109,8 @@ fun SettingsScreen(onBack: () -> Unit) {
         }
     }
 
+    DebugLogsDialog(show = showDebugLogsModal, onDismiss = { showDebugLogsModal = false })
+
     Column(modifier = Modifier.fillMaxSize()) {
         if (editingConfig == null) {
             // Account List View
@@ -575,7 +577,9 @@ fun SettingsScreen(onBack: () -> Unit) {
                                     WebDavStorageProvider(config, config.saveDir, appMode == com.cloudchat.model.AppMode.FULL)
                                 }
                                 val result = provider.testConnection()
-                                testResult = if (result.isSuccess) "验证成功\n${result.getOrNull() ?: ""}" else "验证失败\n${result.exceptionOrNull()?.message ?: "未知错误"}"
+                                val detailMsg = if (result.isSuccess) result.getOrNull() else result.exceptionOrNull()?.message
+                                com.cloudchat.utils.DebugLogger.log("TestConn", "Result (Success=${result.isSuccess}): $detailMsg")
+                                testResult = if (result.isSuccess) "验证成功\n${detailMsg ?: ""}" else "验证失败\n${detailMsg ?: "未知错误"}"
                                 isTesting = false
                             }
                         },

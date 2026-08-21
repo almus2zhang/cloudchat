@@ -60,15 +60,21 @@ object NetworkUtils {
             val sslContext = SSLContext.getInstance("TLS")
             sslContext.init(null, trustAllCerts, SecureRandom())
 
+            val tlsSpec = okhttp3.ConnectionSpec.Builder(okhttp3.ConnectionSpec.COMPATIBLE_TLS)
+                .allEnabledTlsVersions()
+                .allEnabledCipherSuites()
+                .build()
+
             val authInterceptor = createAuthInterceptor()
 
             return OkHttpClient.Builder()
+                .connectionSpecs(listOf(tlsSpec, okhttp3.ConnectionSpec.CLEARTEXT))
                 .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
                 .retryOnConnectionFailure(true)
                 .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
                 .hostnameVerifier { _, _ -> true }
                 .addInterceptor(authInterceptor)
-                .connectTimeout(12, TimeUnit.SECONDS)
+                .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(20, TimeUnit.SECONDS)
                 .writeTimeout(20, TimeUnit.SECONDS)
         } catch (e: Exception) {
