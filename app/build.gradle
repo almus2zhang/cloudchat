@@ -12,8 +12,8 @@ android {
         applicationId "com.cloudchat"
         minSdk 24
         targetSdk 34
-        versionCode 19
-        versionName "2.7"
+        versionCode 1
+        versionName "1.0.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
