@@ -538,7 +538,30 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
                 Text("切换后主界面和文件夹均使用新模板展示", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
 
-                Spacer(modifier = Modifier.height(24.dp))
+                if (config.type == StorageType.WEBDAV) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("忽略证书错误 (允许自签名/私有 CA 证书)", style = MaterialTheme.typography.titleSmall, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                                Text("自建 HTTPS 域名、自签名或反代报错 (SSLHandshakeException) 时开启", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                            }
+                            Switch(
+                                checked = config.webDavIgnoreCert,
+                                onCheckedChange = { editingConfig = config.copy(webDavIgnoreCert = it) }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(

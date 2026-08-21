@@ -53,7 +53,11 @@ add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS, PUT, DELETE, PROP
 # 3. 设置允许跨域请求头 (必须包含 Authorization, Content-Type, Depth)
 add_header 'Access-Control-Allow-Headers' 'Authorization, Content-Type, Depth, X-Requested-With' always;
 ```
-
+```lucky
+# 4. lucky找到反代高级设置
+跨域支持 指定允许的跨域方法
+GET, POST, OPTIONS, PUT, DELETE, PROPFIND, MKCOL
+```
 ---
 
 ## 📱 构建与编译
