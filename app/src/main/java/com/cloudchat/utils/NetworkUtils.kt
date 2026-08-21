@@ -37,10 +37,12 @@ object NetworkUtils {
     fun getSafeOkHttpClient(): OkHttpClient.Builder {
         val authInterceptor = createAuthInterceptor()
         return OkHttpClient.Builder()
+            .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+            .retryOnConnectionFailure(true)
             .addInterceptor(authInterceptor)
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .writeTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
     }
 
     /**
@@ -61,12 +63,14 @@ object NetworkUtils {
             val authInterceptor = createAuthInterceptor()
 
             return OkHttpClient.Builder()
+                .protocols(listOf(okhttp3.Protocol.HTTP_1_1))
+                .retryOnConnectionFailure(true)
                 .sslSocketFactory(sslContext.socketFactory, trustAllCerts[0] as X509TrustManager)
                 .hostnameVerifier { _, _ -> true }
                 .addInterceptor(authInterceptor)
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
-                .writeTimeout(10, TimeUnit.SECONDS)
+                .connectTimeout(12, TimeUnit.SECONDS)
+                .readTimeout(20, TimeUnit.SECONDS)
+                .writeTimeout(20, TimeUnit.SECONDS)
         } catch (e: Exception) {
             Log.e("NetworkUtils", "Failed to create unsafe client", e)
             return getSafeOkHttpClient()
