@@ -586,6 +586,14 @@ fun SettingsScreen(onBack: () -> Unit) {
                     }
 
                     Button(
+                        onClick = { showDebugLogsModal = true },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                    ) {
+                        Text("调试日志")
+                    }
+
+                    Button(
                         onClick = {
                             val dirError = settingsRepository.validateUserDir(config)
                             if (dirError != null) {
