@@ -24,6 +24,14 @@ fun SettingsContent(
             .padding(8.dp)
     ) {
         OutlinedTextField(
+            value = config.name,
+            onValueChange = { onConfigChange(config.copy(name = it)) },
+            label = { Text("配置名称 (例: 公司NAS / 坚果云)") },
+            placeholder = { Text("例: 公司NAS / 个人WebDAV") },
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
             value = config.username,
             onValueChange = { onConfigChange(config.copy(username = it)) },
             label = { Text("聊天昵称") },

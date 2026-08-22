@@ -62,6 +62,7 @@ enum class StorageType {
 
 data class ServerConfig(
     val id: String = UUID.randomUUID().toString(),
+    val name: String = "", // 配置方案名称 (如 "我的坚果云", "公司NAS", "个人服务器")
     val type: StorageType = StorageType.WEBDAV,
     val endpoint: String = "",
     val bucket: String = "",

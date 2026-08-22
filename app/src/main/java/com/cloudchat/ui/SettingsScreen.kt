@@ -751,7 +751,11 @@ fun AccountItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(account.username, style = MaterialTheme.typography.titleMedium)
+                val displayName = account.name.ifBlank { account.username.ifBlank { "未命名账号" } }
+                Text(displayName, style = MaterialTheme.typography.titleMedium)
+                if (account.name.isNotBlank() && account.username.isNotBlank()) {
+                    Text("昵称: ${account.username}", style = MaterialTheme.typography.bodySmall)
+                }
                 if (appMode == com.cloudchat.model.AppMode.SELF_BUILT) {
                     Text("ID: ${account.saveDir}", style = MaterialTheme.typography.bodySmall)
                     Text("${account.type} - ${account.serverPath}", style = MaterialTheme.typography.bodySmall)
