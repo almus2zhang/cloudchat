@@ -261,6 +261,16 @@ fun SettingsScreen(onBack: () -> Unit) {
                 Spacer(modifier = Modifier.height(16.dp))
 
                 TextField(
+                    value = config.name,
+                    onValueChange = { editingConfig = config.copy(name = it) },
+                    label = { Text("配置方案名称 (例: 公司NAS / 坚果云)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("例如: 公司NAS / 个人WebDAV") }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                TextField(
                     value = config.username,
                     onValueChange = { editingConfig = config.copy(username = it) },
                     label = { Text("用户昵称 (Name)") },
