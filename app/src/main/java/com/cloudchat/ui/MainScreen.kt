@@ -129,6 +129,7 @@ fun MainScreen(
     val chatRepository = remember { ChatRepository(context) }
     
     val currentConfig by settingsRepository.currentConfig.collectAsState(initial = null)
+    val accounts by settingsRepository.accounts.collectAsState(initial = emptyList())
     val messages by chatRepository.messages.collectAsState()
     val uploadProgress by chatRepository.uploadProgress.collectAsState()
     val downloadProgress by chatRepository.downloadProgress.collectAsState()
@@ -375,7 +376,7 @@ fun MainScreen(
     var diaryGenerateTargetIds by remember { mutableStateOf<Set<String>?>(null) }
     var diaryGenerateFolderId by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(activeCategory) {
+    LaunchedEffect(activeCategory, currentConfig) {
         if (activeCategory == "diary") {
             isLoadingDiaryFiles = true
             diaryFiles = chatRepository.listDiaryFiles()
@@ -383,7 +384,7 @@ fun MainScreen(
         }
     }
 
-    LaunchedEffect(currentFolderId, activeCategory, messages) {
+    LaunchedEffect(currentFolderId, activeCategory, currentConfig, accounts, messages) {
         if (currentFolderId != null) {
             setTopBarTitle("")
             setTopBarTitleComposable(null)
@@ -392,7 +393,9 @@ fun MainScreen(
             }
         } else {
             setTopBarNavigationIcon(null)
-            setTopBarTitle(if (activeCategory == "diary") "日记" else "CloudChat")
+            val currentProfileName = currentConfig?.name?.ifBlank { currentConfig?.username?.ifBlank { "CloudChat" } } ?: "CloudChat"
+            val displayTitle = if (activeCategory == "diary") "日记" else currentProfileName
+            setTopBarTitle(displayTitle)
             setTopBarTitleComposable {
                 var showTitleDropdown by remember { mutableStateOf(false) }
                 Box {
@@ -401,15 +404,16 @@ fun MainScreen(
                         modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { showTitleDropdown = true }.padding(horizontal = 4.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = if (activeCategory == "diary") "日记" else "CloudChat",
+                            text = displayTitle,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1
                         )
                         Spacer(modifier = Modifier.width(2.dp))
                         Icon(
                             imageVector = Icons.Default.ArrowDropDown,
-                            contentDescription = "切换分类",
+                            contentDescription = "切换配置",
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -417,25 +421,73 @@ fun MainScreen(
                         expanded = showTitleDropdown,
                         onDismissRequest = { showTitleDropdown = false }
                     ) {
-                        DropdownMenuItem(
-                            text = {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text("CloudChat", fontWeight = if (activeCategory == "all") FontWeight.Bold else FontWeight.Normal)
-                                }
-                            },
-                            onClick = {
-                                activeCategory = "all"
-                                showTitleDropdown = false
+                        // 1. 列出所有配置方案 (Profile List)
+                        if (accounts.isNotEmpty()) {
+                            accounts.forEach { acc ->
+                                val accDisplayName = acc.name.ifBlank { acc.username.ifBlank { "未命名配置" } }
+                                val isSelected = acc.id == currentConfig?.id && activeCategory == "all"
+                                DropdownMenuItem(
+                                    text = {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.Cloud,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(18.dp),
+                                                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(
+                                                accDisplayName,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        scope.launch {
+                                            if (acc.id != currentConfig?.id) {
+                                                settingsRepository.switchAccount(acc.id)
+                                            }
+                                            activeCategory = "all"
+                                            showTitleDropdown = false
+                                        }
+                                    }
+                                )
                             }
-                        )
+                        } else {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Chat, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(currentProfileName, fontWeight = if (activeCategory == "all") FontWeight.Bold else FontWeight.Normal)
+                                    }
+                                },
+                                onClick = {
+                                    activeCategory = "all"
+                                    showTitleDropdown = false
+                                }
+                            )
+                        }
+
+                        Divider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        // 2. 日记
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Book, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Icon(
+                                        Icons.Default.Book, 
+                                        contentDescription = null, 
+                                        modifier = Modifier.size(18.dp), 
+                                        tint = if (activeCategory == "diary") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text("日记", fontWeight = if (activeCategory == "diary") FontWeight.Bold else FontWeight.Normal)
+                                    Text(
+                                        "日记", 
+                                        fontWeight = if (activeCategory == "diary") FontWeight.Bold else FontWeight.Normal,
+                                        color = if (activeCategory == "diary") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                    )
                                 }
                             },
                             onClick = {
@@ -443,10 +495,17 @@ fun MainScreen(
                                 showTitleDropdown = false
                             }
                         )
+
+                        // 3. 说明
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.HelpOutline, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                    Icon(
+                                        Icons.Default.HelpOutline, 
+                                        contentDescription = null, 
+                                        modifier = Modifier.size(18.dp), 
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                     Spacer(modifier = Modifier.width(8.dp))
                                     Text("说明", fontWeight = FontWeight.Normal)
                                 }
