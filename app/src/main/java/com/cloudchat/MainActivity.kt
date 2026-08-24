@@ -100,10 +100,6 @@ class MainActivity : ComponentActivity() {
                 
                 val scope = rememberCoroutineScope()
                 var isTopBarVisible by remember { mutableStateOf(true) }
-                var topBarActions by remember { mutableStateOf<@Composable RowScope.() -> Unit>({}) }
-                var topBarTitle by remember { mutableStateOf("CloudChat") }
-                var topBarTitleComposable by remember { mutableStateOf<(@Composable () -> Unit)?>(null) }
-                var onTopBarBackClick by remember { mutableStateOf<(() -> Unit)?>(null) }
                 
                 // Wait for storage to load the appMode
                 val appMode = appModeState ?: return@CloudChatTheme
@@ -122,104 +118,59 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                Scaffold(
-                    topBar = {
-                        if (isTopBarVisible && appMode != com.cloudchat.model.AppMode.NOT_SET) {
-                            TopAppBar(
-                                title = {
-                                    if (topBarTitleComposable != null) {
-                                        topBarTitleComposable?.invoke()
-                                    } else if (topBarTitle.isNotEmpty()) {
-                                        Text(topBarTitle, style = MaterialTheme.typography.titleLarge)
-                                    }
-                                },
-                                navigationIcon = {
-                                    if (onTopBarBackClick != null) {
-                                        IconButton(modifier = Modifier.size(40.dp), onClick = { onTopBarBackClick?.invoke() }) {
-                                            Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    NavHost(navController = navController, startDestination = startDestination) {
+                        composable("mode_selection") {
+                            ModeSelectionScreen(
+                                onModeSelected = { mode ->
+                                    scope.launch {
+                                        settingsRepository.setAppMode(mode)
+                                        if (mode == com.cloudchat.model.AppMode.FULL) {
+                                            navController.navigate("settings") {
+                                                popUpTo("mode_selection") { inclusive = true }
+                                            }
+                                        } else {
+                                            navController.navigate("main") {
+                                                popUpTo("mode_selection") { inclusive = true }
+                                            }
                                         }
-                                    }
-                                },
-                                colors = TopAppBarDefaults.topAppBarColors(
-                                    containerColor = MaterialTheme.colorScheme.surface,
-                                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                                    actionIconContentColor = MaterialTheme.colorScheme.onSurface
-                                ),
-                                actions = {
-                                    topBarActions(this)
-                                    IconButton(
-                                        modifier = Modifier.size(40.dp),
-                                        onClick = { navController.navigate("settings") }
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Settings, 
-                                            contentDescription = "Settings"
-                                        )
                                     }
                                 }
                             )
                         }
-                    }
-                ) { padding ->
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(if (isTopBarVisible && appMode != com.cloudchat.model.AppMode.NOT_SET) padding else PaddingValues(0.dp)),
-                        color = MaterialTheme.colorScheme.background
-                    ) {
-                        NavHost(navController = navController, startDestination = startDestination) {
-                            composable("mode_selection") {
-                                ModeSelectionScreen(
-                                    onModeSelected = { mode ->
-                                        scope.launch {
-                                            settingsRepository.setAppMode(mode)
-                                            if (mode == com.cloudchat.model.AppMode.FULL) {
-                                                navController.navigate("settings") {
-                                                    popUpTo("mode_selection") { inclusive = true }
-                                                }
-                                            } else {
-                                                navController.navigate("main") {
-                                                    popUpTo("mode_selection") { inclusive = true }
-                                                }
-                                            }
-                                        }
+                        composable("main") {
+                            if (currentConfig == null) {
+                                LaunchedEffect(Unit) {
+                                    navController.navigate("settings")
+                                }
+                            } else {
+                                MainScreen(
+                                    sharedData = sharedContent.value,
+                                    quickAction = quickAction.value,
+                                    onFullScreenToggle = { isTopBarVisible = !it },
+                                    onSharedDataHandled = {
+                                        sharedContent.value = null
+                                    },
+                                    onQuickActionHandled = {
+                                        quickAction.value = null
+                                    },
+                                    onOpenSettings = {
+                                        navController.navigate("settings")
                                     }
                                 )
                             }
-                            composable("main") {
-                                if (currentConfig == null) {
-                                    LaunchedEffect(Unit) {
-                                        navController.navigate("settings")
-                                    }
+                        }
+                        composable("settings") {
+                            SettingsScreen(onBack = { 
+                                if (navController.previousBackStackEntry != null) {
+                                    navController.popBackStack()
                                 } else {
-                                    MainScreen(
-                                        sharedData = sharedContent.value,
-                                        quickAction = quickAction.value,
-                                        onFullScreenToggle = { isTopBarVisible = !it },
-                                        onSharedDataHandled = {
-                                            sharedContent.value = null
-                                        },
-                                        onQuickActionHandled = {
-                                            quickAction.value = null
-                                        },
-                                        setTopBarActions = { actions ->
-                                            topBarActions = actions
-                                        },
-                                        setTopBarTitle = { topBarTitle = it },
-                                        setTopBarTitleComposable = { topBarTitleComposable = it },
-                                        setTopBarNavigationIcon = { onTopBarBackClick = it }
-                                    )
+                                    navController.navigate("main")
                                 }
-                            }
-                            composable("settings") {
-                                SettingsScreen(onBack = { 
-                                    if (navController.previousBackStackEntry != null) {
-                                        navController.popBackStack()
-                                    } else {
-                                        navController.navigate("main")
-                                    }
-                                })
-                            }
+                            })
                         }
                     }
                 }

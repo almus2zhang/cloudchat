@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -116,7 +117,13 @@ fun SettingsScreen(onBack: () -> Unit) {
             // Account List View
             Column(modifier = Modifier.padding(16.dp)) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Text("Accounts", style = MaterialTheme.typography.titleLarge)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onBack) {
+                            Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Accounts", style = MaterialTheme.typography.titleLarge)
+                    }
                     TextButton(onClick = { 
                         coroutineScope.launch { 
                             settingsRepository.setAppMode(com.cloudchat.model.AppMode.NOT_SET)
@@ -257,7 +264,13 @@ fun SettingsScreen(onBack: () -> Unit) {
                     .padding(16.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text(if (config.id.isEmpty()) "Add Account" else "Edit Account", style = MaterialTheme.typography.titleLarge)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { editingConfig = null }) {
+                        Icon(imageVector = Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(if (config.id.isEmpty()) "Add Account" else "Edit Account", style = MaterialTheme.typography.titleLarge)
+                }
                 Spacer(modifier = Modifier.height(16.dp))
 
                 TextField(
