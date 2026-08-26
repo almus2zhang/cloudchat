@@ -112,7 +112,15 @@ fun SettingsScreen(onBack: () -> Unit) {
 
     DebugLogsDialog(show = showDebugLogsModal, onDismiss = { showDebugLogsModal = false })
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.TopCenter
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxHeight()
+                .widthIn(max = 760.dp)
+        ) {
         if (editingConfig == null) {
             // Account List View
             Column(modifier = Modifier.padding(16.dp)) {
@@ -747,6 +755,7 @@ fun SettingsScreen(onBack: () -> Unit) {
                 }
             }
         )
+        }
     }
 }
 
