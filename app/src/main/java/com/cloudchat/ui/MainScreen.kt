@@ -7391,19 +7391,21 @@ fun CollapsibleTextView(
     val isMarkdown = remember(text) { text.startsWith("<!--md-->") || text.startsWith("[MD]") }
     val cleanText = remember(text) { text.removePrefix("<!--md-->").removePrefix("[MD]") }
 
-    val lineCount = remember(cleanText) { cleanText.split("\n").size }
+    val lines = remember(cleanText) { cleanText.lines() }
+    val lineCount = remember(lines) { lines.size }
     val estimatedLines = remember(cleanText) { cleanText.length / 25 }
     var isExpanded by remember(cleanText) { mutableStateOf(false) }
-    val showToggle = lineCount >= 8 || estimatedLines >= 8 || cleanText.length >= 220
+    val showToggle = lineCount > 3 || estimatedLines > 3 || cleanText.length > 80
 
-    val displayText = remember(cleanText, isExpanded, showToggle) {
+    val displayText = remember(cleanText, lines, isExpanded, showToggle) {
         if (!isExpanded && showToggle) {
-            val lines = cleanText.lines()
-            if (lines.size > 8) {
-                lines.take(8).joinToString("\n") + "\n..."
-            } else if (cleanText.length > 200) {
-                cleanText.take(200) + "..."
-            } else cleanText
+            if (lines.size > 3) {
+                lines.take(3).joinToString("\n") + "..."
+            } else if (cleanText.length > 80) {
+                cleanText.take(80) + "..."
+            } else {
+                cleanText
+            }
         } else {
             cleanText
         }
