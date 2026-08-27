@@ -2976,6 +2976,7 @@ fun AudioMessageBubble(
     var isSummarizing by remember(message.id) { mutableStateOf(false) }
     var summaryProgressStatus by remember(message.id) { mutableStateOf<String?>(null) }
     var summaryError by remember(message.id) { mutableStateOf<String?>(null) }
+    var summaryJob by remember(message.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     val maxAudioWidth = if (isTablet) 420.dp else 300.dp
 
@@ -3041,16 +3042,23 @@ fun AudioMessageBubble(
                             isSummarizing = true
                             onSummarizingStateChange?.invoke(true)
                             summaryProgressStatus = "正在准备音频..."
-                            scope.launch {
-                                val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
-                                    summaryProgressStatus = status
-                                }
-                                isSummarizing = false
-                                onSummarizingStateChange?.invoke(false)
-                                if (res.isFailure) {
-                                    summaryError = res.exceptionOrNull()?.message ?: "总结失败"
-                                } else {
+                            summaryJob = scope.launch {
+                                try {
+                                    val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
+                                        summaryProgressStatus = status
+                                    }
+                                    isSummarizing = false
+                                    onSummarizingStateChange?.invoke(false)
+                                    if (res.isFailure) {
+                                        summaryError = res.exceptionOrNull()?.message ?: "总结失败"
+                                    } else {
+                                        summaryProgressStatus = null
+                                    }
+                                } catch (e: kotlinx.coroutines.CancellationException) {
+                                    isSummarizing = false
+                                    onSummarizingStateChange?.invoke(false)
                                     summaryProgressStatus = null
+                                    summaryError = null
                                 }
                             }
                         },
@@ -3074,7 +3082,7 @@ fun AudioMessageBubble(
                 }
             }
 
-            // Real-time Progress Status Card
+            // Real-time Progress Status Card with Cancel Button
             if (isSummarizing) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Surface(
@@ -3085,21 +3093,50 @@ fun AudioMessageBubble(
                         .padding(horizontal = 2.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = if (message.isOutgoing) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = summaryProgressStatus ?: "AI 正在分析中...",
-                            fontSize = 12.sp,
-                            color = if (message.isOutgoing) Color.White else MaterialTheme.colorScheme.primary,
-                            fontWeight = FontWeight.Medium
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(13.dp),
+                                strokeWidth = 2.dp,
+                                color = if (message.isOutgoing) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = summaryProgressStatus ?: "AI 正在分析中...",
+                                fontSize = 11.5.sp,
+                                color = if (message.isOutgoing) Color.White else MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1
+                            )
+                        }
+
+                        // Cancel button
+                        TextButton(
+                            onClick = {
+                                summaryJob?.cancel()
+                                summaryJob = null
+                                isSummarizing = false
+                                onSummarizingStateChange?.invoke(false)
+                                summaryProgressStatus = null
+                                summaryError = null
+                                android.widget.Toast.makeText(context, "已取消 AI 总结", android.widget.Toast.LENGTH_SHORT).show()
+                            },
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+                            modifier = Modifier.height(26.dp)
+                        ) {
+                            Text(
+                                text = "取消",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (message.isOutgoing) Color(0xFFFF8A80) else Color(0xFFD32F2F)
+                            )
+                        }
                     }
                 }
             }
@@ -3148,16 +3185,23 @@ fun AudioMessageBubble(
                                     isSummarizing = true
                                     onSummarizingStateChange?.invoke(true)
                                     summaryProgressStatus = "正在准备音频..."
-                                    scope.launch {
-                                        val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
-                                            summaryProgressStatus = status
-                                        }
-                                        isSummarizing = false
-                                        onSummarizingStateChange?.invoke(false)
-                                        if (res.isFailure) {
-                                            summaryError = res.exceptionOrNull()?.message ?: "总结失败"
-                                        } else {
+                                    summaryJob = scope.launch {
+                                        try {
+                                            val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
+                                                summaryProgressStatus = status
+                                            }
+                                            isSummarizing = false
+                                            onSummarizingStateChange?.invoke(false)
+                                            if (res.isFailure) {
+                                                summaryError = res.exceptionOrNull()?.message ?: "总结失败"
+                                            } else {
+                                                summaryProgressStatus = null
+                                            }
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            isSummarizing = false
+                                            onSummarizingStateChange?.invoke(false)
                                             summaryProgressStatus = null
+                                            summaryError = null
                                         }
                                     }
                                 },
