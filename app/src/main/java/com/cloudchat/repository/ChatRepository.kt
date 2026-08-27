@@ -1308,18 +1308,18 @@ class ChatRepository(private val context: Context) {
         aiConfig: com.cloudchat.model.AiConfig,
         onProgress: ((String) -> Unit)? = null
     ): Result<String> = withContext(Dispatchers.IO) {
-        val msg = _messages.value.find { it.id == messageId }
+        val audioMsg = _messages.value.find { it.id == messageId }
             ?: return@withContext Result.failure(Exception("未找到对应的语音消息"))
 
         onProgress?.invoke("正在定位本地语音文件...")
-        val localFile = getLocalFile(msg.id, msg.content)
+        val localFile = getLocalFile(audioMsg.id, audioMsg.content)
         val fileToProcess = if (localFile.exists() && localFile.length() > 0) {
             localFile
-        } else if (msg.remoteUrl != null) {
+        } else if (audioMsg.remoteUrl != null) {
             onProgress?.invoke("本地无缓存，正在从云端下载音频...")
-            downloadFileToCache(msg.id, msg.content, resolveUrl(msg.remoteUrl) ?: msg.remoteUrl!!)
+            downloadFileToCache(audioMsg.id, audioMsg.content, resolveUrl(audioMsg.remoteUrl) ?: audioMsg.remoteUrl!!)
         } else {
-            val uriStr = getTransientUri(msg.id, msg.content)
+            val uriStr = getTransientUri(audioMsg.id, audioMsg.content)
             if (uriStr != null && uriStr.startsWith("file://")) {
                 File(uriStr.removePrefix("file://"))
             } else null
@@ -1332,13 +1332,42 @@ class ChatRepository(private val context: Context) {
         val result = com.cloudchat.service.AiService.transcribeAndSummarize(fileToProcess, aiConfig, onProgress)
         if (result.isSuccess) {
             val summaryText = result.getOrNull() ?: ""
+            val mdContent = if (summaryText.startsWith("<!--md-->")) summaryText else "<!--md-->$summaryText"
+            val targetGroupId = audioMsg.groupId?.takeIf { it.isNotBlank() }
+                ?: "group_${audioMsg.timestamp}_${UUID.randomUUID().toString().take(6)}"
+
+            val textMsg = ChatMessage(
+                id = UUID.randomUUID().toString(),
+                sender = audioMsg.sender,
+                senderName = audioMsg.senderName,
+                senderAvatar = audioMsg.senderAvatar,
+                content = mdContent,
+                timestamp = audioMsg.timestamp,
+                type = com.cloudchat.model.MessageType.TEXT,
+                isOutgoing = audioMsg.isOutgoing,
+                status = com.cloudchat.model.MessageStatus.SUCCESS,
+                folderId = audioMsg.folderId,
+                categories = audioMsg.categories,
+                groupId = targetGroupId,
+                lastModified = System.currentTimeMillis()
+            )
+
             _messages.update { list ->
-                list.map { m ->
+                val updatedList = list.map { m ->
                     if (m.id == messageId) {
-                        m.copy(caption = summaryText, lastModified = System.currentTimeMillis())
+                        m.copy(groupId = targetGroupId, caption = null, lastModified = System.currentTimeMillis())
                     } else m
+                }.toMutableList()
+
+                val audioIdx = updatedList.indexOfFirst { it.id == messageId }
+                if (audioIdx != -1) {
+                    updatedList.add(audioIdx + 1, textMsg)
+                } else {
+                    updatedList.add(textMsg)
                 }
+                updatedList
             }
+
             saveLocalHistory(currentConfig?.id ?: "")
             syncHistory()
             Result.success(summaryText)

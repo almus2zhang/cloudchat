@@ -112,6 +112,7 @@ import java.io.File
 val LocalTextSelectionClearKey = compositionLocalOf { 0 }
 val LocalIsTablet = compositionLocalOf { false }
 val LocalAiConfig = compositionLocalOf { com.cloudchat.model.AiConfig() }
+val LocalOnAiSummarizingChange = compositionLocalOf<(Boolean) -> Unit> { {} }
 
 @Composable
 fun TabletSidebar(
@@ -758,6 +759,14 @@ fun MainScreen(
 
 
 
+    var isAiSummarizingActive by remember { mutableStateOf(false) }
+    val checkCanSwitchOrNavigate: () -> Boolean = {
+        if (isAiSummarizingActive) {
+            android.widget.Toast.makeText(context, "正在进行 AI 语音识别与总结，请稍候...", android.widget.Toast.LENGTH_SHORT).show()
+            false
+        } else true
+    }
+
     var playingMessageId by remember { mutableStateOf<String?>(null) }
     var audioProgressMs by remember { mutableLongStateOf(0L) }
     var audioDurationMs by remember { mutableLongStateOf(0L) }
@@ -1193,7 +1202,8 @@ fun MainScreen(
         val isTablet = maxWidth >= 600.dp
         CompositionLocalProvider(
             LocalIsTablet provides isTablet,
-            LocalAiConfig provides aiConfig
+            LocalAiConfig provides aiConfig,
+            LocalOnAiSummarizingChange provides { isAiSummarizingActive = it }
         ) {
             Box(
                 modifier = Modifier
@@ -1224,6 +1234,7 @@ fun MainScreen(
                             totalMessagesCount = messages.filter { !it.isDeleted && it.folderId.isNullOrEmpty() && (isPrivacyMode || it.isHidden != true) }.size,
                             diaryCount = diaryFiles.size,
                             onSwitchAccount = { accId ->
+                                if (!checkCanSwitchOrNavigate()) return@TabletSidebar
                                 scope.launch {
                                     if (accId != currentConfig?.id) {
                                         settingsRepository.switchAccount(accId)
@@ -1232,7 +1243,10 @@ fun MainScreen(
                                 }
                             },
                             onSwitchCategory = { cat -> activeCategory = cat },
-                            onOpenSettings = onOpenSettings,
+                            onOpenSettings = {
+                                if (!checkCanSwitchOrNavigate()) return@TabletSidebar
+                                onOpenSettings()
+                            },
                             onOpenGuide = { showGuideModal = true },
                             onOpenDebugLogs = { showDebugLogsModal = true }
                         )
@@ -1329,6 +1343,7 @@ fun MainScreen(
                                                                 }
                                                             },
                                                             onClick = {
+                                                                if (!checkCanSwitchOrNavigate()) return@DropdownMenuItem
                                                                 scope.launch {
                                                                     if (acc.id != currentConfig?.id) {
                                                                         settingsRepository.switchAccount(acc.id)
@@ -2954,13 +2969,13 @@ fun AudioMessageBubble(
 
     val curStr = String.format("%02d:%02d", curSec / 60, curSec % 60)
     val aiConfig = LocalAiConfig.current
+    val onSummarizingStateChange = LocalOnAiSummarizingChange.current
     val isTablet = LocalIsTablet.current
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var isSummarizing by remember(message.id) { mutableStateOf(false) }
     var summaryProgressStatus by remember(message.id) { mutableStateOf<String?>(null) }
     var summaryError by remember(message.id) { mutableStateOf<String?>(null) }
-    var isSummaryExpanded by remember(message.id) { mutableStateOf(true) }
 
     val maxAudioWidth = if (isTablet) 420.dp else 300.dp
 
@@ -3024,12 +3039,14 @@ fun AudioMessageBubble(
                             if (isSummarizing) return@IconButton
                             summaryError = null
                             isSummarizing = true
+                            onSummarizingStateChange?.invoke(true)
                             summaryProgressStatus = "正在准备音频..."
                             scope.launch {
                                 val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
                                     summaryProgressStatus = status
                                 }
                                 isSummarizing = false
+                                onSummarizingStateChange?.invoke(false)
                                 if (res.isFailure) {
                                     summaryError = res.exceptionOrNull()?.message ?: "总结失败"
                                 } else {
@@ -3129,12 +3146,14 @@ fun AudioMessageBubble(
                                     if (isSummarizing || chatRepository == null) return@TextButton
                                     summaryError = null
                                     isSummarizing = true
+                                    onSummarizingStateChange?.invoke(true)
                                     summaryProgressStatus = "正在准备音频..."
                                     scope.launch {
                                         val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
                                             summaryProgressStatus = status
                                         }
                                         isSummarizing = false
+                                        onSummarizingStateChange?.invoke(false)
                                         if (res.isFailure) {
                                             summaryError = res.exceptionOrNull()?.message ?: "总结失败"
                                         } else {
@@ -3156,56 +3175,13 @@ fun AudioMessageBubble(
                 }
             }
 
-            // AI Summary / Caption Markdown Section
             if (!message.caption.isNullOrBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (message.isOutgoing) Color.Black.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.75f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 2.dp)
-                ) {
-                    Column(modifier = Modifier.padding(8.dp)) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { isSummaryExpanded = !isSummaryExpanded },
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    imageVector = Icons.Default.AutoAwesome,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(14.dp),
-                                    tint = if (message.isOutgoing) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "AI 语音总结",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (message.isOutgoing) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.primary
-                                )
-                            }
-                            Text(
-                                text = if (isSummaryExpanded) "▲ 收起" else "▼ 展开",
-                                fontSize = 11.sp,
-                                color = if (message.isOutgoing) Color.White.copy(alpha = 0.7f) else Color.Gray
-                            )
-                        }
-
-                        if (isSummaryExpanded) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            com.cloudchat.ui.components.MarkdownText(
-                                markdown = message.caption,
-                                fontSize = 13f,
-                                isOutgoing = message.isOutgoing
-                            )
-                        }
-                    }
-                }
+                Text(
+                    text = message.caption,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = contentColor.copy(alpha = 0.8f),
+                    modifier = Modifier.padding(bottom = 2.dp, start = 8.dp)
+                )
             }
         }
     }
@@ -5644,8 +5620,9 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
                             messages.find { it.id == id }
                         }.sortedBy { it.timestamp }
                             .map { msg ->
-                                if (msg.isTextFileFormat()) chatRepository.resolveTextContent(msg)
+                                val raw = if (msg.isTextFileFormat()) chatRepository.resolveTextContent(msg)
                                 else msg.content
+                                raw.removePrefix("<!--md-->").removePrefix("[MD]")
                             }
                             .joinToString("\n")
                         clipboardManager.setText(AnnotatedString(textToCopy))
@@ -7348,32 +7325,46 @@ fun CollapsibleTextView(
     lineHeight: androidx.compose.ui.unit.TextUnit = androidx.compose.ui.unit.TextUnit.Unspecified,
     isOutgoing: Boolean = false
 ) {
-    val lineCount = remember(text) { text.split("\n").size }
-    val estimatedLines = remember(text) { text.length / 25 }
-    var isExpanded by remember(text) { mutableStateOf(false) }
-    val showToggle = lineCount >= 12 || estimatedLines >= 12 || text.length >= 350
+    val isMarkdown = remember(text) { text.startsWith("<!--md-->") || text.startsWith("[MD]") }
+    val cleanText = remember(text) { text.removePrefix("<!--md-->").removePrefix("[MD]") }
 
-    val displayText = remember(text, isExpanded) {
+    val lineCount = remember(cleanText) { cleanText.split("\n").size }
+    val estimatedLines = remember(cleanText) { cleanText.length / 25 }
+    var isExpanded by remember(cleanText) { mutableStateOf(false) }
+    val showToggle = lineCount >= 8 || estimatedLines >= 8 || cleanText.length >= 220
+
+    val displayText = remember(cleanText, isExpanded, showToggle) {
         if (!isExpanded && showToggle) {
-            val lines = text.lines()
-            if (lines.size > 10) {
-                lines.take(10).joinToString("\n") + "\n..."
-            } else if (text.length > 300) {
-                text.take(300) + "..."
-            } else text
+            val lines = cleanText.lines()
+            if (lines.size > 8) {
+                lines.take(8).joinToString("\n") + "\n..."
+            } else if (cleanText.length > 200) {
+                cleanText.take(200) + "..."
+            } else cleanText
         } else {
-            text
+            cleanText
         }
     }
 
     Column(modifier = modifier) {
         androidx.compose.foundation.text.selection.SelectionContainer {
-            com.cloudchat.ui.components.MarkdownText(
-                markdown = displayText,
-                color = color,
-                fontSize = fontSize.value,
-                isOutgoing = isOutgoing
-            )
+            if (isMarkdown) {
+                com.cloudchat.ui.components.MarkdownText(
+                    markdown = displayText,
+                    color = color,
+                    fontSize = fontSize.value,
+                    isOutgoing = isOutgoing
+                )
+            } else {
+                Text(
+                    text = displayText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = color,
+                    fontSize = fontSize,
+                    lineHeight = lineHeight,
+                    textAlign = TextAlign.Start
+                )
+            }
         }
         if (showToggle) {
             Box(
