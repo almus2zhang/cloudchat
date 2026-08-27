@@ -164,13 +164,24 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         composable("settings") {
-                            SettingsScreen(onBack = { 
-                                if (navController.previousBackStackEntry != null) {
-                                    navController.popBackStack()
-                                } else {
-                                    navController.navigate("main")
+                            SettingsScreen(
+                                onBack = { 
+                                    if (navController.previousBackStackEntry != null) {
+                                        navController.popBackStack()
+                                    } else {
+                                        navController.navigate("main")
+                                    }
+                                },
+                                onOpenAiSettings = {
+                                    navController.navigate("ai_settings")
                                 }
-                            })
+                            )
+                        }
+                        composable("ai_settings") {
+                            com.cloudchat.ui.AiSettingsScreen(
+                                settingsRepository = settingsRepository,
+                                onBack = { navController.popBackStack() }
+                            )
                         }
                     }
                 }

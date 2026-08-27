@@ -111,6 +111,7 @@ import java.io.File
 
 val LocalTextSelectionClearKey = compositionLocalOf { 0 }
 val LocalIsTablet = compositionLocalOf { false }
+val LocalAiConfig = compositionLocalOf { com.cloudchat.model.AiConfig() }
 
 @Composable
 fun TabletSidebar(
@@ -530,6 +531,7 @@ fun MainScreen(
     var privacyPin by remember { mutableStateOf(sharedPrefs.getString("pin", "1234") ?: "1234") }
     var deleteSourceAfterSend by remember { mutableStateOf(sharedPrefs.getBoolean("delete_source_after_send", false)) }
     val appMode by settingsRepository.appMode.collectAsState(initial = com.cloudchat.model.AppMode.NOT_SET)
+    val aiConfig by settingsRepository.aiConfig.collectAsState(initial = com.cloudchat.model.AiConfig())
     val isSecurityAuthenticated by chatRepository.isSecurityAuthenticated.collectAsState()
     var showSecurityOverlay by remember { mutableStateOf(false) }
     var showGuideModal by remember { mutableStateOf(false) }
@@ -1189,7 +1191,10 @@ fun MainScreen(
     val isQuickDialogShowing = showQuickTextDialog || showQuickVoiceDialog
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isTablet = maxWidth >= 600.dp
-        CompositionLocalProvider(LocalIsTablet provides isTablet) {
+        CompositionLocalProvider(
+            LocalIsTablet provides isTablet,
+            LocalAiConfig provides aiConfig
+        ) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -2934,6 +2939,7 @@ fun AudioMessageBubble(
     contentColor: Color,
     onPlayAudio: (com.cloudchat.model.ChatMessage) -> Unit,
     onSeekAudio: ((com.cloudchat.model.ChatMessage, Float) -> Unit)? = null,
+    chatRepository: ChatRepository? = null,
     modifier: Modifier = Modifier
 ) {
     val totalSec: Int = (if (message.videoDuration > 0) message.videoDuration.toInt() else (durationMs / 1000).toInt()).coerceAtLeast(1)
@@ -2947,14 +2953,22 @@ fun AudioMessageBubble(
     } else 0f
 
     val curStr = String.format("%02d:%02d", curSec / 60, curSec % 60)
+    val aiConfig = LocalAiConfig.current
+    val isTablet = LocalIsTablet.current
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var isSummarizing by remember(message.id) { mutableStateOf(false) }
+    var isSummaryExpanded by remember(message.id) { mutableStateOf(true) }
+
+    val maxAudioWidth = if (isTablet) 420.dp else 300.dp
 
     Card(
         colors = CardDefaults.cardColors(containerColor = bubbleColor),
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp),
-        modifier = modifier.widthIn(min = 180.dp, max = 260.dp)
+        modifier = modifier.widthIn(min = 200.dp, max = maxAudioWidth)
     ) {
-        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -2998,17 +3012,94 @@ fun AudioMessageBubble(
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
                     fontSize = 12.sp,
-                    modifier = Modifier.padding(end = 4.dp)
+                    modifier = Modifier.padding(end = 2.dp)
                 )
+
+                // AI Summary Trigger Button
+                if (chatRepository != null) {
+                    IconButton(
+                        onClick = {
+                            if (isSummarizing) return@IconButton
+                            isSummarizing = true
+                            scope.launch {
+                                val res = chatRepository.generateAudioSummary(message.id, aiConfig)
+                                isSummarizing = false
+                                if (res.isFailure) {
+                                    val err = res.exceptionOrNull()?.message ?: "总结失败"
+                                    android.widget.Toast.makeText(context, "AI 总结失败: $err", android.widget.Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.size(28.dp)
+                    ) {
+                        if (isSummarizing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = contentColor,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = "AI总结",
+                                tint = contentColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
             }
 
+            // AI Summary / Caption Markdown Section
             if (!message.caption.isNullOrBlank()) {
-                Text(
-                    text = message.caption,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = contentColor.copy(alpha = 0.8f),
-                    modifier = Modifier.padding(bottom = 4.dp, start = 8.dp)
-                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (message.isOutgoing) Color.Black.copy(alpha = 0.18f) else Color.White.copy(alpha = 0.75f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { isSummaryExpanded = !isSummaryExpanded },
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp),
+                                    tint = if (message.isOutgoing) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "AI 语音总结",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (message.isOutgoing) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Text(
+                                text = if (isSummaryExpanded) "▲ 收起" else "▼ 展开",
+                                fontSize = 11.sp,
+                                color = if (message.isOutgoing) Color.White.copy(alpha = 0.7f) else Color.Gray
+                            )
+                        }
+
+                        if (isSummaryExpanded) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            com.cloudchat.ui.components.MarkdownText(
+                                markdown = message.caption,
+                                fontSize = 13f,
+                                isOutgoing = message.isOutgoing
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -3255,7 +3346,8 @@ fun DiaryBubble(
                         bubbleColor = Color(0xFF4CAF50),
                         contentColor = Color.White,
                         onPlayAudio = onPlayAudio,
-                        onSeekAudio = onSeekAudio
+                        onSeekAudio = onSeekAudio,
+                        chatRepository = chatRepository
                     )
                 }
                 MessageType.FILE -> {
@@ -3639,7 +3731,8 @@ fun ChatBubble(
                         bubbleColor = bubbleColor,
                         contentColor = contentColor,
                         onPlayAudio = onPlayAudio,
-                        onSeekAudio = onSeekAudio
+                        onSeekAudio = onSeekAudio,
+                        chatRepository = chatRepository
                     )
                 }
                 else -> {
@@ -4645,7 +4738,8 @@ fun ImageGroupBubble(
                                             bubbleColor = Color(0xFF07C160),
                                             contentColor = Color.White,
                                             onPlayAudio = onPlayAudio,
-                                            onSeekAudio = onSeekAudio
+                                            onSeekAudio = onSeekAudio,
+                                            chatRepository = chatRepository
                                         )
                                     }
                                     MessageType.FILE -> {
@@ -5439,13 +5533,19 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
             if (selectedIds.any { id -> messages.find { it.id == id }?.type == MessageType.TEXT }) {
                 val clipboardManager = LocalClipboardManager.current
                 ToolbarAction(icon = Icons.Default.ContentCopy, contentDescription = "Copy") {
-                    val textToCopy = selectedIds.mapNotNull { id ->
-                        messages.find { it.id == id }
-                    }.sortedBy { it.timestamp }
-                        .joinToString("\n") { it.content }
-                    clipboardManager.setText(AnnotatedString(textToCopy))
-                    android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
-                    onSelectionChange(emptySet())
+                    scope.launch {
+                        val textToCopy = selectedIds.mapNotNull { id ->
+                            messages.find { it.id == id }
+                        }.sortedBy { it.timestamp }
+                            .map { msg ->
+                                if (msg.isTextFileFormat()) chatRepository.resolveTextContent(msg)
+                                else msg.content
+                            }
+                            .joinToString("\n")
+                        clipboardManager.setText(AnnotatedString(textToCopy))
+                        android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                        onSelectionChange(emptySet())
+                    }
                 }
             }
 
@@ -7145,25 +7245,28 @@ fun CollapsibleTextView(
     val lineCount = remember(text) { text.split("\n").size }
     val estimatedLines = remember(text) { text.length / 25 }
     var isExpanded by remember(text) { mutableStateOf(false) }
-    var isOverflowing by remember(text) { mutableStateOf(false) }
-    val showToggle = lineCount >= 10 || estimatedLines >= 10 || text.length >= 250 || isOverflowing || isExpanded
+    val showToggle = lineCount >= 12 || estimatedLines >= 12 || text.length >= 350
+
+    val displayText = remember(text, isExpanded) {
+        if (!isExpanded && showToggle) {
+            val lines = text.lines()
+            if (lines.size > 10) {
+                lines.take(10).joinToString("\n") + "\n..."
+            } else if (text.length > 300) {
+                text.take(300) + "..."
+            } else text
+        } else {
+            text
+        }
+    }
 
     Column(modifier = modifier) {
         androidx.compose.foundation.text.selection.SelectionContainer {
-            Text(
-                text = text,
-                maxLines = if (isExpanded) Int.MAX_VALUE else 10,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                onTextLayout = { layoutResult ->
-                    if (!isExpanded && (layoutResult.hasVisualOverflow || layoutResult.lineCount >= 10)) {
-                        isOverflowing = true
-                    }
-                },
-                style = MaterialTheme.typography.bodyMedium,
+            com.cloudchat.ui.components.MarkdownText(
+                markdown = displayText,
                 color = color,
-                fontSize = fontSize,
-                lineHeight = lineHeight,
-                textAlign = TextAlign.Start
+                fontSize = fontSize.value,
+                isOutgoing = isOutgoing
             )
         }
         if (showToggle) {

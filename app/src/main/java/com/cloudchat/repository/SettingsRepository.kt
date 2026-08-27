@@ -22,6 +22,7 @@ class SettingsRepository(private val context: Context) {
     companion object {
         private val APP_MODE = stringPreferencesKey("app_mode")
         private val CATEGORIES_KEY = stringPreferencesKey("categories_json")
+        private val AI_CONFIG_KEY = stringPreferencesKey("ai_config_json")
 
         private fun getAccountsKey(mode: String) = stringPreferencesKey("accounts_json_$mode")
         private fun getCurrentAccountIdKey(mode: String) = stringPreferencesKey("current_account_id_$mode")
@@ -192,6 +193,25 @@ class SettingsRepository(private val context: Context) {
     suspend fun saveCategories(list: List<ChatCategory>) {
         context.dataStore.edit { prefs ->
             prefs[CATEGORIES_KEY] = gson.toJson(list)
+        }
+    }
+
+    val aiConfig: Flow<com.cloudchat.model.AiConfig> = context.dataStore.data.map { prefs ->
+        val json = prefs[AI_CONFIG_KEY]
+        if (json.isNullOrEmpty()) {
+            com.cloudchat.model.AiConfig()
+        } else {
+            try {
+                gson.fromJson(json, com.cloudchat.model.AiConfig::class.java) ?: com.cloudchat.model.AiConfig()
+            } catch (e: Exception) {
+                com.cloudchat.model.AiConfig()
+            }
+        }
+    }
+
+    suspend fun saveAiConfig(config: com.cloudchat.model.AiConfig) {
+        context.dataStore.edit { prefs ->
+            prefs[AI_CONFIG_KEY] = gson.toJson(config)
         }
     }
 }

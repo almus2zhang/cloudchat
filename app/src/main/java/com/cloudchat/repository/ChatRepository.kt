@@ -1303,6 +1303,44 @@ class ChatRepository(private val context: Context) {
         )
     }
 
+    suspend fun generateAudioSummary(messageId: String, aiConfig: com.cloudchat.model.AiConfig): Result<String> = withContext(Dispatchers.IO) {
+        val msg = _messages.value.find { it.id == messageId }
+            ?: return@withContext Result.failure(Exception("未找到对应的语音消息"))
+
+        val localFile = getLocalFile(msg.id, msg.content)
+        val fileToProcess = if (localFile.exists() && localFile.length() > 0) {
+            localFile
+        } else if (msg.remoteUrl != null) {
+            downloadFileToCache(msg.id, msg.content, resolveUrl(msg.remoteUrl) ?: msg.remoteUrl!!)
+        } else {
+            val uriStr = getTransientUri(msg.id, msg.content)
+            if (uriStr != null && uriStr.startsWith("file://")) {
+                File(uriStr.removePrefix("file://"))
+            } else null
+        }
+
+        if (fileToProcess == null || !fileToProcess.exists() || fileToProcess.length() == 0L) {
+            return@withContext Result.failure(Exception("语音文件未就绪或下载失败"))
+        }
+
+        val result = com.cloudchat.service.AiService.transcribeAndSummarize(fileToProcess, aiConfig)
+        if (result.isSuccess) {
+            val summaryText = result.getOrNull() ?: ""
+            _messages.update { list ->
+                list.map { m ->
+                    if (m.id == messageId) {
+                        m.copy(caption = summaryText, lastModified = System.currentTimeMillis())
+                    } else m
+                }
+            }
+            saveLocalHistory(currentConfig?.id ?: "")
+            syncHistory()
+            Result.success(summaryText)
+        } else {
+            result
+        }
+    }
+
     suspend fun deleteMessages(ids: List<String>) {
         val selectedMsgs = _messages.value.filter { it.id in ids }
         val targetContents = selectedMsgs.map { it.content }.filter { it.isNotBlank() }.toSet()
