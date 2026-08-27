@@ -255,6 +255,41 @@ fun AiSettingsScreen(
                             Text("OpenAI 兼容协议配置", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         }
 
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Quick Presets Row
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = currentConfig.openaiBaseUrl == "https://api.siliconflow.cn/v1",
+                                onClick = {
+                                    currentConfig = currentConfig.copy(
+                                        openaiBaseUrl = "https://api.siliconflow.cn/v1",
+                                        openaiWhisperModel = "FunAudioLLM/SenseVoiceSmall",
+                                        openaiChatModel = "deepseek-ai/DeepSeek-V4-Flash"
+                                    )
+                                },
+                                label = { Text("⚡ 硅基流动预设", fontSize = 12.sp, fontWeight = FontWeight.Bold) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(16.dp))
+                                }
+                            )
+
+                            FilterChip(
+                                selected = currentConfig.openaiBaseUrl == "https://api.openai.com/v1",
+                                onClick = {
+                                    currentConfig = currentConfig.copy(
+                                        openaiBaseUrl = "https://api.openai.com/v1",
+                                        openaiWhisperModel = "whisper-1",
+                                        openaiChatModel = "gpt-4o-mini"
+                                    )
+                                },
+                                label = { Text("⚡ OpenAI 官方", fontSize = 12.sp) }
+                            )
+                        }
+
                         Spacer(modifier = Modifier.height(12.dp))
 
                         // Base URL
@@ -262,7 +297,7 @@ fun AiSettingsScreen(
                             value = currentConfig.openaiBaseUrl,
                             onValueChange = { currentConfig = currentConfig.copy(openaiBaseUrl = it) },
                             label = { Text("API 基地址 (Base URL)") },
-                            placeholder = { Text("https://api.openai.com/v1 或中转反代地址") },
+                            placeholder = { Text("https://api.siliconflow.cn/v1 或 https://api.openai.com/v1") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
@@ -273,7 +308,7 @@ fun AiSettingsScreen(
                         OutlinedTextField(
                             value = currentConfig.openaiApiKey,
                             onValueChange = { currentConfig = currentConfig.copy(openaiApiKey = it) },
-                            label = { Text("OpenAI / 中转 API Key") },
+                            label = { Text("API Key (硅基流动 / OpenAI Key)") },
                             placeholder = { Text("sk-...") },
                             modifier = Modifier.fillMaxWidth(),
                             visualTransformation = if (showOpenAiKey) VisualTransformation.None else PasswordVisualTransformation(),
@@ -290,24 +325,43 @@ fun AiSettingsScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // Whisper Model
+                        // Whisper / ASR Model
                         OutlinedTextField(
                             value = currentConfig.openaiWhisperModel,
                             onValueChange = { currentConfig = currentConfig.copy(openaiWhisperModel = it) },
-                            label = { Text("Whisper 语音转文字模型") },
-                            placeholder = { Text("whisper-1") },
+                            label = { Text("语音转文字模型 (ASR / Whisper Model)") },
+                            placeholder = { Text("FunAudioLLM/SenseVoiceSmall / whisper-1") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
 
-                        Spacer(modifier = Modifier.height(12.dp))
+                        // Quick Whisper Chips
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            listOf(
+                                "FunAudioLLM/SenseVoiceSmall",
+                                "openai/whisper-large-v3-turbo",
+                                "whisper-1"
+                            ).forEach { aModel ->
+                                SuggestionChip(
+                                    onClick = { currentConfig = currentConfig.copy(openaiWhisperModel = aModel) },
+                                    label = { Text(aModel.substringAfterLast('/'), fontSize = 11.sp) }
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
 
                         // Chat Model
                         OutlinedTextField(
                             value = currentConfig.openaiChatModel,
                             onValueChange = { currentConfig = currentConfig.copy(openaiChatModel = it) },
                             label = { Text("提炼总结大模型 (Chat Model)") },
-                            placeholder = { Text("gpt-4o-mini / deepseek-chat / qwen-turbo") },
+                            placeholder = { Text("deepseek-ai/DeepSeek-V4-Flash / deepseek-ai/DeepSeek-V3") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
@@ -316,13 +370,18 @@ fun AiSettingsScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 6.dp),
+                                .padding(vertical = 4.dp),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            listOf("gpt-4o-mini", "deepseek-chat", "gpt-4o", "qwen-turbo").forEach { mName ->
+                            listOf(
+                                "deepseek-ai/DeepSeek-V4-Flash",
+                                "deepseek-ai/DeepSeek-V3",
+                                "gpt-4o-mini",
+                                "Qwen/Qwen2.5-7B-Instruct"
+                            ).forEach { mName ->
                                 SuggestionChip(
                                     onClick = { currentConfig = currentConfig.copy(openaiChatModel = mName) },
-                                    label = { Text(mName, fontSize = 11.sp) }
+                                    label = { Text(mName.substringAfterLast('/'), fontSize = 11.sp) }
                                 )
                             }
                         }
