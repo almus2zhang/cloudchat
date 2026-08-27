@@ -1303,14 +1303,20 @@ class ChatRepository(private val context: Context) {
         )
     }
 
-    suspend fun generateAudioSummary(messageId: String, aiConfig: com.cloudchat.model.AiConfig): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun generateAudioSummary(
+        messageId: String,
+        aiConfig: com.cloudchat.model.AiConfig,
+        onProgress: ((String) -> Unit)? = null
+    ): Result<String> = withContext(Dispatchers.IO) {
         val msg = _messages.value.find { it.id == messageId }
             ?: return@withContext Result.failure(Exception("未找到对应的语音消息"))
 
+        onProgress?.invoke("正在定位本地语音文件...")
         val localFile = getLocalFile(msg.id, msg.content)
         val fileToProcess = if (localFile.exists() && localFile.length() > 0) {
             localFile
         } else if (msg.remoteUrl != null) {
+            onProgress?.invoke("本地无缓存，正在从云端下载音频...")
             downloadFileToCache(msg.id, msg.content, resolveUrl(msg.remoteUrl) ?: msg.remoteUrl!!)
         } else {
             val uriStr = getTransientUri(msg.id, msg.content)
@@ -1323,7 +1329,7 @@ class ChatRepository(private val context: Context) {
             return@withContext Result.failure(Exception("语音文件未就绪或下载失败"))
         }
 
-        val result = com.cloudchat.service.AiService.transcribeAndSummarize(fileToProcess, aiConfig)
+        val result = com.cloudchat.service.AiService.transcribeAndSummarize(fileToProcess, aiConfig, onProgress)
         if (result.isSuccess) {
             val summaryText = result.getOrNull() ?: ""
             _messages.update { list ->

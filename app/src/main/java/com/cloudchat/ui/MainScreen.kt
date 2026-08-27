@@ -2958,6 +2958,8 @@ fun AudioMessageBubble(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var isSummarizing by remember(message.id) { mutableStateOf(false) }
+    var summaryProgressStatus by remember(message.id) { mutableStateOf<String?>(null) }
+    var summaryError by remember(message.id) { mutableStateOf<String?>(null) }
     var isSummaryExpanded by remember(message.id) { mutableStateOf(true) }
 
     val maxAudioWidth = if (isTablet) 420.dp else 300.dp
@@ -3020,13 +3022,18 @@ fun AudioMessageBubble(
                     IconButton(
                         onClick = {
                             if (isSummarizing) return@IconButton
+                            summaryError = null
                             isSummarizing = true
+                            summaryProgressStatus = "正在准备音频..."
                             scope.launch {
-                                val res = chatRepository.generateAudioSummary(message.id, aiConfig)
+                                val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
+                                    summaryProgressStatus = status
+                                }
                                 isSummarizing = false
                                 if (res.isFailure) {
-                                    val err = res.exceptionOrNull()?.message ?: "总结失败"
-                                    android.widget.Toast.makeText(context, "AI 总结失败: $err", android.widget.Toast.LENGTH_LONG).show()
+                                    summaryError = res.exceptionOrNull()?.message ?: "总结失败"
+                                } else {
+                                    summaryProgressStatus = null
                                 }
                             }
                         },
@@ -3045,6 +3052,105 @@ fun AudioMessageBubble(
                                 tint = contentColor,
                                 modifier = Modifier.size(18.dp)
                             )
+                        }
+                    }
+                }
+            }
+
+            // Real-time Progress Status Card
+            if (isSummarizing) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (message.isOutgoing) Color.Black.copy(alpha = 0.25f) else Color(0xFFE3F2FD),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 2.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = if (message.isOutgoing) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = summaryProgressStatus ?: "AI 正在分析中...",
+                            fontSize = 12.sp,
+                            color = if (message.isOutgoing) Color.White else MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            // Error Status Card with Retry
+            if (summaryError != null && !isSummarizing) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (message.isOutgoing) Color.Black.copy(alpha = 0.35f) else Color(0xFFFFEBEE),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 2.dp)
+                ) {
+                    Column(modifier = Modifier.padding(8.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                tint = if (message.isOutgoing) Color(0xFFFF8A80) else Color(0xFFD32F2F),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "AI 总结失败",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (message.isOutgoing) Color(0xFFFF8A80) else Color(0xFFD32F2F)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = summaryError!!,
+                            fontSize = 11.sp,
+                            color = if (message.isOutgoing) Color.White.copy(alpha = 0.9f) else Color(0xFFC62828),
+                            lineHeight = 15.sp
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    if (isSummarizing || chatRepository == null) return@TextButton
+                                    summaryError = null
+                                    isSummarizing = true
+                                    summaryProgressStatus = "正在准备音频..."
+                                    scope.launch {
+                                        val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
+                                            summaryProgressStatus = status
+                                        }
+                                        isSummarizing = false
+                                        if (res.isFailure) {
+                                            summaryError = res.exceptionOrNull()?.message ?: "总结失败"
+                                        } else {
+                                            summaryProgressStatus = null
+                                        }
+                                    }
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "重试",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (message.isOutgoing) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 }

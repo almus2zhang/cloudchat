@@ -29,17 +29,19 @@ object AiService {
      */
     suspend fun transcribeAndSummarize(
         audioFile: File,
-        config: AiConfig
+        config: AiConfig,
+        onProgress: ((String) -> Unit)? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         if (!audioFile.exists() || audioFile.length() == 0L) {
             return@withContext Result.failure(Exception("音频文件不存在或大小为0"))
         }
 
         try {
+            onProgress?.invoke("正在准备音频文件 (${audioFile.length() / 1024} KB)...")
             if (config.provider.lowercase() == "gemini") {
-                summarizeWithGemini(audioFile, config)
+                summarizeWithGemini(audioFile, config, onProgress)
             } else {
-                summarizeWithOpenAi(audioFile, config)
+                summarizeWithOpenAi(audioFile, config, onProgress)
             }
         } catch (e: Exception) {
             Log.e(TAG, "AI processing failed", e)
@@ -110,7 +112,8 @@ object AiService {
 
     private suspend fun summarizeWithGemini(
         audioFile: File,
-        config: AiConfig
+        config: AiConfig,
+        onProgress: ((String) -> Unit)? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         if (config.geminiApiKey.isBlank()) {
             return@withContext Result.failure(Exception("未配置 Gemini API Key，请在【设置 -> AI大模型配置】中设置"))
@@ -119,6 +122,8 @@ object AiService {
         val baseUrl = config.geminiBaseUrl.trimEnd('/')
         val model = config.geminiModel.trim().ifBlank { "gemini-2.5-flash" }
         val url = "$baseUrl/v1beta/models/$model:generateContent?key=${config.geminiApiKey.trim()}"
+
+        onProgress?.invoke("正在通过 Gemini ($model) 分析语音并生成总结...")
 
         val ext = audioFile.extension.lowercase()
         val mimeType = when (ext) {
@@ -167,14 +172,18 @@ object AiService {
         val respBody = response.body?.string() ?: ""
 
         if (!response.isSuccessful) {
-            return@withContext Result.failure(Exception("Gemini API 请求失败 (${response.code}): $respBody"))
+            val errorMsg = try {
+                val json = gson.fromJson(respBody, JsonObject::class.java)
+                json.getAsJsonObject("error")?.get("message")?.asString ?: respBody
+            } catch (e: Exception) { respBody }
+            return@withContext Result.failure(Exception("Gemini 请求失败 (${response.code}): $errorMsg"))
         }
 
         try {
             val json = gson.fromJson(respBody, JsonObject::class.java)
             val candidates = json.getAsJsonArray("candidates")
             if (candidates == null || candidates.size() == 0) {
-                return@withContext Result.failure(Exception("Gemini 未返回有效内容: $respBody"))
+                return@withContext Result.failure(Exception("Gemini 未返回有效内容"))
             }
             val text = candidates[0].asJsonObject
                 .getAsJsonObject("content")
@@ -190,17 +199,21 @@ object AiService {
 
     private suspend fun summarizeWithOpenAi(
         audioFile: File,
-        config: AiConfig
+        config: AiConfig,
+        onProgress: ((String) -> Unit)? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         if (config.openaiApiKey.isBlank()) {
-            return@withContext Result.failure(Exception("未配置 OpenAI API Key，请在【设置 -> AI大模型配置】中设置"))
+            return@withContext Result.failure(Exception("未配置 OpenAI / 硅基流动 API Key，请在【设置 -> AI大模型配置】中设置"))
         }
 
         val baseUrl = config.openaiBaseUrl.trimEnd('/')
 
-        // Step 1: Transcribe via Whisper
-        val whisperModel = config.openaiWhisperModel.trim().ifBlank { "whisper-1" }
+        // Step 1: Transcribe via Whisper / SenseVoice
+        val whisperModel = config.openaiWhisperModel.trim().ifBlank { "FunAudioLLM/SenseVoiceSmall" }
         val transcriptionUrl = "$baseUrl/audio/transcriptions"
+        val whisperShortName = whisperModel.substringAfterLast('/')
+
+        onProgress?.invoke("1/2 正在进行语音识别转写 ($whisperShortName)...")
 
         val ext = audioFile.extension.lowercase()
         val mimeType = when (ext) {
@@ -211,10 +224,11 @@ object AiService {
             else -> "audio/mp4"
         }
 
+        val uploadFileName = if (audioFile.name.contains('.')) audioFile.name else "${audioFile.name}.m4a"
         val audioRequestBody = audioFile.asRequestBody(mimeType.toMediaTypeOrNull())
         val multipartBody = MultipartBody.Builder()
             .setType(MultipartBody.FORM)
-            .addFormDataPart("file", audioFile.name, audioRequestBody)
+            .addFormDataPart("file", uploadFileName, audioRequestBody)
             .addFormDataPart("model", whisperModel)
             .addFormDataPart("response_format", "json")
             .build()
@@ -229,7 +243,11 @@ object AiService {
         val transRespBody = transResponse.body?.string() ?: ""
 
         if (!transResponse.isSuccessful) {
-            return@withContext Result.failure(Exception("Whisper 转写失败 (${transResponse.code}): $transRespBody"))
+            val errorMsg = try {
+                val json = gson.fromJson(transRespBody, JsonObject::class.java)
+                json.getAsJsonObject("error")?.get("message")?.asString ?: transRespBody
+            } catch (e: Exception) { transRespBody }
+            return@withContext Result.failure(Exception("语音转写失败 (${transResponse.code}): $errorMsg"))
         }
 
         val transcribedText: String = try {
@@ -240,12 +258,15 @@ object AiService {
         }
 
         if (transcribedText.isBlank()) {
-            return@withContext Result.failure(Exception("Whisper 未能识别到语音文本内容"))
+            return@withContext Result.failure(Exception("语音转写结果为空，未识别到有效语音"))
         }
 
         // Step 2: Summarize via Chat Completion
-        val chatModel = config.openaiChatModel.trim().ifBlank { "gpt-4o-mini" }
+        val chatModel = config.openaiChatModel.trim().ifBlank { "deepseek-ai/DeepSeek-V4-Flash" }
         val chatUrl = "$baseUrl/chat/completions"
+        val chatShortName = chatModel.substringAfterLast('/')
+
+        onProgress?.invoke("2/2 正在通过 $chatShortName 生成分级要点总结...")
 
         val prompt = config.summaryPrompt.ifBlank {
             "请将这段语音内容准确转写为文字，并提炼输出结构清晰的 Markdown 分级总结，格式如下：\n### 📝 语音转写\n(此处为转写原文)\n\n### 💡 要点总结\n- (核心要点1)\n- (核心要点2)"
@@ -278,23 +299,28 @@ object AiService {
         val chatRespBody = chatResponse.body?.string() ?: ""
 
         if (!chatResponse.isSuccessful) {
-            return@withContext Result.failure(Exception("Chat 模型总结失败 (${chatResponse.code}): $chatRespBody"))
+            val errorMsg = try {
+                val json = gson.fromJson(chatRespBody, JsonObject::class.java)
+                json.getAsJsonObject("error")?.get("message")?.asString ?: chatRespBody
+            } catch (e: Exception) { chatRespBody }
+            return@withContext Result.failure(Exception("大模型总结失败 (${chatResponse.code}): $errorMsg"))
         }
 
         try {
             val json = gson.fromJson(chatRespBody, JsonObject::class.java)
             val choices = json.getAsJsonArray("choices")
             if (choices == null || choices.size() == 0) {
-                return@withContext Result.failure(Exception("模型未返回有效内容: $chatRespBody"))
+                return@withContext Result.failure(Exception("大模型未返回有效内容"))
             }
             val text = choices[0].asJsonObject
                 .getAsJsonObject("message")
                 .get("content").asString
 
+            onProgress?.invoke("总结完成！")
             Result.success(text.trim())
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse Chat response: $chatRespBody", e)
-            Result.failure(Exception("解析 Chat 响应失败: ${e.message}"))
+            Result.failure(Exception("解析总结结果失败: ${e.message}"))
         }
     }
 }
