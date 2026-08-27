@@ -2977,6 +2977,37 @@ fun AudioMessageBubble(
     var summaryProgressStatus by remember(message.id) { mutableStateOf<String?>(null) }
     var summaryError by remember(message.id) { mutableStateOf<String?>(null) }
     var summaryJob by remember(message.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var showAiMenu by remember(message.id) { mutableStateOf(false) }
+    var lastTranscribeOnly by remember(message.id) { mutableStateOf(false) }
+
+    val startAiTask: (Boolean) -> Unit = { transcribeOnly ->
+        if (chatRepository != null && !isSummarizing) {
+            lastTranscribeOnly = transcribeOnly
+            summaryError = null
+            isSummarizing = true
+            onSummarizingStateChange?.invoke(true)
+            summaryProgressStatus = if (transcribeOnly) "正在准备语音转写..." else "正在准备音频文件..."
+            summaryJob = scope.launch {
+                try {
+                    val res = chatRepository.generateAudioSummary(message.id, aiConfig, transcribeOnly = transcribeOnly) { status ->
+                        summaryProgressStatus = status
+                    }
+                    isSummarizing = false
+                    onSummarizingStateChange?.invoke(false)
+                    if (res.isFailure) {
+                        summaryError = res.exceptionOrNull()?.message ?: (if (transcribeOnly) "转写失败" else "总结失败")
+                    } else {
+                        summaryProgressStatus = null
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    isSummarizing = false
+                    onSummarizingStateChange?.invoke(false)
+                    summaryProgressStatus = null
+                    summaryError = null
+                }
+            }
+        }
+    }
 
     val maxAudioWidth = if (isTablet) 420.dp else 300.dp
 
@@ -3033,56 +3064,75 @@ fun AudioMessageBubble(
                     modifier = Modifier.padding(end = 2.dp)
                 )
 
-                // AI Summary Trigger Button
+                // AI Action Trigger Button with Choice Menu
                 if (chatRepository != null) {
-                    IconButton(
-                        onClick = {
-                            if (isSummarizing) return@IconButton
-                            summaryError = null
-                            isSummarizing = true
-                            onSummarizingStateChange?.invoke(true)
-                            summaryProgressStatus = "正在准备音频..."
-                            summaryJob = scope.launch {
-                                try {
-                                    val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
-                                        summaryProgressStatus = status
-                                    }
-                                    isSummarizing = false
-                                    onSummarizingStateChange?.invoke(false)
-                                    if (res.isFailure) {
-                                        summaryError = res.exceptionOrNull()?.message ?: "总结失败"
-                                    } else {
-                                        summaryProgressStatus = null
-                                    }
-                                } catch (e: kotlinx.coroutines.CancellationException) {
-                                    isSummarizing = false
-                                    onSummarizingStateChange?.invoke(false)
-                                    summaryProgressStatus = null
-                                    summaryError = null
-                                }
+                    Box {
+                        IconButton(
+                            onClick = {
+                                if (isSummarizing) return@IconButton
+                                showAiMenu = true
+                            },
+                            modifier = Modifier.size(28.dp)
+                        ) {
+                            if (isSummarizing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    color = contentColor,
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = "AI处理",
+                                    tint = contentColor,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
-                        },
-                        modifier = Modifier.size(28.dp)
-                    ) {
-                        if (isSummarizing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = contentColor,
-                                strokeWidth = 2.dp
+                        }
+
+                        DropdownMenu(
+                            expanded = showAiMenu,
+                            onDismissRequest = { showAiMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text("✨ AI 语音总结", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text("完整转写并由大模型提炼要点", fontSize = 11.sp, color = Color.Gray)
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    showAiMenu = false
+                                    startAiTask(false)
+                                }
                             )
-                        } else {
-                            Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = "AI总结",
-                                tint = contentColor,
-                                modifier = Modifier.size(18.dp)
+
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.TextFields, contentDescription = null, tint = Color(0xFF4CAF50), modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Column {
+                                            Text("📝 仅转文字", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text("极速识别为文本，不调用总结", fontSize = 11.sp, color = Color.Gray)
+                                        }
+                                    }
+                                },
+                                onClick = {
+                                    showAiMenu = false
+                                    startAiTask(true)
+                                }
                             )
                         }
                     }
                 }
             }
 
-            // Real-time Progress Status Card with Cancel Button
+            // Real-time Progress Status Card with Cancel Button (Auto-wrapping text)
             if (isSummarizing) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Surface(
@@ -3093,30 +3143,24 @@ fun AudioMessageBubble(
                         .padding(horizontal = 2.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = if (message.isOutgoing) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = summaryProgressStatus ?: "AI 正在处理中...",
+                            fontSize = 11.5.sp,
+                            color = if (message.isOutgoing) Color.White else MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            lineHeight = 16.sp,
                             modifier = Modifier.weight(1f)
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(13.dp),
-                                strokeWidth = 2.dp,
-                                color = if (message.isOutgoing) Color(0xFFFFD54F) else MaterialTheme.colorScheme.primary
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = summaryProgressStatus ?: "AI 正在分析中...",
-                                fontSize = 11.5.sp,
-                                color = if (message.isOutgoing) Color.White else MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1
-                            )
-                        }
-
-                        // Cancel button
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                         TextButton(
                             onClick = {
                                 summaryJob?.cancel()
@@ -3125,7 +3169,7 @@ fun AudioMessageBubble(
                                 onSummarizingStateChange?.invoke(false)
                                 summaryProgressStatus = null
                                 summaryError = null
-                                android.widget.Toast.makeText(context, "已取消 AI 总结", android.widget.Toast.LENGTH_SHORT).show()
+                                android.widget.Toast.makeText(context, "已取消", android.widget.Toast.LENGTH_SHORT).show()
                             },
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                             modifier = Modifier.height(26.dp)
@@ -3161,7 +3205,7 @@ fun AudioMessageBubble(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "AI 总结失败",
+                                text = if (lastTranscribeOnly) "语音转写失败" else "AI 总结失败",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (message.isOutgoing) Color(0xFFFF8A80) else Color(0xFFD32F2F)
@@ -3179,32 +3223,7 @@ fun AudioMessageBubble(
                             horizontalArrangement = Arrangement.End
                         ) {
                             TextButton(
-                                onClick = {
-                                    if (isSummarizing || chatRepository == null) return@TextButton
-                                    summaryError = null
-                                    isSummarizing = true
-                                    onSummarizingStateChange?.invoke(true)
-                                    summaryProgressStatus = "正在准备音频..."
-                                    summaryJob = scope.launch {
-                                        try {
-                                            val res = chatRepository.generateAudioSummary(message.id, aiConfig) { status ->
-                                                summaryProgressStatus = status
-                                            }
-                                            isSummarizing = false
-                                            onSummarizingStateChange?.invoke(false)
-                                            if (res.isFailure) {
-                                                summaryError = res.exceptionOrNull()?.message ?: "总结失败"
-                                            } else {
-                                                summaryProgressStatus = null
-                                            }
-                                        } catch (e: kotlinx.coroutines.CancellationException) {
-                                            isSummarizing = false
-                                            onSummarizingStateChange?.invoke(false)
-                                            summaryProgressStatus = null
-                                            summaryError = null
-                                        }
-                                    }
-                                },
+                                onClick = { startAiTask(lastTranscribeOnly) },
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                             ) {
                                 Text(

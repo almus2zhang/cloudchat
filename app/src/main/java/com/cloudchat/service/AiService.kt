@@ -22,19 +22,20 @@ object AiService {
     private const val TAG = "AiService"
     private val gson = Gson()
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(120, TimeUnit.SECONDS)
-        .writeTimeout(120, TimeUnit.SECONDS)
+        .connectTimeout(45, TimeUnit.SECONDS)
+        .readTimeout(180, TimeUnit.SECONDS)
+        .writeTimeout(180, TimeUnit.SECONDS)
         .build()
 
     /**
      * Transcribes and summarizes an audio file using either Gemini or OpenAI compatible API.
      * Supports intelligent auto-segmentation (300s chunk + 3s overlap), context stitching,
-     * and partial output preservation if cancelled.
+     * transcribeOnly mode, and partial output preservation if cancelled.
      */
     suspend fun transcribeAndSummarize(
         audioFile: File,
         config: AiConfig,
+        transcribeOnly: Boolean = false,
         onProgress: ((String) -> Unit)? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         if (!audioFile.exists() || audioFile.length() == 0L) {
@@ -105,6 +106,11 @@ object AiService {
                     "**${chunk.timeLabel}**\n$text"
                 }
 
+                if (transcribeOnly) {
+                    onProgress?.invoke("转写完成！")
+                    return@withContext Result.success("### 📝 语音转写 (全文)\n$fullTranscribedText")
+                }
+
                 // Step 2: Global Summarization with full context
                 onProgress?.invoke("分段转写完成，正在由大模型通读全文生成分级总结...")
                 val summaryResult = summarizeTextWithChatModel(fullTranscribedText, config)
@@ -113,18 +119,34 @@ object AiService {
                     val summary = summaryResult.getOrNull() ?: ""
                     "### 📝 语音转写 (全文)\n$fullTranscribedText\n\n$summary"
                 } else {
-                    "### 📝 语音转写 (全文)\n$fullTranscribedText"
+                    val err = summaryResult.exceptionOrNull()?.message ?: "大模型响应超时"
+                    "### 📝 语音转写 (全文)\n$fullTranscribedText\n\n> ⚠️ *提示：大模型总结未成功 ($err)，已为您完整保留文字转写内容。*"
                 }
 
                 onProgress?.invoke("总结完成！")
                 Result.success(finalOutput.trim())
             } else {
                 // Short audio: Single pass processing
-                onProgress?.invoke("正在准备音频文件 (${audioFile.length() / 1024} KB)...")
-                if (config.provider.lowercase() == "gemini") {
-                    summarizeWithGemini(audioFile, config, onProgress)
+                if (transcribeOnly) {
+                    onProgress?.invoke("正在进行语音识别转写...")
+                    val textRes = if (config.provider.lowercase() == "gemini") {
+                        transcribeChunkWithGemini(audioFile, config)
+                    } else {
+                        transcribeChunkWithOpenAi(audioFile, config)
+                    }
+                    if (textRes.isSuccess) {
+                        onProgress?.invoke("转写完成！")
+                        Result.success(textRes.getOrNull()?.trim() ?: "")
+                    } else {
+                        textRes
+                    }
                 } else {
-                    summarizeWithOpenAi(audioFile, config, onProgress)
+                    onProgress?.invoke("正在准备音频文件 (${audioFile.length() / 1024} KB)...")
+                    if (config.provider.lowercase() == "gemini") {
+                        summarizeWithGemini(audioFile, config, onProgress)
+                    } else {
+                        summarizeWithOpenAi(audioFile, config, onProgress)
+                    }
                 }
             }
         } catch (e: CancellationException) {

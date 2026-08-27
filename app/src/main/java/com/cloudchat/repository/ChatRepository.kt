@@ -1306,6 +1306,7 @@ class ChatRepository(private val context: Context) {
     suspend fun generateAudioSummary(
         messageId: String,
         aiConfig: com.cloudchat.model.AiConfig,
+        transcribeOnly: Boolean = false,
         onProgress: ((String) -> Unit)? = null
     ): Result<String> = withContext(Dispatchers.IO) {
         val audioMsg = _messages.value.find { it.id == messageId }
@@ -1329,7 +1330,7 @@ class ChatRepository(private val context: Context) {
             return@withContext Result.failure(Exception("语音文件未就绪或下载失败"))
         }
 
-        val result = com.cloudchat.service.AiService.transcribeAndSummarize(fileToProcess, aiConfig, onProgress)
+        val result = com.cloudchat.service.AiService.transcribeAndSummarize(fileToProcess, aiConfig, transcribeOnly, onProgress)
         if (result.isSuccess) {
             val summaryText = result.getOrNull() ?: ""
             val mdContent = if (summaryText.startsWith("<!--md-->")) summaryText else "<!--md-->$summaryText"
