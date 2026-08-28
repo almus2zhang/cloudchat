@@ -812,6 +812,31 @@ class WebDavStorageProvider(
         }
     }
 
+    override suspend fun deleteShareFile(fileName: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val clean = fileName.trim().trim('/')
+            if (clean.isBlank() || clean.contains("..") || clean.startsWith("/")) return@withContext false
+            val baseName = clean.substringAfterLast('/').substringBefore('?').substringBefore('#').trim()
+            if (baseName.isBlank()) return@withContext false
+            val sharePath = "share/$baseName"
+            runWithRetry { currentBaseUrl ->
+                val encoded = encodePath(sharePath)
+                val url = "$currentBaseUrl$encoded"
+                val request = Request.Builder()
+                    .url(url)
+                    .addHeader("Authorization", auth)
+                    .delete()
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    response.isSuccessful || response.code == 404
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("WebDavStorage", "deleteShareFile failed for $fileName", e)
+            false
+        }
+    }
+
     override suspend fun uploadText(text: String, fileName: String): String = withContext(Dispatchers.IO) {
         val safe = safeFileName(fileName) ?: throw IllegalArgumentException("Unsafe fileName: '$fileName'")
         runWithRetry { currentBaseUrl ->

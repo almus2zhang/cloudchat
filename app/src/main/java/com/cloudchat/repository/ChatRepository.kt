@@ -1399,7 +1399,28 @@ class ChatRepository(private val context: Context) {
         // Asynchronously recycle files from cloud
         GlobalScope.launch(Dispatchers.IO) {
             val provider = storageProvider ?: return@launch
+            val shareBaseUrl = currentConfig?.shareBaseUrl?.trim()?.trimEnd('/') ?: ""
+
             messagesToDelete.forEach { msg ->
+                // If message content starts with shareBaseUrl, delete corresponding file from share/ directory
+                if (shareBaseUrl.isNotBlank()) {
+                    val rawText = if (msg.type == com.cloudchat.model.MessageType.TEXT) {
+                        if (msg.isTextFileFormat()) resolveTextContent(msg) else msg.content
+                    } else msg.content
+                    val textTrimmed = rawText.trim()
+                    if (textTrimmed.startsWith(shareBaseUrl)) {
+                        val remaining = textTrimmed.removePrefix(shareBaseUrl).trimStart('/')
+                        val shareFileName = remaining.substringBefore(" ").substringBefore("\n").substringBefore("?").substringBefore("#").trim()
+                        if (shareFileName.isNotBlank()) {
+                            try {
+                                provider.deleteShareFile(shareFileName)
+                            } catch (e: Exception) {
+                                Log.w("ChatRepository", "Failed to delete share file: $shareFileName", e)
+                            }
+                        }
+                    }
+                }
+
                 if (msg.type != com.cloudchat.model.MessageType.TEXT && msg.content.isNotBlank()) {
                     // Recycle main file
                     try { provider.recycleFile(msg.content) } catch (e: Exception) {}

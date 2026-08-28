@@ -49,4 +49,6 @@ interface StorageProvider {
     suspend fun copyRemoteFile(srcPath: String, destPath: String): Boolean = false
     /** 拷贝文件或文本到远程 share/ 子目录，返回目标文件名（如 xxx.jpg 或 text_123.txt） */
     suspend fun copyToShare(fileName: String?, textContent: String?): String? = null
+    /** 删除 share/ 子目录中的指定文件，返回是否成功 */
+    suspend fun deleteShareFile(fileName: String): Boolean = false
 }

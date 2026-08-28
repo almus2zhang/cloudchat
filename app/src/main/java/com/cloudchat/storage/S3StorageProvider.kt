@@ -188,6 +188,21 @@ class S3StorageProvider(
         }
     }
 
+    override suspend fun deleteShareFile(fileName: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val clean = fileName.trim().trim('/')
+            if (clean.isBlank() || clean.contains("..") || clean.startsWith("/")) return@withContext false
+            val baseName = clean.substringAfterLast('/').substringBefore('?').substringBefore('#').trim()
+            if (baseName.isBlank()) return@withContext false
+            val key = "$userPrefix" + "share/$baseName"
+            s3Client.deleteObject(config.bucket, key)
+            true
+        } catch (e: Exception) {
+            Log.e("S3Storage", "deleteShareFile failed for $fileName", e)
+            false
+        }
+    }
+
     override fun getFullUrl(fileName: String): String {
         val encodedName = java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")
         val key = "$userPrefix$encodedName"
