@@ -7413,11 +7413,16 @@ fun CollapsibleTextView(
     val isMarkdown = remember(text) { text.startsWith("<!--md-->") || text.startsWith("[MD]") }
     val cleanText = remember(text) { text.removePrefix("<!--md-->").removePrefix("[MD]") }
 
-    val lines = remember(cleanText) { cleanText.lines() }
-    val lineCount = remember(lines) { lines.size }
-    val estimatedLines = remember(cleanText) { cleanText.length / 25 }
+    val weightedLength = remember(cleanText) {
+        var len = 0
+        for (c in cleanText) {
+            len += if (c.code > 127) 2 else 1
+        }
+        len
+    }
     var isExpanded by remember(cleanText) { mutableStateOf(false) }
-    val showToggle = lineCount > 3 || estimatedLines > 3 || cleanText.length > 80
+    // 300个字符以内（汉字150）不折叠，超过300字符才出现展开和折叠，折叠后只显示三行
+    val showToggle = weightedLength > 300
 
     val toggleButton: @Composable () -> Unit = {
         if (showToggle) {
