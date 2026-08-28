@@ -2254,6 +2254,31 @@ class ChatRepository(private val context: Context) {
         syncHistory()
     }
 
+    suspend fun remoteShareMessages(messageIds: Set<String>): Int = withContext(Dispatchers.IO) {
+        val provider = storageProvider ?: return@withContext 0
+        val targetMessages = _messages.value.filter { messageIds.contains(it.id) }
+        var successCount = 0
+
+        for (msg in targetMessages) {
+            try {
+                val isFile = msg.type != com.cloudchat.model.MessageType.TEXT && msg.type != com.cloudchat.model.MessageType.FOLDER
+                val isTextFile = msg.isTextFileFormat()
+                val fileName = if (isFile || isTextFile) msg.content else null
+                val textContent = if (msg.type == com.cloudchat.model.MessageType.TEXT) {
+                    if (msg.isTextFileFormat()) resolveTextContent(msg) else msg.content
+                } else null
+
+                if (fileName != null || textContent != null) {
+                    val ok = provider.copyToShare(fileName, textContent)
+                    if (ok) successCount++
+                }
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "remoteShareMessages error for msg ${msg.id}", e)
+            }
+        }
+        successCount
+    }
+
     suspend fun ungroupMessages(messages: List<ChatMessage>) {
         val selectedIds = messages.map { it.id }.toSet()
 

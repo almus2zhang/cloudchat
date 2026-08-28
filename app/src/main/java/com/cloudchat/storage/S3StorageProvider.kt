@@ -164,6 +164,29 @@ class S3StorageProvider(
         }
     }
 
+    override suspend fun copyToShare(fileName: String?, textContent: String?): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (!fileName.isNullOrBlank()) {
+                val clean = fileName.trim().trim('/')
+                val baseName = clean.substringAfterLast('/')
+                val sourceKey = "$userPrefix$clean"
+                val destKey = "$userPrefix" + "share/$baseName"
+                s3Client.copyObject(config.bucket, sourceKey, config.bucket, destKey)
+                true
+            } else if (!textContent.isNullOrBlank()) {
+                val timestamp = System.currentTimeMillis()
+                val destKey = "share/text_$timestamp.txt"
+                uploadText(textContent, destKey)
+                true
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            Log.e("S3Storage", "copyToShare failed", e)
+            false
+        }
+    }
+
     override fun getFullUrl(fileName: String): String {
         val encodedName = java.net.URLEncoder.encode(fileName, "UTF-8").replace("+", "%20")
         val key = "$userPrefix$encodedName"

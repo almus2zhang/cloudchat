@@ -5780,6 +5780,19 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
                 shareSelectedMessages(context, chatRepository, messages, selectedIds)
             }
 
+            // 7b. Remote Share (拷贝到远程 share/ 目录)
+            ToolbarAction(icon = Icons.Default.CloudUpload, contentDescription = "远程Share") {
+                scope.launch {
+                    val count = chatRepository.remoteShareMessages(selectedIds)
+                    if (count > 0) {
+                        android.widget.Toast.makeText(context, "已成功将 $count 个条目的文件拷贝至远程 share 目录", android.widget.Toast.LENGTH_SHORT).show()
+                    } else {
+                        android.widget.Toast.makeText(context, "未找到可拷贝的文件或拷贝失败", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    onSelectionChange(emptySet())
+                }
+            }
+
             // 移出隐私空间（仅在隐私模式下显示）
             if (isPrivacyMode) {
                 ToolbarAction(

@@ -787,6 +787,28 @@ class WebDavStorageProvider(
         }
     }
 
+    override suspend fun copyToShare(fileName: String?, textContent: String?): Boolean = withContext(Dispatchers.IO) {
+        try {
+            mkdirRecursive("share")
+            if (!fileName.isNullOrBlank()) {
+                val clean = fileName.trim().trim('/')
+                if (clean.isBlank() || clean.contains("..") || clean.startsWith("/")) return@withContext false
+                val baseName = clean.substringAfterLast('/')
+                val destPath = "share/$baseName"
+                return@withContext copyRemoteFile(clean, destPath)
+            } else if (!textContent.isNullOrBlank()) {
+                val timestamp = System.currentTimeMillis()
+                val textFilePath = "share/text_$timestamp.txt"
+                val stream = textContent.byteInputStream(Charsets.UTF_8)
+                return@withContext uploadFileToPath(stream, textFilePath, "text/plain; charset=utf-8")
+            }
+            false
+        } catch (e: Exception) {
+            Log.e("WebDavStorage", "copyToShare failed", e)
+            false
+        }
+    }
+
     override suspend fun uploadText(text: String, fileName: String): String = withContext(Dispatchers.IO) {
         val safe = safeFileName(fileName) ?: throw IllegalArgumentException("Unsafe fileName: '$fileName'")
         runWithRetry { currentBaseUrl ->

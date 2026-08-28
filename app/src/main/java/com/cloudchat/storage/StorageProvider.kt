@@ -47,4 +47,6 @@ interface StorageProvider {
     suspend fun deleteDirectory(dirPath: String): Boolean = false
     /** 远程复制文件（WebDAV COPY），从 srcPath 到 destPath，返回是否成功 */
     suspend fun copyRemoteFile(srcPath: String, destPath: String): Boolean = false
+    /** 拷贝文件或文本到远程 share/ 子目录 */
+    suspend fun copyToShare(fileName: String?, textContent: String?): Boolean = false
 }
