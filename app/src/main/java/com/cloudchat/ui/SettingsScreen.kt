@@ -510,6 +510,15 @@ fun SettingsScreen(
                             placeholder = { Text("例如: https://diary.example.com") },
                             modifier = Modifier.fillMaxWidth()
                         )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        TextField(
+                            value = if (isJianguoyun) "" else config.shareBaseUrl,
+                            onValueChange = { if (!isJianguoyun) editingConfig = config.copy(shareBaseUrl = it) },
+                            enabled = !isJianguoyun,
+                            label = { Text(if (isJianguoyun) "Share 对外访问根 URL (坚果云模式不可用)" else "Share 对外访问根 URL (Share Base URL)") },
+                            placeholder = { Text("例如: https://share.example.com") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
 
                     if (config.type == StorageType.WEBDAV) {

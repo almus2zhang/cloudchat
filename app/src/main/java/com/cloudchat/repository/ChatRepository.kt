@@ -2254,10 +2254,13 @@ class ChatRepository(private val context: Context) {
         syncHistory()
     }
 
-    suspend fun remoteShareMessages(messageIds: Set<String>): Int = withContext(Dispatchers.IO) {
-        val provider = storageProvider ?: return@withContext 0
+    suspend fun remoteShareMessages(messageIds: Set<String>): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val provider = storageProvider ?: return@withContext Pair(0, 0)
+        val config = currentConfig
         val targetMessages = _messages.value.filter { messageIds.contains(it.id) }
         var successCount = 0
+        val generatedLinks = mutableListOf<String>()
+        val shareBaseUrl = config?.shareBaseUrl?.trim()?.trimEnd('/') ?: ""
 
         for (msg in targetMessages) {
             try {
@@ -2269,14 +2272,40 @@ class ChatRepository(private val context: Context) {
                 } else null
 
                 if (fileName != null || textContent != null) {
-                    val ok = provider.copyToShare(fileName, textContent)
-                    if (ok) successCount++
+                    val destFileName = provider.copyToShare(fileName, textContent)
+                    if (!destFileName.isNullOrBlank()) {
+                        successCount++
+                        if (shareBaseUrl.isNotBlank()) {
+                            generatedLinks.add("$shareBaseUrl/$destFileName")
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 Log.e("ChatRepository", "remoteShareMessages error for msg ${msg.id}", e)
             }
         }
-        successCount
+
+        if (generatedLinks.isNotEmpty() && config != null) {
+            val now = System.currentTimeMillis()
+            val newMessages = generatedLinks.mapIndexed { idx, link ->
+                ChatMessage(
+                    id = UUID.randomUUID().toString(),
+                    sender = config.username,
+                    senderName = config.username,
+                    senderAvatar = config.avatarUrl,
+                    content = link,
+                    timestamp = now + idx,
+                    type = com.cloudchat.model.MessageType.TEXT,
+                    isOutgoing = true,
+                    status = com.cloudchat.model.MessageStatus.SUCCESS,
+                    lastModified = now + idx
+                )
+            }
+            _messages.update { current -> current + newMessages }
+            syncHistory()
+        }
+
+        Pair(successCount, generatedLinks.size)
     }
 
     suspend fun ungroupMessages(messages: List<ChatMessage>) {

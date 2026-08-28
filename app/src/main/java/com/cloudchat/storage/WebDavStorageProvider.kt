@@ -787,25 +787,28 @@ class WebDavStorageProvider(
         }
     }
 
-    override suspend fun copyToShare(fileName: String?, textContent: String?): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun copyToShare(fileName: String?, textContent: String?): String? = withContext(Dispatchers.IO) {
         try {
             mkdirRecursive("share")
             if (!fileName.isNullOrBlank()) {
                 val clean = fileName.trim().trim('/')
-                if (clean.isBlank() || clean.contains("..") || clean.startsWith("/")) return@withContext false
+                if (clean.isBlank() || clean.contains("..") || clean.startsWith("/")) return@withContext null
                 val baseName = clean.substringAfterLast('/')
                 val destPath = "share/$baseName"
-                return@withContext copyRemoteFile(clean, destPath)
+                val ok = copyRemoteFile(clean, destPath)
+                if (ok) return@withContext baseName else return@withContext null
             } else if (!textContent.isNullOrBlank()) {
                 val timestamp = System.currentTimeMillis()
-                val textFilePath = "share/text_$timestamp.txt"
+                val baseName = "text_$timestamp.txt"
+                val textFilePath = "share/$baseName"
                 val stream = textContent.byteInputStream(Charsets.UTF_8)
-                return@withContext uploadFileToPath(stream, textFilePath, "text/plain; charset=utf-8")
+                val ok = uploadFileToPath(stream, textFilePath, "text/plain; charset=utf-8")
+                if (ok) return@withContext baseName else return@withContext null
             }
-            false
+            null
         } catch (e: Exception) {
             Log.e("WebDavStorage", "copyToShare failed", e)
-            false
+            null
         }
     }
 

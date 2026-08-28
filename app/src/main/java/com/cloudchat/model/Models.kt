@@ -82,6 +82,7 @@ data class ServerConfig(
     val webDavIgnoreCert: Boolean = false, // 忽略证书校验（用于自签名/私有 CA 的 WebDAV，如 Lucky）
     val webDavChunkSize: Long = 0L, // 0 means no chunking, >0 means chunk size in bytes
     val diaryBaseUrl: String = "", // 日记对外访问根 URL (Diary Base URL)
+    val shareBaseUrl: String = "", // 远程 Share 对外访问根 URL (Share Base URL)
     val messageTemplate: String = "default" // 消息展示模板: "default" | "diary"
 )
 
