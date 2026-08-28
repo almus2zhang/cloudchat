@@ -2308,6 +2308,187 @@ class ChatRepository(private val context: Context) {
         Pair(successCount, generatedLinks.size)
     }
 
+    suspend fun forwardMessagesToConfig(
+        targetConfig: ServerConfig,
+        messageIds: Set<String>,
+        onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }
+    ): Pair<Int, String?> = withContext(Dispatchers.IO) {
+        val targetMessages = _messages.value.filter { messageIds.contains(it.id) }
+        if (targetMessages.isEmpty()) return@withContext Pair(0, "未选中任何有效消息")
+
+        val targetProvider: StorageProvider = try {
+            if (targetConfig.type == com.cloudchat.model.StorageType.S3) {
+                S3StorageProvider(targetConfig, targetConfig.saveDir)
+            } else {
+                WebDavStorageProvider(targetConfig, targetConfig.saveDir, false)
+            }
+        } catch (e: Exception) {
+            return@withContext Pair(0, "初始化目标存储失败: ${e.message}")
+        }
+
+        var successCount = 0
+        val now = System.currentTimeMillis()
+        val generatedTargetMessages = mutableListOf<ChatMessage>()
+
+        for ((index, msg) in targetMessages.withIndex()) {
+            onProgress(index + 1, targetMessages.size)
+            val newMsgId = UUID.randomUUID().toString()
+            val msgTimestamp = now + index
+
+            try {
+                if (msg.type == com.cloudchat.model.MessageType.TEXT) {
+                    val rawText = if (msg.isTextFileFormat()) resolveTextContent(msg) else msg.content
+                    val isOffload = rawText.length >= 500
+                    var content = rawText
+                    var isTextFile = false
+                    var textPreview: String? = null
+
+                    if (isOffload) {
+                        val txtFileName = "text_${newMsgId.take(8)}.txt"
+                        targetProvider.uploadText(rawText, txtFileName)
+                        content = txtFileName
+                        isTextFile = true
+                        textPreview = rawText.take(100)
+                    }
+
+                    val newMsg = ChatMessage(
+                        id = newMsgId,
+                        sender = targetConfig.username,
+                        senderName = targetConfig.username,
+                        senderAvatar = targetConfig.avatarUrl,
+                        content = content,
+                        timestamp = msgTimestamp,
+                        type = com.cloudchat.model.MessageType.TEXT,
+                        isOutgoing = true,
+                        status = MessageStatus.SUCCESS,
+                        isTextFile = isTextFile,
+                        textPreview = textPreview,
+                        categories = msg.categories,
+                        locationAddress = msg.locationAddress,
+                        lastModified = msgTimestamp
+                    )
+                    generatedTargetMessages.add(newMsg)
+                    successCount++
+                } else if (msg.type in listOf(
+                        com.cloudchat.model.MessageType.IMAGE,
+                        com.cloudchat.model.MessageType.VIDEO,
+                        com.cloudchat.model.MessageType.AUDIO,
+                        com.cloudchat.model.MessageType.FILE
+                    )) {
+                    val localFile = getLocalFile(msg.id, msg.content)
+                    val effectiveFile = if (localFile.exists() && localFile.length() > 0) {
+                        localFile
+                    } else {
+                        val curProvider = storageProvider
+                        if (curProvider != null) {
+                            try {
+                                curProvider.downloadFile(msg.content, localFile, null)
+                                if (localFile.exists() && localFile.length() > 0) localFile else null
+                            } catch (e: Exception) {
+                                null
+                            }
+                        } else null
+                    }
+
+                    if (effectiveFile != null) {
+                        val origFileName = msg.content.substringAfterLast("/")
+                        val cleanName = if (origFileName.contains("_")) origFileName.substringAfter("_") else origFileName
+                        val newFileName = "${System.currentTimeMillis()}_${cleanName}"
+
+                        val mimeType = when (msg.type) {
+                            com.cloudchat.model.MessageType.IMAGE -> "image/jpeg"
+                            com.cloudchat.model.MessageType.VIDEO -> "video/mp4"
+                            com.cloudchat.model.MessageType.AUDIO -> "audio/mp4"
+                            else -> "application/octet-stream"
+                        }
+                        targetProvider.uploadFile(effectiveFile.inputStream(), newFileName, mimeType, effectiveFile.length(), null)
+
+                        var thumbUrl: String? = null
+                        if (msg.type == com.cloudchat.model.MessageType.IMAGE || msg.type == com.cloudchat.model.MessageType.VIDEO) {
+                            val thumbFile = generateThumbnail(Uri.fromFile(effectiveFile), msg.type)
+                            if (thumbFile != null && thumbFile.exists()) {
+                                val thumbName = "thumb_$newFileName"
+                                targetProvider.uploadFile(thumbFile.inputStream(), thumbName, "image/jpeg", thumbFile.length(), null)
+                                thumbUrl = thumbName
+                            }
+                        }
+
+                        val newMsg = ChatMessage(
+                            id = newMsgId,
+                            sender = targetConfig.username,
+                            senderName = targetConfig.username,
+                            senderAvatar = targetConfig.avatarUrl,
+                            content = newFileName,
+                            timestamp = msgTimestamp,
+                            type = msg.type,
+                            isOutgoing = true,
+                            remoteUrl = newFileName,
+                            thumbnailUrl = thumbUrl,
+                            fileSize = effectiveFile.length(),
+                            videoDuration = msg.videoDuration,
+                            status = MessageStatus.SUCCESS,
+                            categories = msg.categories,
+                            lastModified = msgTimestamp
+                        )
+                        generatedTargetMessages.add(newMsg)
+                        successCount++
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "Failed to forward message ${msg.id}", e)
+            }
+        }
+
+        if (generatedTargetMessages.isNotEmpty()) {
+            try {
+                val indexJson = targetProvider.downloadText("chat_index.json")
+                val shardNames = mutableSetOf<String>()
+                if (indexJson != null) {
+                    try {
+                        val list: List<String> = gson.fromJson(indexJson, object : TypeToken<List<String>>() {}.type)
+                        shardNames.addAll(list)
+                    } catch (e: Exception) {}
+                }
+
+                val shardsData = mutableMapOf<String, MutableList<ChatMessage>>()
+                generatedTargetMessages.forEach { msg ->
+                    val shardName = getMonthShardName(msg.timestamp)
+                    shardNames.add(shardName)
+                    if (shardsData[shardName] == null) shardsData[shardName] = mutableListOf()
+                    shardsData[shardName]?.add(msg)
+                }
+
+                shardsData.forEach { (shardName, newMsgs) ->
+                    var cloudList: List<ChatMessage> = emptyList()
+                    try {
+                        val json = targetProvider.downloadText(shardName)
+                        if (json != null) {
+                            val rawList: List<ChatMessage>? = try { gson.fromJson(json, object : TypeToken<List<ChatMessage>>() {}.type) } catch (e: Exception) { null }
+                            cloudList = rawList?.mapNotNull { sanitizeMessage(it) } ?: emptyList()
+                        }
+                    } catch (e: Exception) {}
+
+                    val cloudMap = cloudList.associateBy { it.id }.toMutableMap()
+                    newMsgs.forEach { msg ->
+                        cloudMap[msg.id] = msg
+                    }
+                    val mergedList = cloudMap.values.sortedBy { it.timestamp }
+                    targetProvider.uploadText(gson.toJson(mergedList), shardName)
+                }
+
+                targetProvider.uploadText(gson.toJson(shardNames.toList()), "chat_index.json")
+
+                if (targetConfig.id == currentConfig?.id) {
+                    _messages.update { current -> current + generatedTargetMessages }
+                }
+            } catch (e: Exception) {
+                Log.e("ChatRepository", "Failed to update target cloud shards", e)
+            }
+        }
+
+        Pair(successCount, null)
+    }
+
     suspend fun ungroupMessages(messages: List<ChatMessage>) {
         val selectedIds = messages.map { it.id }.toSet()
 

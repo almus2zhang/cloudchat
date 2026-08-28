@@ -552,6 +552,10 @@ fun MainScreen(
     var showEditTextDialog by remember { mutableStateOf(false) }
     var showEditCaptionDialog by remember { mutableStateOf(false) }
     var editingTargetMessage by remember { mutableStateOf<com.cloudchat.model.ChatMessage?>(null) }
+    var showForwardToConfigDialog by remember { mutableStateOf(false) }
+    var forwardTargetMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var isForwarding by remember { mutableStateOf(false) }
+    var forwardProgressText by remember { mutableStateOf("") }
     var isMediaSyncing by remember { mutableStateOf(false) }
     var showImagePicker by remember { mutableStateOf(false) }
     var showCalendarDialog by remember { mutableStateOf(false) }
@@ -1894,7 +1898,11 @@ fun MainScreen(
                     },
                     onDelete = { showDeleteMessagesConfirmDialog = true },
                     rangeSelectActive = rangeSelectActive,
-                    onToggleRangeSelect = { toggleRangeSelect() }
+                    onToggleRangeSelect = { toggleRangeSelect() },
+                    onForwardToConfig = {
+                        forwardTargetMessageIds = selectedIds
+                        showForwardToConfigDialog = true
+                    }
                 )
             }
         }
@@ -2112,6 +2120,41 @@ fun MainScreen(
                     selectedIds = emptySet()
                 }
                 showDeleteMessagesConfirmDialog = false
+            }
+        )
+
+        // 转发到其他配置 对话框
+        ForwardToConfigDialog(
+            isOpen = showForwardToConfigDialog,
+            accounts = accounts,
+            currentConfig = currentConfig,
+            messageCount = forwardTargetMessageIds.size,
+            isForwarding = isForwarding,
+            progressText = forwardProgressText,
+            onDismiss = {
+                if (!isForwarding) {
+                    showForwardToConfigDialog = false
+                    forwardTargetMessageIds = emptySet()
+                }
+            },
+            onConfirm = { targetAccount ->
+                scope.launch {
+                    isForwarding = true
+                    forwardProgressText = "准备转发..."
+                    val (count, err) = chatRepository.forwardMessagesToConfig(targetAccount, forwardTargetMessageIds) { cur, total ->
+                        forwardProgressText = "正在逐条转发 ($cur/$total)..."
+                    }
+                    isForwarding = false
+                    showForwardToConfigDialog = false
+                    val targetName = targetAccount.name.ifBlank { targetAccount.username.ifBlank { "目标配置" } }
+                    if (err != null) {
+                        android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_LONG).show()
+                    } else {
+                        android.widget.Toast.makeText(context, "已成功将 $count 条消息逐条转发至【$targetName】", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    selectedIds = emptySet()
+                    forwardTargetMessageIds = emptySet()
+                }
             }
         )
 
@@ -5634,7 +5677,8 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
     onGenerateDiary: (Set<String>) -> Unit,
     onDelete: () -> Unit,
     rangeSelectActive: Boolean = false,
-    onToggleRangeSelect: () -> Unit = {}
+    onToggleRangeSelect: () -> Unit = {},
+    onForwardToConfig: () -> Unit = {}
 ) {
     if (selectedIds.isEmpty()) return
     Surface(
@@ -5796,6 +5840,11 @@ fun androidx.compose.foundation.layout.ColumnScope.SelectionToolbar(
                     }
                     onSelectionChange(emptySet())
                 }
+            }
+
+            // 7c. 转发到其他配置
+            ToolbarAction(icon = Icons.Default.Send, contentDescription = "转发到其他配置") {
+                onForwardToConfig()
             }
 
             // 移出隐私空间（仅在隐私模式下显示）
@@ -7729,6 +7778,199 @@ fun DebugLogsDialog(show: Boolean, onDismiss: () -> Unit) {
                 }
                 TextButton(onClick = onDismiss) {
                     Text("关闭")
+                }
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ForwardToConfigDialog(
+    isOpen: Boolean,
+    accounts: List<com.cloudchat.model.ServerConfig>,
+    currentConfig: com.cloudchat.model.ServerConfig?,
+    messageCount: Int,
+    isForwarding: Boolean,
+    progressText: String,
+    onDismiss: () -> Unit,
+    onConfirm: (com.cloudchat.model.ServerConfig) -> Unit
+) {
+    if (!isOpen) return
+    val availableAccounts = remember(accounts, currentConfig) {
+        accounts.filter { it.id != currentConfig?.id }
+    }
+    var selectedAccount by remember(availableAccounts) {
+        mutableStateOf(availableAccounts.firstOrNull())
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!isForwarding) onDismiss() },
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    Icons.Default.Send,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Text("转发到其他配置", fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = "已选中 $messageCount 条消息，将逐条发送至目标配置",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                if (isForwarding) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth().padding(8.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        Text(
+                            text = progressText.ifBlank { "正在转发中..." },
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                } else if (availableAccounts.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "暂无其他可用配置。请先在「设置」中添加更多配置。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 280.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(availableAccounts) { account ->
+                            val isSelected = selectedAccount?.id == account.id
+                            val displayName = account.name.ifBlank { account.username.ifBlank { "未命名配置" } }
+                            val serverAddr = if (account.type == com.cloudchat.model.StorageType.S3) {
+                                "${account.endpoint}/${account.bucket}"
+                            } else {
+                                account.serverPath
+                            }
+
+                            Card(
+                                onClick = { selectedAccount = account },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                                ),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Text(
+                                                    text = displayName.take(1).uppercase(),
+                                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 14.sp
+                                                )
+                                            }
+                                        }
+                                        Column {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = displayName,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = FontWeight.SemiBold
+                                                )
+                                                Surface(
+                                                    shape = RoundedCornerShape(4.dp),
+                                                    color = MaterialTheme.colorScheme.surfaceVariant
+                                                ) {
+                                                    Text(
+                                                        text = account.type.name,
+                                                        fontSize = 10.sp,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
+                                            }
+                                            Text(
+                                                text = serverAddr,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    RadioButton(
+                                        selected = isSelected,
+                                        onClick = { selectedAccount = account }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (!isForwarding) {
+                Button(
+                    onClick = {
+                        selectedAccount?.let { onConfirm(it) }
+                    },
+                    enabled = selectedAccount != null && availableAccounts.isNotEmpty()
+                ) {
+                    Text("确认转发")
+                }
+            }
+        },
+        dismissButton = {
+            if (!isForwarding) {
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
                 }
             }
         }
