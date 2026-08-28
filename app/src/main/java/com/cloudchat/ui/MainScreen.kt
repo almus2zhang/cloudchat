@@ -7535,7 +7535,7 @@ fun CollapsibleTextView(
         }
     }
 
-    Column(modifier = modifier.fillMaxWidth()) {
+    Column(modifier = modifier) {
         if (showToggle) {
             toggleButton()
             Spacer(modifier = Modifier.height(2.dp))
@@ -7546,11 +7546,10 @@ fun CollapsibleTextView(
                 Box(
                     modifier = if (!isExpanded && showToggle) {
                         Modifier
-                            .fillMaxWidth()
                             .heightIn(max = 68.dp)
                             .clip(RoundedCornerShape(0.dp))
                     } else {
-                        Modifier.fillMaxWidth()
+                        Modifier
                     }
                 ) {
                     com.cloudchat.ui.components.MarkdownText(
