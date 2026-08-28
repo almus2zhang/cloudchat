@@ -2311,10 +2311,11 @@ class ChatRepository(private val context: Context) {
     suspend fun forwardMessagesToConfig(
         targetConfig: ServerConfig,
         messageIds: Set<String>,
-        onProgress: (current: Int, total: Int) -> Unit = { _, _ -> }
-    ): Pair<Int, String?> = withContext(Dispatchers.IO) {
+        isCancelled: () -> Boolean = { false },
+        onProgress: (current: Int, total: Int, detail: String) -> Unit = { _, _, _ -> }
+    ): Triple<Int, Boolean, String?> = withContext(Dispatchers.IO) {
         val targetMessages = _messages.value.filter { messageIds.contains(it.id) }
-        if (targetMessages.isEmpty()) return@withContext Pair(0, "未选中任何有效消息")
+        if (targetMessages.isEmpty()) return@withContext Triple(0, false, "未选中任何有效消息")
 
         val targetProvider: StorageProvider = try {
             if (targetConfig.type == com.cloudchat.model.StorageType.S3) {
@@ -2323,15 +2324,29 @@ class ChatRepository(private val context: Context) {
                 WebDavStorageProvider(targetConfig, targetConfig.saveDir, false)
             }
         } catch (e: Exception) {
-            return@withContext Pair(0, "初始化目标存储失败: ${e.message}")
+            return@withContext Triple(0, false, "初始化目标存储失败: ${e.message}")
         }
 
         var successCount = 0
+        var wasCancelled = false
         val now = System.currentTimeMillis()
         val generatedTargetMessages = mutableListOf<ChatMessage>()
 
         for ((index, msg) in targetMessages.withIndex()) {
-            onProgress(index + 1, targetMessages.size)
+            if (isCancelled() || !coroutineContext.isActive) {
+                wasCancelled = true
+                break
+            }
+
+            val detailText = when (msg.type) {
+                com.cloudchat.model.MessageType.IMAGE -> "正在处理图片 (${index + 1}/${targetMessages.size})..."
+                com.cloudchat.model.MessageType.VIDEO -> "正在处理视频 (${index + 1}/${targetMessages.size})..."
+                com.cloudchat.model.MessageType.AUDIO -> "正在处理语音 (${index + 1}/${targetMessages.size})..."
+                com.cloudchat.model.MessageType.FILE -> "正在处理文件: ${msg.content.substringAfterLast("/")} (${index + 1}/${targetMessages.size})..."
+                else -> "正在转发第 ${index + 1} / ${targetMessages.size} 条消息..."
+            }
+            onProgress(index + 1, targetMessages.size, detailText)
+
             val newMsgId = UUID.randomUUID().toString()
             val msgTimestamp = now + index
 
@@ -2406,7 +2421,7 @@ class ChatRepository(private val context: Context) {
                         var thumbUrl: String? = null
                         if (msg.type == com.cloudchat.model.MessageType.IMAGE || msg.type == com.cloudchat.model.MessageType.VIDEO) {
                             val thumbFile = generateThumbnail(Uri.fromFile(effectiveFile), msg.type)
-                            if (thumbFile != null && thumbFile.exists()) {
+                            if (thumbFile != null && thumbFile.exists() && !isCancelled()) {
                                 val thumbName = "thumb_$newFileName"
                                 targetProvider.uploadFile(thumbFile.inputStream(), thumbName, "image/jpeg", thumbFile.length(), null)
                                 thumbUrl = thumbName
@@ -2428,6 +2443,7 @@ class ChatRepository(private val context: Context) {
                             videoDuration = msg.videoDuration,
                             status = MessageStatus.SUCCESS,
                             categories = msg.categories,
+                            caption = msg.caption,
                             lastModified = msgTimestamp
                         )
                         generatedTargetMessages.add(newMsg)
@@ -2486,7 +2502,7 @@ class ChatRepository(private val context: Context) {
             }
         }
 
-        Pair(successCount, null)
+        Triple(successCount, wasCancelled, null)
     }
 
     suspend fun ungroupMessages(messages: List<ChatMessage>) {

@@ -555,7 +555,15 @@ fun MainScreen(
     var showForwardToConfigDialog by remember { mutableStateOf(false) }
     var forwardTargetMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isForwarding by remember { mutableStateOf(false) }
-    var forwardProgressText by remember { mutableStateOf("") }
+    var isForwardCompleted by remember { mutableStateOf(false) }
+    var isForwardCancelled by remember { mutableStateOf(false) }
+    var forwardCurrent by remember { mutableIntStateOf(0) }
+    var forwardTotal by remember { mutableIntStateOf(0) }
+    var forwardProgressDetail by remember { mutableStateOf("") }
+    var forwardTargetProfileName by remember { mutableStateOf("") }
+    var forwardSuccessCount by remember { mutableIntStateOf(0) }
+    var forwardJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val forwardCancelledFlag = remember { java.util.concurrent.atomic.AtomicBoolean(false) }
     var isMediaSyncing by remember { mutableStateOf(false) }
     var showImagePicker by remember { mutableStateOf(false) }
     var showCalendarDialog by remember { mutableStateOf(false) }
@@ -1901,6 +1909,12 @@ fun MainScreen(
                     onToggleRangeSelect = { toggleRangeSelect() },
                     onForwardToConfig = {
                         forwardTargetMessageIds = selectedIds
+                        isForwarding = false
+                        isForwardCompleted = false
+                        isForwardCancelled = false
+                        forwardCurrent = 0
+                        forwardTotal = selectedIds.size
+                        forwardProgressDetail = "准备转发..."
                         showForwardToConfigDialog = true
                     }
                 )
@@ -2130,30 +2144,58 @@ fun MainScreen(
             currentConfig = currentConfig,
             messageCount = forwardTargetMessageIds.size,
             isForwarding = isForwarding,
-            progressText = forwardProgressText,
+            isCompleted = isForwardCompleted,
+            isCancelled = isForwardCancelled,
+            current = forwardCurrent,
+            total = forwardTotal,
+            progressDetail = forwardProgressDetail,
+            targetProfileName = forwardTargetProfileName,
             onDismiss = {
                 if (!isForwarding) {
                     showForwardToConfigDialog = false
                     forwardTargetMessageIds = emptySet()
+                    isForwardCompleted = false
                 }
             },
+            onCancelForward = {
+                forwardCancelledFlag.set(true)
+                forwardProgressDetail = "正在取消转发并保存已完成条目..."
+                forwardJob?.cancel()
+            },
             onConfirm = { targetAccount ->
-                scope.launch {
-                    isForwarding = true
-                    forwardProgressText = "准备转发..."
-                    val (count, err) = chatRepository.forwardMessagesToConfig(targetAccount, forwardTargetMessageIds) { cur, total ->
-                        forwardProgressText = "正在逐条转发 ($cur/$total)..."
-                    }
+                val targetName = targetAccount.name.ifBlank { targetAccount.username.ifBlank { "目标配置" } }
+                forwardTargetProfileName = targetName
+                isForwarding = true
+                isForwardCompleted = false
+                isForwardCancelled = false
+                forwardCancelledFlag.set(false)
+                forwardCurrent = 0
+                forwardTotal = forwardTargetMessageIds.size
+                forwardProgressDetail = "正在连接目标服务器..."
+
+                forwardJob = scope.launch {
+                    val (count, wasCancelled, err) = chatRepository.forwardMessagesToConfig(
+                        targetConfig = targetAccount,
+                        messageIds = forwardTargetMessageIds,
+                        isCancelled = { forwardCancelledFlag.get() },
+                        onProgress = { cur, total, detail ->
+                            forwardCurrent = cur
+                            forwardTotal = total
+                            forwardProgressDetail = detail
+                        }
+                    )
+                    forwardSuccessCount = count
                     isForwarding = false
-                    showForwardToConfigDialog = false
-                    val targetName = targetAccount.name.ifBlank { targetAccount.username.ifBlank { "目标配置" } }
-                    if (err != null) {
-                        android.widget.Toast.makeText(context, err, android.widget.Toast.LENGTH_LONG).show()
+                    isForwardCancelled = wasCancelled || forwardCancelledFlag.get()
+                    isForwardCompleted = true
+                    forwardProgressDetail = if (isForwardCancelled) {
+                        "转发已取消，已成功发送 $count 条消息"
+                    } else if (err != null) {
+                        "转发失败: $err"
                     } else {
-                        android.widget.Toast.makeText(context, "已成功将 $count 条消息逐条转发至【$targetName】", android.widget.Toast.LENGTH_SHORT).show()
+                        "已成功将全部 $count 条消息逐条发送至【$targetName】"
                     }
                     selectedIds = emptySet()
-                    forwardTargetMessageIds = emptySet()
                 }
             }
         )
@@ -7792,8 +7834,14 @@ fun ForwardToConfigDialog(
     currentConfig: com.cloudchat.model.ServerConfig?,
     messageCount: Int,
     isForwarding: Boolean,
-    progressText: String,
+    isCompleted: Boolean,
+    isCancelled: Boolean,
+    current: Int,
+    total: Int,
+    progressDetail: String,
+    targetProfileName: String,
     onDismiss: () -> Unit,
+    onCancelForward: () -> Unit,
     onConfirm: (com.cloudchat.model.ServerConfig) -> Unit
 ) {
     if (!isOpen) return
@@ -7804,20 +7852,41 @@ fun ForwardToConfigDialog(
         mutableStateOf(availableAccounts.firstOrNull())
     }
 
+    val percent = if (total > 0) ((current.toFloat() / total) * 100).toInt().coerceIn(0, 100) else 0
+
     AlertDialog(
-        onDismissRequest = { if (!isForwarding) onDismiss() },
+        onDismissRequest = {
+            if (!isForwarding) onDismiss()
+        },
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Icon(
-                    Icons.Default.Send,
+                    imageVector = when {
+                        isCompleted && isCancelled -> Icons.Default.Warning
+                        isCompleted -> Icons.Default.CheckCircle
+                        isForwarding -> Icons.Default.Send
+                        else -> Icons.Default.Send
+                    },
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = when {
+                        isCompleted && isCancelled -> Color(0xFFF59E0B)
+                        isCompleted -> Color(0xFF10B981)
+                        else -> MaterialTheme.colorScheme.primary
+                    },
                     modifier = Modifier.size(24.dp)
                 )
-                Text("转发到其他配置", fontWeight = FontWeight.Bold)
+                Text(
+                    text = when {
+                        isCompleted && isCancelled -> "转发已取消"
+                        isCompleted -> "转发完成"
+                        isForwarding -> "正在跨配置逐条转发"
+                        else -> "转发到其他配置"
+                    },
+                    fontWeight = FontWeight.Bold
+                )
             }
         },
         text = {
@@ -7825,129 +7894,188 @@ fun ForwardToConfigDialog(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(
-                    text = "已选中 $messageCount 条消息，将逐条发送至目标配置",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                if (isForwarding) {
-                    Spacer(modifier = Modifier.height(8.dp))
+                if (isForwarding || isCompleted) {
+                    // Progress & Status View
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxWidth().padding(8.dp)
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                        Text(
-                            text = progressText.ifBlank { "正在转发中..." },
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                } else if (availableAccounts.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 16.dp),
-                        contentAlignment = Alignment.Center
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "暂无其他可用配置。请先在「设置」中添加更多配置。",
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = if (isCompleted) {
+                                if (isCancelled) "已处理 $current / $total 条" else "共 $total 条全部完成"
+                            } else {
+                                "正在处理第 $current / $total 条"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Text(
+                            text = "$percent%",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = when {
+                                isCompleted && isCancelled -> Color(0xFFF59E0B)
+                                isCompleted -> Color(0xFF10B981)
+                                else -> MaterialTheme.colorScheme.primary
+                            }
+                        )
                     }
-                } else {
-                    LazyColumn(
+
+                    LinearProgressIndicator(
+                        progress = if (total > 0) (current.toFloat() / total).coerceIn(0f, 1f) else 0f,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 280.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        items(availableAccounts) { account ->
-                            val isSelected = selectedAccount?.id == account.id
-                            val displayName = account.name.ifBlank { account.username.ifBlank { "未命名配置" } }
-                            val serverAddr = if (account.type == com.cloudchat.model.StorageType.S3) {
-                                "${account.endpoint}/${account.bucket}"
-                            } else {
-                                account.serverPath
-                            }
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                        color = when {
+                            isCompleted && isCancelled -> Color(0xFFF59E0B)
+                            isCompleted -> Color(0xFF10B981)
+                            else -> MaterialTheme.colorScheme.primary
+                        }
+                    )
 
-                            Card(
-                                onClick = { selectedAccount = account },
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
-                                ),
-                                border = androidx.compose.foundation.BorderStroke(
-                                    1.dp,
-                                    if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
-                                ),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(10.dp)
+                        ) {
+                            if (isForwarding) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            } else {
+                                Icon(
+                                    imageVector = if (isCancelled) Icons.Default.Info else Icons.Default.Check,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = if (isCancelled) Color(0xFFF59E0B) else Color(0xFF10B981)
+                                )
+                            }
+                            Text(
+                                text = progressDetail.ifBlank { if (isCompleted) "转发已完成" else "正在准备转发..." },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                } else {
+                    // Profile Selection View
+                    Text(
+                        text = "已选中 $messageCount 条消息，将逐条发送至目标配置",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    if (availableAccounts.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "暂无其他可用配置。请先在「设置」中添加更多配置。",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 280.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(availableAccounts) { account ->
+                                val isSelected = selectedAccount?.id == account.id
+                                val displayName = account.name.ifBlank { account.username.ifBlank { "未命名配置" } }
+                                val serverAddr = if (account.type == com.cloudchat.model.StorageType.S3) {
+                                    "${account.endpoint}/${account.bucket}"
+                                } else {
+                                    account.serverPath
+                                }
+
+                                Card(
+                                    onClick = { selectedAccount = account },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                                    ),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                        modifier = Modifier.weight(1f)
+                                        horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Surface(
-                                            shape = CircleShape,
-                                            color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
-                                            modifier = Modifier.size(36.dp)
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            modifier = Modifier.weight(1f)
                                         ) {
-                                            Box(contentAlignment = Alignment.Center) {
-                                                Text(
-                                                    text = displayName.take(1).uppercase(),
-                                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 14.sp
-                                                )
-                                            }
-                                        }
-                                        Column {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer,
+                                                modifier = Modifier.size(36.dp)
                                             ) {
-                                                Text(
-                                                    text = displayName,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    fontWeight = FontWeight.SemiBold
-                                                )
-                                                Surface(
-                                                    shape = RoundedCornerShape(4.dp),
-                                                    color = MaterialTheme.colorScheme.surfaceVariant
-                                                ) {
+                                                Box(contentAlignment = Alignment.Center) {
                                                     Text(
-                                                        text = account.type.name,
-                                                        fontSize = 10.sp,
-                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        text = displayName.take(1).uppercase(),
+                                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSecondaryContainer,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 14.sp
                                                     )
                                                 }
                                             }
-                                            Text(
-                                                text = serverAddr,
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 1,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                            )
+                                            Column {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                ) {
+                                                    Text(
+                                                        text = displayName,
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        fontWeight = FontWeight.SemiBold
+                                                    )
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = MaterialTheme.colorScheme.surfaceVariant
+                                                    ) {
+                                                        Text(
+                                                            text = account.type.name,
+                                                            fontSize = 10.sp,
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = serverAddr,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                )
+                                            }
                                         }
+                                        RadioButton(
+                                            selected = isSelected,
+                                            onClick = { selectedAccount = account }
+                                        )
                                     }
-                                    RadioButton(
-                                        selected = isSelected,
-                                        onClick = { selectedAccount = account }
-                                    )
                                 }
                             }
                         }
@@ -7956,19 +8084,36 @@ fun ForwardToConfigDialog(
             }
         },
         confirmButton = {
-            if (!isForwarding) {
-                Button(
-                    onClick = {
-                        selectedAccount?.let { onConfirm(it) }
-                    },
-                    enabled = selectedAccount != null && availableAccounts.isNotEmpty()
-                ) {
-                    Text("确认转发")
+            when {
+                isForwarding -> {
+                    Button(
+                        onClick = onCancelForward,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("取消转发")
+                    }
+                }
+                isCompleted -> {
+                    Button(onClick = onDismiss) {
+                        Text(if (isCancelled) "关闭" else "完成")
+                    }
+                }
+                else -> {
+                    Button(
+                        onClick = {
+                            selectedAccount?.let { onConfirm(it) }
+                        },
+                        enabled = selectedAccount != null && availableAccounts.isNotEmpty()
+                    ) {
+                        Text("确认转发")
+                    }
                 }
             }
         },
         dismissButton = {
-            if (!isForwarding) {
+            if (!isForwarding && !isCompleted) {
                 TextButton(onClick = onDismiss) {
                     Text("取消")
                 }
