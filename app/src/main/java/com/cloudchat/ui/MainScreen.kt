@@ -99,9 +99,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.graphics.SolidColor
-
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.CircleShape
@@ -1200,10 +1205,22 @@ fun MainScreen(
     val isQuickDialogShowing = showQuickTextDialog || showQuickVoiceDialog
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isTablet = maxWidth >= 600.dp
+        var textSelectionClearKey by remember { mutableIntStateOf(0) }
+        val textToolbar = LocalTextToolbar.current
+        val clearAllTextSelection: () -> Unit = remember(textToolbar) {
+            {
+                textSelectionClearKey++
+                try {
+                    textToolbar.hide()
+                } catch (_: Exception) {}
+            }
+        }
+
         CompositionLocalProvider(
             LocalIsTablet provides isTablet,
             LocalAiConfig provides aiConfig,
-            LocalOnAiSummarizingChange provides { isAiSummarizingActive = it }
+            LocalOnAiSummarizingChange provides { isAiSummarizingActive = it },
+            LocalTextSelectionClearKey provides textSelectionClearKey
         ) {
             Box(
                 modifier = Modifier
@@ -1761,7 +1778,8 @@ fun MainScreen(
                 onEnterFolder = { folderStack = folderStack + it },
                 onPlayAudio = { playAudioMessage(it) },
                 rangeSelectActive = rangeSelectActive,
-                onRangeSelect = { targetId -> selectRangeTo(targetId) }
+                onRangeSelect = { targetId -> selectRangeTo(targetId) },
+                onClearTextSelection = clearAllTextSelection
             )
 
 
@@ -6031,9 +6049,16 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
     onEnterFolder: (String) -> Unit,
     onPlayAudio: (com.cloudchat.model.ChatMessage) -> Unit,
     rangeSelectActive: Boolean = false,
-    onRangeSelect: (String) -> Unit = {}
+    onRangeSelect: (String) -> Unit = {},
+    onClearTextSelection: () -> Unit = {}
 ) {
     val customFling = rememberFastFlingBehavior()
+
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) {
+            onClearTextSelection()
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -6045,6 +6070,15 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
             flingBehavior = customFling,
             modifier = Modifier
                 .fillMaxSize()
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        val down = awaitFirstDown(pass = PointerEventPass.Initial)
+                        val upOrCancel = waitForUpOrCancellation(pass = PointerEventPass.Initial)
+                        if (upOrCancel != null && !down.isConsumed) {
+                            onClearTextSelection()
+                        }
+                    }
+                }
                 .then(dragModifier),
             reverseLayout = true,
             contentPadding = PaddingValues(8.dp)
@@ -6076,6 +6110,7 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                     val isDownloading = activeDownloadIds.contains(message.id)
 
                     val onMediaClickHandler: (com.cloudchat.model.ChatMessage) -> Unit = { clickedMsg ->
+                        onClearTextSelection()
                         if (rangeSelectActive) {
                             onRangeSelect(clickedMsg.id)
                         } else if (selectedIds.isNotEmpty()) {
@@ -6097,6 +6132,7 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                         }
                     }
                     val onLongClickHandler: () -> Unit = {
+                        onClearTextSelection()
                         if (rangeSelectActive) {
                             onRangeSelect(message.id)
                         } else if (selectedIds.isEmpty()) {
@@ -6152,8 +6188,12 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                         audioDurationMs = audioDurationMs,
                         onSeekAudio = onSeekAudio,
                         onPlayAudio = onPlayAudio,
-                        onFileClick = { openFileWithDefaultApp(context, chatRepository, it) },
+                        onFileClick = {
+                            onClearTextSelection()
+                            openFileWithDefaultApp(context, chatRepository, it)
+                        },
                         onSelectToggle = { clickedMsg ->
+                            onClearTextSelection()
                             if (rangeSelectActive) {
                                 onRangeSelect(clickedMsg.id)
                             } else {
@@ -6164,10 +6204,12 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                             }
                         },
                         onMediaClick = { clickedMsg ->
+                            onClearTextSelection()
                             val index = mediaMessages.indexOfFirst { it.id == clickedMsg.id }
                             if (index != -1) onMediaPagerIndexChange(index)
                         },
                         onLongClick = { clickedMsg ->
+                            onClearTextSelection()
                             if (rangeSelectActive) {
                                 onRangeSelect(clickedMsg.id)
                             } else if (selectedIds.isEmpty()) {
@@ -6175,6 +6217,7 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                             }
                         },
                         onClickGroup = {
+                            onClearTextSelection()
                             if (selectedIds.isNotEmpty()) {
                                 val groupIds = uiItem.messages.map { it.id }.toSet()
                                 onSelectionChange(
@@ -6184,6 +6227,7 @@ fun androidx.compose.foundation.layout.ColumnScope.ChatMessageList(
                             }
                         },
                         onLongClickGroup = {
+                            onClearTextSelection()
                             val groupIds = uiItem.messages.map { it.id }.toSet()
                             onSelectionChange(
                                 if (selectedIds.containsAll(groupIds)) selectedIds - groupIds
@@ -7421,42 +7465,46 @@ fun CollapsibleTextView(
         }
     }
 
+    val textSelectionClearKey = LocalTextSelectionClearKey.current
+
     Column(modifier = modifier.fillMaxWidth()) {
         if (showToggle) {
             toggleButton()
             Spacer(modifier = Modifier.height(2.dp))
         }
 
-        androidx.compose.foundation.text.selection.SelectionContainer {
-            if (isMarkdown) {
-                Box(
-                    modifier = if (!isExpanded && showToggle) {
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 68.dp)
-                            .clip(RoundedCornerShape(0.dp))
-                    } else {
-                        Modifier.fillMaxWidth()
+        key(textSelectionClearKey) {
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                if (isMarkdown) {
+                    Box(
+                        modifier = if (!isExpanded && showToggle) {
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 68.dp)
+                                .clip(RoundedCornerShape(0.dp))
+                        } else {
+                            Modifier.fillMaxWidth()
+                        }
+                    ) {
+                        com.cloudchat.ui.components.MarkdownText(
+                            markdown = cleanText,
+                            color = color,
+                            fontSize = fontSize.value,
+                            isOutgoing = isOutgoing
+                        )
                     }
-                ) {
-                    com.cloudchat.ui.components.MarkdownText(
-                        markdown = cleanText,
+                } else {
+                    Text(
+                        text = cleanText,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = color,
-                        fontSize = fontSize.value,
-                        isOutgoing = isOutgoing
+                        fontSize = fontSize,
+                        lineHeight = lineHeight,
+                        textAlign = TextAlign.Start,
+                        maxLines = if (!isExpanded && showToggle) 3 else Int.MAX_VALUE,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                     )
                 }
-            } else {
-                Text(
-                    text = cleanText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = color,
-                    fontSize = fontSize,
-                    lineHeight = lineHeight,
-                    textAlign = TextAlign.Start,
-                    maxLines = if (!isExpanded && showToggle) 3 else Int.MAX_VALUE,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                )
             }
         }
 
