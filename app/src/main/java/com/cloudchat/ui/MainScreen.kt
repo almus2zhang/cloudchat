@@ -4715,7 +4715,11 @@ fun ImageGroupBubble(
         }
 
         val isTablet = LocalIsTablet.current
-        val maxGridWidth = if (isTablet) 340.dp else 252.dp
+        val maxGridWidth = if (isAllMedia) {
+            if (isTablet) 340.dp else 252.dp
+        } else {
+            if (isTablet) 600.dp else 340.dp
+        }
 
         Column(
             horizontalAlignment = if (isDefaultTemplate) Alignment.End else Alignment.Start,
@@ -7397,53 +7401,68 @@ fun CollapsibleTextView(
     var isExpanded by remember(cleanText) { mutableStateOf(false) }
     val showToggle = lineCount > 3 || estimatedLines > 3 || cleanText.length > 80
 
-    val displayText = remember(cleanText, lines, isExpanded, showToggle) {
-        if (!isExpanded && showToggle) {
-            if (lines.size > 3) {
-                lines.take(3).joinToString("\n") + "..."
-            } else if (cleanText.length > 80) {
-                cleanText.take(80) + "..."
-            } else {
-                cleanText
-            }
-        } else {
-            cleanText
-        }
-    }
-
-    Column(modifier = modifier) {
-        androidx.compose.foundation.text.selection.SelectionContainer {
-            if (isMarkdown) {
-                com.cloudchat.ui.components.MarkdownText(
-                    markdown = displayText,
-                    color = color,
-                    fontSize = fontSize.value,
-                    isOutgoing = isOutgoing
-                )
-            } else {
-                Text(
-                    text = displayText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = color,
-                    fontSize = fontSize,
-                    lineHeight = lineHeight,
-                    textAlign = TextAlign.Start
-                )
-            }
-        }
+    val toggleButton: @Composable () -> Unit = {
         if (showToggle) {
             Box(
                 modifier = Modifier
-                    .padding(top = 4.dp, bottom = 2.dp)
+                    .padding(vertical = 3.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(if (isOutgoing) Color.Black.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
                     .clickable { isExpanded = !isExpanded }
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
             ) {
                 Text(
                     text = if (isExpanded) "▲ 收起" else "▼ 展开全文",
                     color = if (isOutgoing) Color(0xFFFFD54F) else Color(0xFF007AFF),
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
+        }
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        if (showToggle) {
+            toggleButton()
+            Spacer(modifier = Modifier.height(2.dp))
+        }
+
+        androidx.compose.foundation.text.selection.SelectionContainer {
+            if (isMarkdown) {
+                Box(
+                    modifier = if (!isExpanded && showToggle) {
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 68.dp)
+                            .clip(RoundedCornerShape(0.dp))
+                    } else {
+                        Modifier.fillMaxWidth()
+                    }
+                ) {
+                    com.cloudchat.ui.components.MarkdownText(
+                        markdown = cleanText,
+                        color = color,
+                        fontSize = fontSize.value,
+                        isOutgoing = isOutgoing
+                    )
+                }
+            } else {
+                Text(
+                    text = cleanText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = color,
+                    fontSize = fontSize,
+                    lineHeight = lineHeight,
+                    textAlign = TextAlign.Start,
+                    maxLines = if (!isExpanded && showToggle) 3 else Int.MAX_VALUE,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        if (showToggle) {
+            Spacer(modifier = Modifier.height(2.dp))
+            toggleButton()
         }
     }
 }
