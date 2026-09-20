@@ -3859,7 +3859,7 @@ fun ChatBubble(
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                             color = contentColor,
                             fontSize = 16.sp,
-                            isOutgoing = true
+                            isOutgoing = false
                         )
                     }
                 }
@@ -7613,13 +7613,13 @@ fun CollapsibleTextView(
                 modifier = Modifier
                     .padding(vertical = 3.dp)
                     .clip(RoundedCornerShape(12.dp))
-                    .background(if (isOutgoing) Color.Black.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
                     .clickable { isExpanded = !isExpanded }
                     .padding(horizontal = 8.dp, vertical = 2.dp)
             ) {
                 Text(
                     text = if (isExpanded) "▲ 收起" else "▼ 展开全文",
-                    color = if (isOutgoing) Color(0xFFFFD54F) else Color(0xFF007AFF),
+                    color = Color(0xFF007AFF),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )

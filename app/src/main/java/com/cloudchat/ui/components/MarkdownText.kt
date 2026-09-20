@@ -251,7 +251,7 @@ fun ClickableMarkdownText(
  */
 fun buildAnnotatedMarkdown(text: String, isOutgoing: Boolean): AnnotatedString {
     return buildAnnotatedString {
-        val linkColor = if (isOutgoing) Color(0xFFFFD54F) else Color(0xFF007AFF)
+        val linkColor = Color(0xFF007AFF)
         val pattern = Regex("(\\[([^\\]]+)\\]\\((https?://\\S+|www\\.\\S+)\\)|\\*\\*.*?\\*\\*|`.*?`|\\*.*?\\*|~~.*?~~|https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+|www\\.[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)")
         var lastIndex = 0
 
@@ -342,7 +342,7 @@ fun buildAnnotatedMarkdown(text: String, isOutgoing: Boolean): AnnotatedString {
  */
 fun buildAnnotatedTextWithUrls(text: String, isOutgoing: Boolean): AnnotatedString {
     return buildAnnotatedString {
-        val linkColor = if (isOutgoing) Color(0xFFFFD54F) else Color(0xFF007AFF)
+        val linkColor = Color(0xFF007AFF)
         val pattern = Regex("(https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+|www\\.[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)")
         var lastIndex = 0
 
