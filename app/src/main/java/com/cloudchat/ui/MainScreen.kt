@@ -7512,6 +7512,7 @@ fun CollapsibleTextView(
         len
     }
     var isExpanded by remember(cleanText) { mutableStateOf(false) }
+    var selectedUrl by remember { mutableStateOf<String?>(null) }
     // 300个字符以内（汉字150）不折叠，超过300字符才出现展开和折叠，折叠后只显示三行
     val showToggle = weightedLength > 300
 
@@ -7556,20 +7557,48 @@ fun CollapsibleTextView(
                         markdown = cleanText,
                         color = color,
                         fontSize = fontSize.value,
-                        isOutgoing = isOutgoing
+                        isOutgoing = isOutgoing,
+                        onUrlClick = { clickedUrl -> selectedUrl = clickedUrl }
                     )
                 }
             } else {
-                Text(
-                    text = cleanText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = color,
-                    fontSize = fontSize,
-                    lineHeight = lineHeight,
-                    textAlign = TextAlign.Start,
-                    maxLines = if (!isExpanded && showToggle) 3 else Int.MAX_VALUE,
-                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                )
+                val annotatedString = remember(cleanText, isOutgoing) {
+                    com.cloudchat.ui.components.buildAnnotatedTextWithUrls(cleanText, isOutgoing)
+                }
+                val hasUrl = remember(annotatedString) {
+                    annotatedString.getStringAnnotations("URL", 0, annotatedString.length).isNotEmpty()
+                }
+
+                if (hasUrl) {
+                    androidx.compose.foundation.text.ClickableText(
+                        text = annotatedString,
+                        style = androidx.compose.ui.text.TextStyle(
+                            color = color,
+                            fontSize = fontSize,
+                            lineHeight = lineHeight,
+                            textAlign = TextAlign.Start
+                        ),
+                        maxLines = if (!isExpanded && showToggle) 3 else Int.MAX_VALUE,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        onClick = { offset ->
+                            annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
+                                .firstOrNull()?.let { annotation ->
+                                    selectedUrl = annotation.item
+                                }
+                        }
+                    )
+                } else {
+                    Text(
+                        text = cleanText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = color,
+                        fontSize = fontSize,
+                        lineHeight = lineHeight,
+                        textAlign = TextAlign.Start,
+                        maxLines = if (!isExpanded && showToggle) 3 else Int.MAX_VALUE,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
             }
         }
 
@@ -7577,6 +7606,99 @@ fun CollapsibleTextView(
             Spacer(modifier = Modifier.height(2.dp))
             toggleButton()
         }
+    }
+
+    // URL 点击操作弹窗（打开 / 复制 / 取消）
+    selectedUrl?.let { url ->
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { selectedUrl = null },
+            icon = {
+                androidx.compose.material3.Icon(
+                    imageVector = androidx.compose.material.icons.Icons.Default.Link,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            title = {
+                Text(
+                    text = "链接操作",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    androidx.compose.material3.Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = url,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            selectedUrl = null
+                            try {
+                                val targetUri = if (url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)) {
+                                    android.net.Uri.parse(url)
+                                } else {
+                                    android.net.Uri.parse("https://$url")
+                                }
+                                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, targetUri)
+                                context.startActivity(intent)
+                            } catch (e: Exception) {
+                                android.widget.Toast.makeText(context, "无法打开链接: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        androidx.compose.material3.Icon(
+                            imageVector = androidx.compose.material.icons.Icons.Default.OpenInBrowser,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("打开链接")
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    androidx.compose.material3.OutlinedButton(
+                        onClick = {
+                            selectedUrl = null
+                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(url))
+                            android.widget.Toast.makeText(context, "已复制链接到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        androidx.compose.material3.Icon(
+                            imageVector = androidx.compose.material.icons.Icons.Default.ContentCopy,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("复制链接")
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { selectedUrl = null }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 }
 

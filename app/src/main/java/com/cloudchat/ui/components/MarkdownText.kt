@@ -27,7 +27,8 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
     color: Color = Color.Unspecified,
     fontSize: Float = 14f,
-    isOutgoing: Boolean = false
+    isOutgoing: Boolean = false,
+    onUrlClick: ((String) -> Unit)? = null
 ) {
     val defaultColor = if (color != Color.Unspecified) color else if (isOutgoing) Color.White else MaterialTheme.colorScheme.onSurface
 
@@ -81,30 +82,36 @@ fun MarkdownText(
             // Headers
             when {
                 trimmed.startsWith("### ") -> {
-                    Text(
-                        text = buildAnnotatedMarkdown(trimmed.removePrefix("### "), isOutgoing),
+                    ClickableMarkdownText(
+                        annotatedText = buildAnnotatedMarkdown(trimmed.removePrefix("### "), isOutgoing),
                         fontWeight = FontWeight.Bold,
-                        fontSize = (fontSize + 2).sp,
+                        fontSize = fontSize + 2,
+                        lineHeight = (fontSize + 2) * 1.35f,
                         color = if (isOutgoing) Color.White else MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+                        modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
+                        onUrlClick = onUrlClick
                     )
                 }
                 trimmed.startsWith("## ") -> {
-                    Text(
-                        text = buildAnnotatedMarkdown(trimmed.removePrefix("## "), isOutgoing),
+                    ClickableMarkdownText(
+                        annotatedText = buildAnnotatedMarkdown(trimmed.removePrefix("## "), isOutgoing),
                         fontWeight = FontWeight.Bold,
-                        fontSize = (fontSize + 3.5f).sp,
+                        fontSize = fontSize + 3.5f,
+                        lineHeight = (fontSize + 3.5f) * 1.35f,
                         color = if (isOutgoing) Color.White else MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp)
+                        modifier = Modifier.padding(top = 6.dp, bottom = 2.dp),
+                        onUrlClick = onUrlClick
                     )
                 }
                 trimmed.startsWith("# ") -> {
-                    Text(
-                        text = buildAnnotatedMarkdown(trimmed.removePrefix("# "), isOutgoing),
+                    ClickableMarkdownText(
+                        annotatedText = buildAnnotatedMarkdown(trimmed.removePrefix("# "), isOutgoing),
                         fontWeight = FontWeight.ExtraBold,
-                        fontSize = (fontSize + 5).sp,
+                        fontSize = fontSize + 5,
+                        lineHeight = (fontSize + 5) * 1.35f,
                         color = if (isOutgoing) Color.White else MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+                        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+                        onUrlClick = onUrlClick
                     )
                 }
                 // Bullet list item
@@ -121,11 +128,12 @@ fun MarkdownText(
                             fontSize = (fontSize + 1).sp,
                             modifier = Modifier.padding(end = 6.dp)
                         )
-                        Text(
-                            text = buildAnnotatedMarkdown(content, isOutgoing),
-                            fontSize = fontSize.sp,
+                        ClickableMarkdownText(
+                            annotatedText = buildAnnotatedMarkdown(content, isOutgoing),
+                            fontSize = fontSize,
                             color = defaultColor,
-                            lineHeight = (fontSize * 1.35f).sp
+                            lineHeight = fontSize * 1.35f,
+                            onUrlClick = onUrlClick
                         )
                     }
                 }
@@ -145,11 +153,12 @@ fun MarkdownText(
                             fontSize = fontSize.sp,
                             modifier = Modifier.padding(end = 6.dp)
                         )
-                        Text(
-                            text = buildAnnotatedMarkdown(content, isOutgoing),
-                            fontSize = fontSize.sp,
+                        ClickableMarkdownText(
+                            annotatedText = buildAnnotatedMarkdown(content, isOutgoing),
+                            fontSize = fontSize,
                             color = defaultColor,
-                            lineHeight = (fontSize * 1.35f).sp
+                            lineHeight = fontSize * 1.35f,
+                            onUrlClick = onUrlClick
                         )
                     }
                 }
@@ -170,21 +179,24 @@ fun MarkdownText(
                                 .background(if (isOutgoing) Color.White.copy(alpha = 0.7f) else MaterialTheme.colorScheme.primary)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = buildAnnotatedMarkdown(trimmed.removePrefix("> "), isOutgoing),
+                        ClickableMarkdownText(
+                            annotatedText = buildAnnotatedMarkdown(trimmed.removePrefix("> "), isOutgoing),
                             fontStyle = FontStyle.Italic,
-                            fontSize = fontSize.sp,
-                            color = if (isOutgoing) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onSurfaceVariant
+                            fontSize = fontSize,
+                            color = if (isOutgoing) Color.White.copy(alpha = 0.9f) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            lineHeight = fontSize * 1.35f,
+                            onUrlClick = onUrlClick
                         )
                     }
                 }
                 // Regular paragraph / formatted text
                 else -> {
-                    Text(
-                        text = buildAnnotatedMarkdown(trimmed, isOutgoing),
-                        fontSize = fontSize.sp,
+                    ClickableMarkdownText(
+                        annotatedText = buildAnnotatedMarkdown(trimmed, isOutgoing),
+                        fontSize = fontSize,
                         color = defaultColor,
-                        lineHeight = (fontSize * 1.35f).sp
+                        lineHeight = fontSize * 1.35f,
+                        onUrlClick = onUrlClick
                     )
                 }
             }
@@ -192,30 +204,85 @@ fun MarkdownText(
     }
 }
 
+@Composable
+fun ClickableMarkdownText(
+    annotatedText: AnnotatedString,
+    color: Color,
+    fontSize: Float,
+    lineHeight: Float,
+    fontWeight: FontWeight? = null,
+    fontStyle: FontStyle? = null,
+    modifier: Modifier = Modifier,
+    onUrlClick: ((String) -> Unit)? = null
+) {
+    val hasUrl = annotatedText.getStringAnnotations("URL", 0, annotatedText.length).isNotEmpty()
+    if (hasUrl && onUrlClick != null) {
+        androidx.compose.foundation.text.ClickableText(
+            text = annotatedText,
+            style = TextStyle(
+                color = color,
+                fontSize = fontSize.sp,
+                lineHeight = lineHeight.sp,
+                fontWeight = fontWeight,
+                fontStyle = fontStyle
+            ),
+            modifier = modifier,
+            onClick = { offset ->
+                annotatedText.getStringAnnotations("URL", offset, offset).firstOrNull()?.let {
+                    onUrlClick(it.item)
+                }
+            }
+        )
+    } else {
+        Text(
+            text = annotatedText,
+            color = color,
+            fontSize = fontSize.sp,
+            lineHeight = lineHeight.sp,
+            fontWeight = fontWeight,
+            fontStyle = fontStyle,
+            modifier = modifier
+        )
+    }
+}
+
 /**
- * Builds an AnnotatedString for inline Markdown formatting (**bold**, *italic*, `code`, ~~strikethrough~~)
+ * Builds an AnnotatedString for inline Markdown formatting (**bold**, *italic*, `code`, ~~strikethrough~~, [link](url), raw URLs)
  */
 fun buildAnnotatedMarkdown(text: String, isOutgoing: Boolean): AnnotatedString {
     return buildAnnotatedString {
-        var i = 0
-        val len = text.length
+        val linkColor = if (isOutgoing) Color(0xFFFFD54F) else Color(0xFF007AFF)
+        val pattern = Regex("(\\[([^\\]]+)\\]\\((https?://\\S+|www\\.\\S+)\\)|\\*\\*.*?\\*\\*|`.*?`|\\*.*?\\*|~~.*?~~|https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+|www\\.[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)")
+        var lastIndex = 0
 
-        while (i < len) {
-            // Bold: **text**
-            if (i + 1 < len && text[i] == '*' && text[i + 1] == '*') {
-                val end = text.indexOf("**", i + 2)
-                if (end != -1) {
-                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
-                        append(text.substring(i + 2, end))
-                    }
-                    i = end + 2
-                    continue
-                }
+        for (match in pattern.findAll(text)) {
+            if (match.range.first > lastIndex) {
+                append(text.substring(lastIndex, match.range.first))
             }
-            // Inline code: `code`
-            if (text[i] == '`') {
-                val end = text.indexOf('`', i + 1)
-                if (end != -1) {
+            val matchText = match.value
+
+            when {
+                // Markdown link: [text](url)
+                matchText.startsWith("[") && match.groupValues.size >= 4 && match.groupValues[2].isNotEmpty() && match.groupValues[3].isNotEmpty() -> {
+                    val label = match.groupValues[2]
+                    var url = match.groupValues[3]
+                    if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+                        url = "https://$url"
+                    }
+                    pushStringAnnotation(tag = "URL", annotation = url)
+                    withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline, fontWeight = FontWeight.Medium)) {
+                        append(label)
+                    }
+                    pop()
+                }
+                // Bold: **text**
+                matchText.startsWith("**") && matchText.endsWith("**") && matchText.length >= 4 -> {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(matchText.substring(2, matchText.length - 2))
+                    }
+                }
+                // Code: `code`
+                matchText.startsWith("`") && matchText.endsWith("`") && matchText.length >= 2 -> {
                     withStyle(
                         SpanStyle(
                             fontFamily = FontFamily.Monospace,
@@ -223,37 +290,86 @@ fun buildAnnotatedMarkdown(text: String, isOutgoing: Boolean): AnnotatedString {
                             color = if (isOutgoing) Color(0xFFFFD54F) else Color(0xFFD32F2F)
                         )
                     ) {
-                        append(" ${text.substring(i + 1, end)} ")
+                        append(" ${matchText.substring(1, matchText.length - 1)} ")
                     }
-                    i = end + 1
-                    continue
                 }
-            }
-            // Italic: *text* (single star, not double)
-            if (text[i] == '*' && (i + 1 >= len || text[i + 1] != '*')) {
-                val end = text.indexOf('*', i + 1)
-                if (end != -1 && (end + 1 >= len || text[end + 1] != '*')) {
-                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                        append(text.substring(i + 1, end))
-                    }
-                    i = end + 1
-                    continue
-                }
-            }
-            // Strikethrough: ~~text~~
-            if (i + 1 < len && text[i] == '~' && text[i + 1] == '~') {
-                val end = text.indexOf("~~", i + 2)
-                if (end != -1) {
+                // Strikethrough: ~~text~~
+                matchText.startsWith("~~") && matchText.endsWith("~~") && matchText.length >= 4 -> {
                     withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) {
-                        append(text.substring(i + 2, end))
+                        append(matchText.substring(2, matchText.length - 2))
                     }
-                    i = end + 2
-                    continue
+                }
+                // Italic: *text*
+                matchText.startsWith("*") && matchText.endsWith("*") && matchText.length >= 2 -> {
+                    withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                        append(matchText.substring(1, matchText.length - 1))
+                    }
+                }
+                // Raw URL: http://... or https://... or www....
+                matchText.startsWith("http://", ignoreCase = true) || 
+                matchText.startsWith("https://", ignoreCase = true) || 
+                matchText.startsWith("www.", ignoreCase = true) -> {
+                    val cleanUrl = matchText.trimEnd('.', ',', ';', '!', '?', ')')
+                    val trailing = matchText.substring(cleanUrl.length)
+                    var targetUrl = cleanUrl
+                    if (!targetUrl.startsWith("http://", ignoreCase = true) && !targetUrl.startsWith("https://", ignoreCase = true)) {
+                        targetUrl = "https://$targetUrl"
+                    }
+                    pushStringAnnotation(tag = "URL", annotation = targetUrl)
+                    withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline, fontWeight = FontWeight.Medium)) {
+                        append(cleanUrl)
+                    }
+                    pop()
+                    if (trailing.isNotEmpty()) {
+                        append(trailing)
+                    }
+                }
+                else -> {
+                    append(matchText)
                 }
             }
+            lastIndex = match.range.last + 1
+        }
 
-            append(text[i])
-            i++
+        if (lastIndex < text.length) {
+            append(text.substring(lastIndex))
+        }
+    }
+}
+
+/**
+ * Builds an AnnotatedString for plain text with highlighted & clickable URLs
+ */
+fun buildAnnotatedTextWithUrls(text: String, isOutgoing: Boolean): AnnotatedString {
+    return buildAnnotatedString {
+        val linkColor = if (isOutgoing) Color(0xFFFFD54F) else Color(0xFF007AFF)
+        val pattern = Regex("(https?://[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+|www\\.[\\w\\-._~:/?#\\[\\]@!$&'()*+,;=%]+)")
+        var lastIndex = 0
+
+        for (match in pattern.findAll(text)) {
+            if (match.range.first > lastIndex) {
+                append(text.substring(lastIndex, match.range.first))
+            }
+            val matchText = match.value
+            val cleanUrl = matchText.trimEnd('.', ',', ';', '!', '?', ')')
+            val trailing = matchText.substring(cleanUrl.length)
+            var targetUrl = cleanUrl
+            if (!targetUrl.startsWith("http://", ignoreCase = true) && !targetUrl.startsWith("https://", ignoreCase = true)) {
+                targetUrl = "https://$targetUrl"
+            }
+            pushStringAnnotation(tag = "URL", annotation = targetUrl)
+            withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline, fontWeight = FontWeight.Medium)) {
+                append(cleanUrl)
+            }
+            pop()
+            if (trailing.isNotEmpty()) {
+                append(trailing)
+            }
+            lastIndex = match.range.last + 1
+        }
+
+        if (lastIndex < text.length) {
+            append(text.substring(lastIndex))
         }
     }
 }
