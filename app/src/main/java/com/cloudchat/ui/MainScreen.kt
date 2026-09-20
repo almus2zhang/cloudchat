@@ -580,6 +580,21 @@ fun MainScreen(
     val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val scope = rememberCoroutineScope()
 
+    // OTA Update State
+    var otaUpdateInfo by remember { mutableStateOf<com.cloudchat.manager.OtaVersionInfo?>(null) }
+    var otaDownloading by remember { mutableStateOf(false) }
+    var otaProgress by remember { mutableStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(3000)
+        val res = com.cloudchat.manager.OtaManager.checkUpdate()
+        res.onSuccess { info ->
+            if (info != null) {
+                otaUpdateInfo = info
+            }
+        }
+    }
+
     // —— 移动模式：上传成功后删除源文件（图库需用户授权确认，避免误删）——
     val sourceDeleteQueue = remember { mutableStateListOf<Uri>() }
     val sourceDeleteLauncher = remember {
@@ -2229,6 +2244,82 @@ fun MainScreen(
 
         GuideDialog(show = showGuideModal, onDismiss = { showGuideModal = false })
     DebugLogsDialog(show = showDebugLogsModal, onDismiss = { showDebugLogsModal = false })
+
+        // OTA 更新提示弹窗
+        otaUpdateInfo?.let { update ->
+            AlertDialog(
+                onDismissRequest = {
+                    if (!otaDownloading && !update.forceUpdate) {
+                        otaUpdateInfo = null
+                    }
+                },
+                title = {
+                    Text(
+                        text = "发现新版本 v${update.versionName}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "更新内容：",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = update.changelog.ifBlank { "优化体验与问题修复" },
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (otaDownloading) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            LinearProgressIndicator(
+                                progress = otaProgress / 100f,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "正在下载更新... $otaProgress%",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = !otaDownloading,
+                        onClick = {
+                            otaDownloading = true
+                            otaProgress = 0
+                            scope.launch {
+                                com.cloudchat.manager.OtaManager.downloadAndInstall(
+                                    context = context,
+                                    apkUrl = update.apkUrl,
+                                    onProgress = { p -> otaProgress = p },
+                                    onError = { err ->
+                                        otaDownloading = false
+                                        android.widget.Toast.makeText(context, "下载失败: $err", android.widget.Toast.LENGTH_LONG).show()
+                                    }
+                                )
+                            }
+                        }
+                    ) {
+                        Text(if (otaDownloading) "下载中..." else "立即更新")
+                    }
+                },
+                dismissButton = if (!update.forceUpdate && !otaDownloading) {
+                    {
+                        TextButton(onClick = { otaUpdateInfo = null }) {
+                            Text("稍后提醒")
+                        }
+                    }
+                } else null
+            )
+        }
 
         QuickActionDialogs(
             showQuickTextDialog = showQuickTextDialog,

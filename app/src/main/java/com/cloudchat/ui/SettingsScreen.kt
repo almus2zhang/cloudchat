@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.*
@@ -27,6 +28,7 @@ import java.io.OutputStreamWriter
 import java.io.InputStreamReader
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.cloudchat.model.ServerConfig
 import com.cloudchat.model.StorageType
 import com.cloudchat.repository.SettingsRepository
@@ -65,9 +67,9 @@ fun SettingsScreen(
     val context = LocalContext.current
     val settingsRepository = remember { SettingsRepository(context) }
     val coroutineScope = rememberCoroutineScope()
+    val repo = remember { com.cloudchat.repository.ChatRepository(context) }
 
     var editingConfig by remember { mutableStateOf<ServerConfig?>(null) }
-    val repo = remember { com.cloudchat.repository.ChatRepository(context) }
 
     var pendingAvatarUri by remember { mutableStateOf<Uri?>(null) }
 
@@ -91,6 +93,11 @@ fun SettingsScreen(
     var isTesting by remember { mutableStateOf(false) }
     var showDebugLogsModal by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<String?>(null) }
+
+    var isCheckingOta by remember { mutableStateOf(false) }
+    var otaDialogInfo by remember { mutableStateOf<com.cloudchat.manager.OtaVersionInfo?>(null) }
+    var otaDownloading by remember { mutableStateOf(false) }
+    var otaProgress by remember { mutableStateOf(0) }
 
     var showPasswordDialog by remember { mutableStateOf(false) }
     var passwordTargetAccount by remember { mutableStateOf<ServerConfig?>(null) }
@@ -314,6 +321,67 @@ fun SettingsScreen(
                                 DebugLogger.setLogEnabled(it)
                             }
                         )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // OTA 更新卡片
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("版本与在线更新", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text(
+                                "当前版本: v${com.cloudchat.BuildConfig.VERSION_NAME} (Build ${com.cloudchat.BuildConfig.VERSION_CODE})",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                if (!isCheckingOta) {
+                                    isCheckingOta = true
+                                    coroutineScope.launch {
+                                        val res = com.cloudchat.manager.OtaManager.checkUpdate()
+                                        isCheckingOta = false
+                                        res.fold(
+                                            onSuccess = { info ->
+                                                if (info != null) {
+                                                    otaDialogInfo = info
+                                                } else {
+                                                    android.widget.Toast.makeText(context, "当前已是最新版本 (v${com.cloudchat.BuildConfig.VERSION_NAME})", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            },
+                                            onFailure = { err ->
+                                                android.widget.Toast.makeText(context, "检查更新失败: ${err.message}", android.widget.Toast.LENGTH_LONG).show()
+                                            }
+                                        )
+                                    }
+                                }
+                            },
+                            enabled = !isCheckingOta
+                        ) {
+                            if (isCheckingOta) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("检查中")
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("检查更新")
+                            }
+                        }
                     }
                 }
 
@@ -819,6 +887,80 @@ fun SettingsScreen(
                 }
             }
         )
+        otaDialogInfo?.let { update ->
+            AlertDialog(
+                onDismissRequest = {
+                    if (!otaDownloading && !update.forceUpdate) {
+                        otaDialogInfo = null
+                    }
+                },
+                title = {
+                    Text(
+                        text = "发现新版本 v${update.versionName}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp
+                    )
+                },
+                text = {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "更新内容：",
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = update.changelog.ifBlank { "优化体验与问题修复" },
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (otaDownloading) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            LinearProgressIndicator(
+                                progress = otaProgress / 100f,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "正在下载更新... $otaProgress%",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = !otaDownloading,
+                        onClick = {
+                            otaDownloading = true
+                            otaProgress = 0
+                            coroutineScope.launch {
+                                com.cloudchat.manager.OtaManager.downloadAndInstall(
+                                    context = context,
+                                    apkUrl = update.apkUrl,
+                                    onProgress = { p -> otaProgress = p },
+                                    onError = { err ->
+                                        otaDownloading = false
+                                        android.widget.Toast.makeText(context, "下载失败: $err", android.widget.Toast.LENGTH_LONG).show()
+                                    }
+                                )
+                            }
+                        }
+                    ) {
+                        Text(if (otaDownloading) "下载中..." else "立即更新")
+                    }
+                },
+                dismissButton = if (!update.forceUpdate && !otaDownloading) {
+                    {
+                        TextButton(onClick = { otaDialogInfo = null }) {
+                            Text("取消")
+                        }
+                    }
+                } else null
+            )
+        }
         }
     }
 }
