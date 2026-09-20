@@ -3849,7 +3849,9 @@ fun ChatBubble(
                             value = chatRepository.resolveTextContent(message)
                         }
                     }
+                    val context = LocalContext.current
                     Card(
+                        modifier = Modifier.doubleTapToCopy(resolvedTextState.value, context),
                         colors = CardDefaults.cardColors(containerColor = bubbleColor),
                         shape = MaterialTheme.shapes.medium,
                         elevation = CardDefaults.cardElevation(defaultElevation = 0.5.dp)
@@ -7583,6 +7585,49 @@ fun DiaryGenerateDialog(
     }
 }
 
+fun Modifier.doubleTapToCopy(
+    text: String,
+    context: android.content.Context,
+    onDoubleClick: (() -> Unit)? = null
+): Modifier = this.pointerInput(text) {
+    val cleanText = text.removePrefix("<!--md-->").removePrefix("[MD]")
+    awaitPointerEventScope {
+        var lastPressTime = 0L
+        var lastPressPos = androidx.compose.ui.geometry.Offset.Zero
+        var consumedDoubleTap = false
+        while (true) {
+            val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+            if (event.type == androidx.compose.ui.input.pointer.PointerEventType.Press) {
+                val now = System.currentTimeMillis()
+                val currentPos = event.changes.firstOrNull()?.position ?: androidx.compose.ui.geometry.Offset.Zero
+                val isDoubleTap = (now - lastPressTime < 350L) &&
+                    (kotlin.math.hypot(currentPos.x - lastPressPos.x, currentPos.y - lastPressPos.y) < 100f)
+                if (isDoubleTap) {
+                    consumedDoubleTap = true
+                    event.changes.forEach { it.consume() }
+                    if (onDoubleClick != null) {
+                        onDoubleClick()
+                    } else if (cleanText.isNotBlank()) {
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("CloudChat", cleanText)
+                        clipboard.setPrimaryClip(clip)
+                        android.widget.Toast.makeText(context, "已复制", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                    lastPressTime = 0L
+                } else {
+                    lastPressTime = now
+                    lastPressPos = currentPos
+                }
+            } else if (event.type == androidx.compose.ui.input.pointer.PointerEventType.Release) {
+                if (consumedDoubleTap) {
+                    event.changes.forEach { it.consume() }
+                    consumedDoubleTap = false
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun CollapsibleTextView(
     text: String,
@@ -7590,8 +7635,10 @@ fun CollapsibleTextView(
     color: Color = Color(0xFF222222),
     fontSize: androidx.compose.ui.unit.TextUnit = 15.sp,
     lineHeight: androidx.compose.ui.unit.TextUnit = androidx.compose.ui.unit.TextUnit.Unspecified,
-    isOutgoing: Boolean = false
+    isOutgoing: Boolean = false,
+    onDoubleClick: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
     val isMarkdown = remember(text) { text.startsWith("<!--md-->") || text.startsWith("[MD]") }
     val cleanText = remember(text) { text.removePrefix("<!--md-->").removePrefix("[MD]") }
 
@@ -7627,7 +7674,7 @@ fun CollapsibleTextView(
         }
     }
 
-    Column(modifier = modifier) {
+    Column(modifier = modifier.doubleTapToCopy(text, context, onDoubleClick)) {
         if (showToggle) {
             toggleButton()
             Spacer(modifier = Modifier.height(2.dp))
