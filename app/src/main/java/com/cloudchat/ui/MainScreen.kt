@@ -590,7 +590,10 @@ fun MainScreen(
         val res = com.cloudchat.manager.OtaManager.checkUpdate()
         res.onSuccess { info ->
             if (info != null) {
-                otaUpdateInfo = info
+                val ignoredCode = com.cloudchat.manager.OtaManager.getIgnoredVersion(context)
+                if (info.versionCode > ignoredCode) {
+                    otaUpdateInfo = info
+                }
             }
         }
     }
@@ -2249,7 +2252,7 @@ fun MainScreen(
         otaUpdateInfo?.let { update ->
             AlertDialog(
                 onDismissRequest = {
-                    if (!otaDownloading && !update.forceUpdate) {
+                    if (!otaDownloading) {
                         otaUpdateInfo = null
                     }
                 },
@@ -2311,10 +2314,20 @@ fun MainScreen(
                         Text(if (otaDownloading) "下载中..." else "立即更新")
                     }
                 },
-                dismissButton = if (!update.forceUpdate && !otaDownloading) {
+                dismissButton = if (!otaDownloading) {
                     {
-                        TextButton(onClick = { otaUpdateInfo = null }) {
-                            Text("稍后提醒")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = {
+                                com.cloudchat.manager.OtaManager.setIgnoredVersion(context, update.versionCode)
+                                otaUpdateInfo = null
+                                android.widget.Toast.makeText(context, "已忽略版本 v${update.versionName}，不再自动提醒", android.widget.Toast.LENGTH_SHORT).show()
+                            }) {
+                                Text("忽略此版本", color = MaterialTheme.colorScheme.outline)
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            TextButton(onClick = { otaUpdateInfo = null }) {
+                                Text("稍后提醒")
+                            }
                         }
                     }
                 } else null

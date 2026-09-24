@@ -890,7 +890,7 @@ fun SettingsScreen(
         otaDialogInfo?.let { update ->
             AlertDialog(
                 onDismissRequest = {
-                    if (!otaDownloading && !update.forceUpdate) {
+                    if (!otaDownloading) {
                         otaDialogInfo = null
                     }
                 },
@@ -952,10 +952,20 @@ fun SettingsScreen(
                         Text(if (otaDownloading) "下载中..." else "立即更新")
                     }
                 },
-                dismissButton = if (!update.forceUpdate && !otaDownloading) {
+                dismissButton = if (!otaDownloading) {
                     {
-                        TextButton(onClick = { otaDialogInfo = null }) {
-                            Text("取消")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(onClick = {
+                                com.cloudchat.manager.OtaManager.setIgnoredVersion(context, update.versionCode)
+                                otaDialogInfo = null
+                                android.widget.Toast.makeText(context, "已忽略版本 v${update.versionName}，不再自动提醒", android.widget.Toast.LENGTH_SHORT).show()
+                            }) {
+                                Text("忽略此版本", color = MaterialTheme.colorScheme.outline)
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            TextButton(onClick = { otaDialogInfo = null }) {
+                                Text("取消")
+                            }
                         }
                     }
                 } else null

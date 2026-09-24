@@ -1,4 +1,4 @@
-﻿package com.cloudchat.manager
+package com.cloudchat.manager
 
 import android.content.Context
 import android.content.Intent
@@ -33,6 +33,25 @@ object OtaManager {
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .build()
+    }
+
+    fun getIgnoredVersion(context: Context): Int {
+        return context.getSharedPreferences("ota_prefs", Context.MODE_PRIVATE)
+            .getInt("ignored_version_code", 0)
+    }
+
+    fun setIgnoredVersion(context: Context, versionCode: Int) {
+        context.getSharedPreferences("ota_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .putInt("ignored_version_code", versionCode)
+            .apply()
+    }
+
+    fun clearIgnoredVersion(context: Context) {
+        context.getSharedPreferences("ota_prefs", Context.MODE_PRIVATE)
+            .edit()
+            .remove("ignored_version_code")
+            .apply()
     }
 
     suspend fun checkUpdate(): Result<OtaVersionInfo?> = withContext(Dispatchers.IO) {
