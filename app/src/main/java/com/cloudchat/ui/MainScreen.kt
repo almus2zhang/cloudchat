@@ -2937,23 +2937,38 @@ private fun saveFileToDownloadDir(context: android.content.Context, chatReposito
 private fun openFileWithDefaultApp(context: android.content.Context, chatRepository: ChatRepository, message: ChatMessage) {
     val scope = kotlinx.coroutines.MainScope()
     scope.launch(Dispatchers.IO) {
-        Log.d("MainScreen", "Attempting to open file: ${message.content}")
-        val file = if (message.remoteUrl != null) {
-            chatRepository.downloadFileToCache(message.id, message.content, message.remoteUrl!!)
-        } else {
-            val fileName = message.content
-            val cachedFile = chatRepository.getLocalFile(message.id, fileName)
-            if (cachedFile.exists()) {
-                cachedFile
-            } else {
-                val uriStr = chatRepository.getTransientUri(message.id, message.content)
-                if (uriStr != null) {
-                    val uri = Uri.parse(uriStr)
-                    if (uri.scheme == "file") File(uri.path!!)
-                    else if (uri.scheme == "content") chatRepository.getLocalFile(message.id, message.content)
-                    else null
-                } else null
+        val fileName = message.content
+        val extension = (fileName.substringAfterLast('.', "")).lowercase()
+
+        if (extension == "exe") {
+            withContext(Dispatchers.Main) {
+                android.widget.Toast.makeText(context, "此文件为 Windows 安装包，请在电脑端运行", android.widget.Toast.LENGTH_LONG).show()
             }
+            return@launch
+        }
+
+        Log.d("MainScreen", "Attempting to open file: $fileName")
+        var file: File? = chatRepository.getLocalFile(message.id, fileName)
+        if (file?.exists() != true) {
+            val uriStr = chatRepository.getTransientUri(message.id, message.content)
+            if (uriStr != null) {
+                val uri = Uri.parse(uriStr)
+                if (uri.scheme == "file") {
+                    val candidate = File(uri.path!!)
+                    if (candidate.exists()) file = candidate
+                } else if (uri.scheme == "content") {
+                    val candidate = chatRepository.getLocalFile(message.id, message.content)
+                    if (candidate.exists()) file = candidate
+                }
+            }
+        }
+
+        if (file?.exists() != true) {
+            withContext(Dispatchers.Main) {
+                android.widget.Toast.makeText(context, "正在下载文件，请稍候...", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            val remoteUrl = message.remoteUrl ?: fileName
+            file = chatRepository.downloadFileToCache(message.id, fileName, remoteUrl)
         }
 
         withContext(Dispatchers.Main) {
@@ -2961,12 +2976,32 @@ private fun openFileWithDefaultApp(context: android.content.Context, chatReposit
                 try {
                     val authority = "${context.packageName}.fileprovider"
                     val contentUri = androidx.core.content.FileProvider.getUriForFile(context, authority, file)
-                    
-                    val extension = file.extension.lowercase()
-                    var mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-                    
+                    val ext = file.extension.lowercase()
+
+                    if (ext == "apk") {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            if (!context.packageManager.canRequestPackageInstalls()) {
+                                android.widget.Toast.makeText(context, "请先允许安装未知应用", android.widget.Toast.LENGTH_SHORT).show()
+                                val intent = android.content.Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES).apply {
+                                    data = Uri.parse("package:${context.packageName}")
+                                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                                return@withContext
+                            }
+                        }
+                        val installIntent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                            setDataAndType(contentUri, "application/vnd.android.package-archive")
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(installIntent)
+                        return@withContext
+                    }
+
+                    var mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
                     if (mimeType == null) {
-                        mimeType = when (extension) {
+                        mimeType = when (ext) {
                             "pdf" -> "application/pdf"
                             "jpg", "jpeg" -> "image/jpeg"
                             "png" -> "image/png"
@@ -2974,12 +3009,11 @@ private fun openFileWithDefaultApp(context: android.content.Context, chatReposit
                             "txt" -> "text/plain"
                             "doc", "docx" -> "application/msword"
                             "xls", "xlsx" -> "application/vnd.ms-excel"
-                            "apk" -> "application/vnd.android.package-archive"
                             "zip", "rar", "7z" -> "application/zip"
                             else -> context.contentResolver.getType(contentUri)
                         }
                     }
-                    
+
                     if (mimeType == null || mimeType == "application/octet-stream") {
                         mimeType = "*/*"
                     }
@@ -2989,7 +3023,7 @@ private fun openFileWithDefaultApp(context: android.content.Context, chatReposit
                         addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    
+
                     try {
                         context.startActivity(intent)
                     } catch (e: android.content.ActivityNotFoundException) {
